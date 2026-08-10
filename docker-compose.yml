@@ -1,0 +1,24 @@
+services:
+  cinevault:
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${CINEVAULT_PORT:-8081}:8081"
+    environment:
+      CINEVAULT_ADMIN_TOKEN: ${CINEVAULT_ADMIN_TOKEN:?set CINEVAULT_ADMIN_TOKEN in .env}
+      CINEVAULT_VIEWER_TOKEN: ${CINEVAULT_VIEWER_TOKEN:?set CINEVAULT_VIEWER_TOKEN in .env}
+      CINEVAULT_TMDB_API_TOKEN: ${CINEVAULT_TMDB_API_TOKEN:-}
+    volumes:
+      - ${CINEVAULT_DATA_DIR:-./data/media-library}:/data/media-library
+      - ${CINEVAULT_INBOX_DIR:-./inbox}:/inbox:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/api/health', timeout=3)
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

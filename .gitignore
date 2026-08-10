@@ -1,0 +1,22 @@
+app/config.local.js
+.playwright-cli/
+output/playwright/
+data/media-library/
+*.sqlite3
+.playwright-hdrezka-profile/
+
+# Local and generated files
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+.venv*/
+
+# Xcode user state and build output
+**/xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# Local media-library sidecar files
+*.sqlite3-*

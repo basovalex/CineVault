@@ -1,0 +1,42 @@
+{
+  "titles": [
+    {
+      "id": "test-series",
+      "title": "Тестовый сериал",
+      "description": "Вымышленный сериал для локального тестирования каталога, сезонов, серий и playback-объекта.",
+      "poster": "poster.svg",
+      "seasons": [
+        {
+          "number": 1,
+          "title": "Сезон 1",
+          "episodes": [
+            {
+              "number": 1,
+              "title": "Начало",
+              "translations": ["Оригинал", "Тестовая дорожка"],
+              "playlist": "media/test-series/s01e01/playlist.m3u8"
+            },
+            {
+              "number": 2,
+              "title": "Продолжение",
+              "translations": ["Оригинал", "Тестовая дорожка"],
+              "playlist": "media/test-series/s01e01/playlist.m3u8"
+            }
+          ]
+        },
+        {
+          "number": 2,
+          "title": "Сезон 2",
+          "episodes": [
+            {
+              "number": 1,
+              "title": "Новая глава",
+              "translations": ["Оригинал"],
+              "playlist": "media/test-series/s01e01/playlist.m3u8"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

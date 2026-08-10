@@ -1,0 +1,10 @@
+{
+  "name": "CineVault — кино для нас",
+  "short_name": "CineVault",
+  "lang": "ru",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#08070c",
+  "theme_color": "#15132a",
+  "icons": [{"src": "./favicon.svg", "sizes": "any", "type": "image/svg+xml"}]
+}

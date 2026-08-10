@@ -1,0 +1,15 @@
+.git
+.gitignore
+.env
+.env.*
+app/config.local.js
+data
+output
+.playwright-cli
+.playwright-hdrezka-profile
+__pycache__
+*.pyc
+tests
+docs
+fixtures
+inbox

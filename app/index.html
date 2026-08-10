@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#15132a">
+  <meta name="description" content="Личная медиатека CineVault для просмотра разрешённых видео дома и в поездках">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <title>CineVault — кино для нас</title>
+    <link rel="stylesheet" href="./styles.css?v=20260806-skip-3">
+</head>
+<body>
+  <div id="app" class="app-shell" data-theme="night">
+    <div class="ambient-decor" aria-hidden="true">
+      <span class="decor decor-butterfly decor-butterfly-a">🦋</span>
+      <span class="decor decor-butterfly decor-butterfly-b">🦋</span>
+      <span class="decor decor-butterfly decor-butterfly-c">🦋</span>
+      <span class="decor decor-flower decor-flower-a">✿</span>
+      <span class="decor decor-flower decor-flower-b">✿</span>
+      <span class="decor decor-flower decor-flower-c">✿</span>
+      <span class="decor decor-cloud decor-cloud-a">☁</span>
+      <span class="decor decor-cloud decor-cloud-b">☁</span>
+      <span class="decor decor-cloud decor-cloud-c">☁</span>
+      <span class="decor decor-sparkle decor-sparkle-a">✦</span>
+      <span class="decor decor-sparkle decor-sparkle-b">✧</span>
+      <span class="decor decor-sparkle decor-sparkle-c">✦</span>
+      <span class="decor decor-heart decor-heart-a">♡</span>
+      <span class="decor decor-heart decor-heart-b">♡</span>
+      <span class="decor decor-heart decor-heart-c">♥</span>
+    </div>
+    <aside class="sidebar" aria-label="Основная навигация">
+      <div class="brand"><span class="brand-mark">✦</span><span>CineVault</span></div>
+      <nav class="nav-list">
+        <button class="nav-item is-active" data-view="home"><span>⌂</span><span>Для нас</span></button>
+        <button class="nav-item" data-view="catalog"><span>▦</span><span>Каталог</span></button>
+        <button class="nav-item" data-view="movies"><span>▣</span><span>Фильмы</span></button>
+        <button class="nav-item" data-view="series"><span>▤</span><span>Сериалы</span></button>
+        <button class="nav-item" data-view="library"><span>▥</span><span>Моя медиатека</span></button>
+        <button class="nav-item" data-view="favorites"><span>♡</span><span>Избранное</span></button>
+        <button class="nav-item" data-view="evening"><span>☾</span><span>Наш вечер</span></button>
+      </nav>
+      <div class="sidebar-bottom">
+        <button class="nav-item" data-view="settings"><span>⚙</span><span>Настройки</span></button>
+        <p>Локальный профиль.<br>Без обязательного аккаунта.</p>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <label class="search-box">
+          <span aria-hidden="true">⌕</span>
+          <input id="search" type="search" placeholder="Найти фильм или сериал" autocomplete="off">
+          <kbd>⌘ K</kbd>
+        </label>
+        <div class="top-actions">
+          <button id="theme-toggle" class="soft-button" type="button" aria-label="Переключить тему">◐ Тема</button>
+          <button id="companion-open" class="profile-button" type="button" aria-label="Выбрать питомца"><span id="header-pet">🐶</span><span id="header-pet-name">говно</span></button>
+        </div>
+      </header>
+
+      <div id="page" class="page" tabindex="-1"></div>
+    </main>
+
+    <div id="companion-popover" class="popover" hidden>
+      <div class="popover-title">Выбрать питомца</div>
+      <button class="pet-choice is-selected" data-pet="plush" type="button"><span>🐶</span><span><strong>говно</strong><small>жирненький уютный мопсик</small></span></button>
+      <button class="pet-choice" data-pet="noir" type="button"><span>🐈‍⬛</span><span><strong>Нуар</strong><small>спокойный советчик</small></span></button>
+      <button class="pet-choice" data-pet="pixie" type="button"><span>🐰</span><span><strong>Пикси</strong><small>нежный романтик</small></span></button>
+      <button class="pet-choice" data-pet="moti" type="button"><span>🐻</span><span><strong>Моти</strong><small>любит комедии</small></span></button>
+    </div>
+
+    <div id="modal-root"></div>
+
+    <aside id="assistant-rail" class="assistant-rail" aria-label="Помощник по рекомендациям">
+      <div class="assistant-bubble" id="assistant-bubble">
+        <div class="assistant-bubble-head"><strong id="assistant-name">говно</strong><button id="assistant-collapse" type="button" aria-label="Свернуть помощника">−</button></div>
+        <p id="assistant-copy">Я рядом. Давай найду что-нибудь хорошее на вечер.</p>
+        <button id="assistant-recommend" class="assistant-action" type="button">Подобрать для нас</button>
+        <span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      </div>
+      <button id="assistant-pet" class="assistant-pet" type="button" aria-label="Открыть совет питомца"><img src="./assets/pug-mascot.png" alt="Мопс-помощник"></button>
+      <span class="pet-state pet-state-sleep" aria-hidden="true">Zzz</span>
+      <span class="pet-state pet-state-snack" aria-hidden="true">●</span>
+    </aside>
+  </div>
+  <script src="./config.local.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" crossorigin="anonymous"></script>
+    <script src="./app.js?v=20260806-skip-3" defer></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js?v=20260806-4").catch(() => {}));
+    }
+  </script>
+</body>
+</html>
