@@ -2317,7 +2317,7 @@
 }
   };
 
-  const defaultState = { view: "home", theme: "graphite", companion: "plush", mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "rating", catalogPage: 1, favorites: [], watchlist: [], progress: {}, ratings: {}, history: [], offline: {}, voiceSelections: {}, playbackSelections: {}, rutubeUrl: "", skipSegments: true };
+  const defaultState = { view: "home", theme: "graphite", companion: "plush", mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "rating", catalogPage: 1, favorites: [], watchlist: [], progress: {}, ratings: {}, history: [], offline: {}, voiceSelections: {}, playbackSelections: {}, playerVolume: 1, playerMuted: false, rutubeUrl: "", skipSegments: true };
   const ROUTE_PATHS = Object.freeze({ home: "/", catalog: "/catalog/", movies: "/movies/", series: "/series/", library: "/library/", favorites: "/favorites/", evening: "/evening/", history: "/history/", settings: "/settings/" });
   const ROUTE_VIEWS = Object.freeze(Object.fromEntries(Object.entries(ROUTE_PATHS).map(([view, path]) => [path, view])));
   let state = loadState();
@@ -2392,8 +2392,8 @@
   }
 
   function updateDocumentRoute(route, item = null) {
-    const titles = { home: "CineVault — кино для нас", catalog: "Каталог — CineVault", movies: "Фильмы — CineVault", series: "Сериалы — CineVault", library: "Моя медиатека — CineVault", favorites: "Избранное — CineVault", evening: "Наш вечер — CineVault", history: "История просмотра — CineVault", settings: "Настройки — CineVault" };
-    document.title = item ? `${item.title} — CineVault` : (titles[route.view] || "CineVault — кино для нас");
+    const titles = { home: "CineVault — кино для вас", catalog: "Каталог — CineVault", movies: "Фильмы — CineVault", series: "Сериалы — CineVault", library: "Моя медиатека — CineVault", favorites: "Избранное — CineVault", evening: "Наш вечер — CineVault", history: "История просмотра — CineVault", settings: "Настройки — CineVault" };
+    document.title = item ? `${item.title} — CineVault` : (titles[route.view] || "CineVault — кино для вас");
     const canonical = document.querySelector('link[rel="canonical"]');
     if (canonical) {
       const path = route.type === "title" ? routeForTitle(route.id) : routeForView(route.view);
@@ -2946,13 +2946,17 @@
       close: '<path d="m7 7 10 10M17 7 7 17" fill="none"/>',
       together: '<circle cx="9" cy="9" r="3" fill="none"/><circle cx="16.5" cy="10.5" r="2.5" fill="none"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0M14 19.5a4.5 4.5 0 0 1 6.5-3.9" fill="none"/>',
       fullscreen: '<path d="M8 4H4v4m12-4h4v4M8 20H4v-4m16 0v4h-4" fill="none"/>',
+      loading: '<circle cx="12" cy="12" r="7" fill="none" stroke-dasharray="28 16"/>',
     };
     return `<svg class="player-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${paths[name] || paths.play}</svg>`;
   }
-  function setPlayerPlayButton(button, isPlaying) {
+  function setPlayerPlayButton(button, isPlaying, isLoading = null) {
     if (!button) return;
-    const label = isPlaying ? "Пауза" : "Воспроизвести";
-    button.innerHTML = playerIcon(isPlaying ? "pause" : "play");
+    if (isLoading == null) isLoading = !button.closest(".player-modal")?.querySelector(".video-loading")?.hidden;
+    const label = isLoading ? "Видео загружается" : isPlaying ? "Пауза" : "Воспроизвести";
+    button.innerHTML = playerIcon(isLoading ? "loading" : isPlaying ? "pause" : "play");
+    button.classList.toggle("is-loading", isLoading);
+    button.setAttribute("aria-busy", String(isLoading));
     button.setAttribute("aria-label", label);
     button.title = label;
   }
@@ -2960,7 +2964,7 @@
     return `<div class="player-settings" data-player-settings><button class="player-control-button player-settings-button" id="${prefix}-settings" type="button" aria-expanded="false" aria-controls="${prefix}-settings-panel" aria-label="Настройки плеера" title="Настройки">${playerIcon("settings")}</button><div class="player-settings-panel" id="${prefix}-settings-panel" role="group" aria-label="Настройки плеера" hidden>${controls}<p class="player-settings-empty">Параметры потока появятся после загрузки.</p></div></div>`;
   }
   function playerToolbarMarkup(prefix, settingsControls) {
-    return `<div class="player-toolbar player-toolbar-compact player-toolbar-cinematic"><div class="player-actions"><button class="player-control-button player-skip-button" id="${prefix}-back" type="button" aria-label="Назад на 10 секунд" title="Назад на 10 секунд">${playerIcon("back")}<small aria-hidden="true">10</small></button><button class="player-play-button" id="${prefix}-play" type="button" aria-label="Воспроизвести" title="Воспроизвести">${playerIcon("play")}</button><button class="player-control-button player-skip-button" id="${prefix}-forward" type="button" aria-label="Вперёд на 10 секунд" title="Вперёд на 10 секунд">${playerIcon("forward")}<small aria-hidden="true">10</small></button></div><div class="player-utility-actions">${playerSettingsMarkup(prefix, settingsControls)}<button class="player-control-button player-close-button" id="${prefix}-close-player" type="button" aria-label="Закрыть просмотр" title="Закрыть просмотр">${playerIcon("close")}</button></div></div>`;
+    return `<div class="player-toolbar player-toolbar-compact player-toolbar-cinematic"><div class="player-actions"><button class="player-control-button player-skip-button" id="${prefix}-back" type="button" aria-label="Назад на 10 секунд" title="Назад на 10 секунд">${playerIcon("back")}<small aria-hidden="true">10</small></button><button class="player-play-button" id="${prefix}-play" type="button" aria-label="Воспроизвести" title="Воспроизвести">${playerIcon("play")}</button><button class="player-control-button player-skip-button" id="${prefix}-forward" type="button" aria-label="Вперёд на 10 секунд" title="Вперёд на 10 секунд">${playerIcon("forward")}<small aria-hidden="true">10</small></button></div><div class="player-utility-actions">${playerVolumeMarkup(prefix)}${playerSettingsMarkup(prefix, settingsControls)}</div></div>`;
   }
   function bindPlayerSettings(prefix) {
     const root = $(`#${prefix}-settings`)?.closest("[data-player-settings]");
@@ -3040,13 +3044,14 @@
     if (width >= 854 || height >= 480) return { key: "480p", label: "480p", rank: 480 };
     return { key: "360p", label: "360p", rank: 360 };
   }
-  function bindHlsTrackControls(hls, prefix, { preferredAudioKey = "" } = {}) {
+  function bindHlsTrackControls(hls, prefix, { preferredAudioKey = "", preferredAudioLabel = "", onAudioPreferenceChange = null, preserveVolume = null } = {}) {
     const qualityWrap = $(`#${prefix}-hls-quality-wrap`);
     const qualitySelect = $(`#${prefix}-hls-quality`);
     const audioWrap = $(`#${prefix}-hls-audio-wrap`);
     const audioSelect = $(`#${prefix}-hls-audio`);
     const subtitleWrap = $(`#${prefix}-hls-subtitle-wrap`);
     const subtitleSelect = $(`#${prefix}-hls-subtitle`);
+    const audioNotice = $(`#${prefix}-audio-notice`);
     let preferredSubtitleKey = "";
 
     const uniqueTracks = (tracks) => {
@@ -3075,9 +3080,19 @@
       const current = tracks.find((entry) => entry.index === hls.audioTrack);
       if (!preferredAudioKey) preferredAudioKey = current?.key || tracks[0]?.key || "";
       const preferred = tracks.find((entry) => entry.key === preferredAudioKey);
-      if (preferred && preferred.index !== hls.audioTrack) hls.audioTrack = preferred.index;
+      const active = preferred || current || tracks[0];
+      if (preferred && preferred.index !== hls.audioTrack) {
+        const volume = preserveVolume?.();
+        hls.audioTrack = preferred.index;
+        volume?.restore?.();
+      }
       setSelectOptions(audioSelect, tracks.map((entry) => ({ value: entry.index, label: hlsTrackLabel(entry.track, `Дорожка ${entry.index + 1}`) })), preferred?.index ?? current?.index ?? tracks[0]?.index);
       if (audioWrap) audioWrap.hidden = tracks.length < 2;
+      if (audioNotice) {
+        const fallback = Boolean(preferredAudioKey && !preferred && active);
+        audioNotice.hidden = !fallback;
+        audioNotice.textContent = fallback ? `Озвучка «${preferredAudioLabel || preferredAudioKey}» недоступна в этой серии. Включена «${hlsTrackLabel(active.track, `Дорожка ${active.index + 1}`)}».` : "";
+      }
       updatePlayerSettingsState(prefix);
     };
     const updateSubtitles = () => {
@@ -3092,7 +3107,11 @@
     const onAudioChange = () => {
       const index = Number(audioSelect.value);
       preferredAudioKey = hlsTrackKey(hls.audioTracks?.[index], String(index));
+      preferredAudioLabel = hlsTrackLabel(hls.audioTracks?.[index], `Дорожка ${index + 1}`);
+      const volume = preserveVolume?.();
       hls.audioTrack = index;
+      volume?.restore?.();
+      onAudioPreferenceChange?.({ key: preferredAudioKey, label: preferredAudioLabel });
     };
     const onSubtitleChange = () => {
       const index = Number(subtitleSelect.value);
@@ -3126,17 +3145,23 @@
     hls.attachMedia(video);
     return hls;
   }
-  function playerVolumeMarkup(idPrefix) { return `<div class="player-volume"><button class="player-control-button player-volume-mute" id="${idPrefix}-mute" type="button" aria-label="Выключить звук" title="Выключить звук">${playerIcon("volume")}</button><label class="player-volume-level"><span class="sr-only">Громкость</span><input id="${idPrefix}-volume" type="range" min="0" max="100" value="100" step="1" aria-label="Громкость"></label></div>`; }
+  function playerVolumeMarkup(idPrefix) { return `<div class="player-volume"><button class="player-control-button player-volume-mute" id="${idPrefix}-mute" type="button" aria-label="Выключить звук" title="Выключить звук">${playerIcon("volume")}</button><label class="player-volume-level"><span class="sr-only">Громкость</span><input id="${idPrefix}-volume" type="range" min="0" max="100" value="${Math.round(Math.min(1, Math.max(0, Number(state.playerVolume ?? 1))) * 100)}" step="1" aria-label="Громкость"></label></div>`; }
   function bindPlayerVolumeControl(video, idPrefix) {
     const volume = $(`#${idPrefix}-volume`);
     const mute = $(`#${idPrefix}-mute`);
     if (!video || !volume || !mute) return () => {};
+    const initialVolume = Math.min(1, Math.max(0, Number(state.playerVolume ?? 1)));
+    video.volume = Number.isFinite(initialVolume) ? initialVolume : 1;
+    video.muted = Boolean(state.playerMuted);
     const update = () => {
       const percent = Math.round((video.muted ? 0 : video.volume) * 100);
       volume.value = String(percent);
       mute.innerHTML = playerIcon(percent === 0 ? "muted" : "volume");
       mute.setAttribute("aria-label", percent === 0 ? "Включить звук" : "Выключить звук");
       mute.title = mute.getAttribute("aria-label");
+      state.playerVolume = Math.min(1, Math.max(0, Number(video.volume || 0)));
+      state.playerMuted = Boolean(video.muted);
+      saveState();
     };
     const onVolumeInput = () => {
       const next = Number(volume.value) / 100;
@@ -3157,6 +3182,33 @@
       volume.removeEventListener("input", onVolumeInput);
       mute.removeEventListener("click", onMuteClick);
       video.removeEventListener("volumechange", update);
+    };
+  }
+  function playerVolumeSnapshot(video) {
+    const volume = Number(video?.volume ?? state.playerVolume ?? 1);
+    const muted = Boolean(video?.muted ?? state.playerMuted);
+    return { restore: () => { if (!video) return; video.volume = volume; video.muted = muted; } };
+  }
+  function bindPlayerLoadingState(video, loading, playButton) {
+    if (!video || !loading) return () => {};
+    let busy = !loading.hidden;
+    const setBusy = (nextBusy, label = "") => {
+      busy = Boolean(nextBusy);
+      loading.hidden = !busy;
+      if (label) loading.textContent = label;
+      setPlayerPlayButton(playButton, !video.paused && !video.ended, busy);
+    };
+    const start = () => setBusy(true, "Загружаю видеопоток…");
+    const wait = () => setBusy(true, "Буферизую видео…");
+    const ready = () => setBusy(false);
+    ["loadstart", "stalled", "seeking"].forEach((eventName) => video.addEventListener(eventName, start));
+    video.addEventListener("waiting", wait);
+    ["canplay", "playing", "error", "ended"].forEach((eventName) => video.addEventListener(eventName, ready));
+    setBusy(busy);
+    return () => {
+      ["loadstart", "stalled", "seeking"].forEach((eventName) => video.removeEventListener(eventName, start));
+      video.removeEventListener("waiting", wait);
+      ["canplay", "playing", "error", "ended"].forEach((eventName) => video.removeEventListener(eventName, ready));
     };
   }
   function playerSeriesMarkup(item, episodeNumber = 1) {
@@ -3563,7 +3615,8 @@
     const sync = () => {
       const isPlaying = !video.paused && !video.ended;
       if (playButton) {
-        setPlayerPlayButton(playButton, isPlaying);
+        const isLoading = !video.closest(".video-frame")?.querySelector(".video-loading")?.hidden;
+        setPlayerPlayButton(playButton, isPlaying, isLoading);
       }
       if (playOverlay) {
         playOverlay.hidden = isPlaying;
@@ -3616,6 +3669,13 @@
     }
     // iOS Safari does not support fullscreen on arbitrary containers.
     enterNativeVideoFullscreen();
+  }
+  async function beginCinematicFullscreen() {
+    const mobile = window.matchMedia?.("(max-width: 720px)").matches;
+    try {
+      if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.();
+      if (mobile && screen.orientation?.lock) await screen.orientation.lock("landscape").catch(() => {});
+    } catch {}
   }
   function installPlayerFullscreenControls(player) {
     if (!player || player.dataset.fullscreenControls === "true") return;
@@ -4040,7 +4100,8 @@
     const activeFilters = [collection ? `Подборка: ${collection.title}` : "", selectedGenre ? `Жанр: ${selectedGenre}` : "", state.catalogMoodOnly ? `Настроение: ${state.mood}` : "", state.catalogPlayableOnly ? "Только доступные" : ""].filter(Boolean).join(" · ");
     const emptyCopy = state.query ? `По запросу «${escapeHtml(state.query)}» ничего не найдено. Измени запрос или сбрось фильтры.` : "Попробуй другой жанр или сбрось фильтры, чтобы снова увидеть весь каталог.";
     const paginationMarkup = pagination.totalPages > 1 ? `<nav class="catalog-pagination" aria-label="Страницы каталога"><button class="secondary-button" data-catalog-page="${pagination.currentPage - 1}" type="button"${pagination.currentPage === 1 ? " disabled" : ""}>← Назад</button><p aria-live="polite">Страница <strong>${pagination.currentPage}</strong> из ${pagination.totalPages}<span> · показано ${pagination.start + 1}–${pagination.end}</span></p><button class="secondary-button" data-catalog-page="${pagination.currentPage + 1}" type="button"${pagination.currentPage === pagination.totalPages ? " disabled" : ""}>Вперёд →</button></nav>` : "";
-    page.innerHTML = `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls" aria-labelledby="catalog-filters-title"><div class="catalog-control-top"><div><h2 id="catalog-filters-title">Подобрать фильм</h2><p>Начни с готовой подборки или уточни тип, жанр и доступность.</p></div><div class="catalog-control-actions"><label class="catalog-sort"><span>Сортировка</span><select data-catalog-sort><option value="rating"${state.catalogSort === "rating" ? " selected" : ""}>С высоким рейтингом</option><option value="year"${state.catalogSort === "year" ? " selected" : ""}>Сначала новые</option><option value="title"${state.catalogSort === "title" ? " selected" : ""}>По алфавиту</option></select></label><button class="secondary-button catalog-random-button" data-catalog-random type="button"${items.length ? "" : " disabled"}>Выбрать случайно</button></div></div><div class="catalog-collection-heading"><h3>Подборки</h3><span>Автоматически по жанрам, рейтингу и вашей истории</span></div><div class="collection-list" role="group" aria-label="Подборки каталога">${collectionButtons}</div><div class="catalog-toolbar" role="group" aria-label="Тип и быстрые фильтры"><button class="filter-button ${state.view === "catalog" ? "is-active" : ""}" data-view="catalog" type="button" aria-pressed="${state.view === "catalog"}">Все</button><button class="filter-button ${state.view === "movies" ? "is-active" : ""}" data-view="movies" type="button" aria-pressed="${state.view === "movies"}">Фильмы</button><button class="filter-button ${state.view === "series" ? "is-active" : ""}" data-view="series" type="button" aria-pressed="${state.view === "series"}">Сериалы</button><button class="filter-button ${state.catalogPlayableOnly ? "is-active" : ""}" data-catalog-playable type="button" aria-pressed="${Boolean(state.catalogPlayableOnly)}">Можно смотреть</button><button class="filter-button ${state.catalogMoodOnly ? "is-active" : ""}" data-mood-filter="${escapeHtml(state.mood)}" type="button" aria-pressed="${Boolean(state.catalogMoodOnly)}">Под настроение: ${escapeHtml(moodDefinition().shortLabel)}</button></div><div class="catalog-genre-heading"><h3>Жанры</h3><span>Количество карточек указано справа</span></div><div class="genre-list" role="group" aria-label="Фильтр по жанру">${genreButtons}</div><div class="catalog-result-row"><p><strong>${catalogCountLabel(items.length)}</strong>${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}</p>${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${items.length ? `<div class="poster-grid" id="catalog-results" tabindex="-1">${pageItems.map((item) => poster(item)).join("")}</div>${paginationMarkup}` : `<div class="empty-state"><div class="empty-pet">${petVisual()}</div><h2>Ничего не подошло</h2><p>${emptyCopy}</p><button class="primary-button" data-catalog-reset type="button">Сбросить фильтры</button></div>`}`;
+    const genreFilterMarkup = state.view === "favorites" ? "" : `<div class="catalog-genre-heading"><h3>Жанры</h3><span>Количество карточек указано справа</span></div><div class="genre-list" role="group" aria-label="Фильтр по жанру">${genreButtons}</div>`;
+    page.innerHTML = `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls" aria-labelledby="catalog-filters-title"><div class="catalog-control-top"><div><h2 id="catalog-filters-title">Подобрать фильм</h2><p>Начни с готовой подборки или уточни тип, жанр и доступность.</p></div><div class="catalog-control-actions"><label class="catalog-sort"><span>Сортировка</span><select data-catalog-sort><option value="rating"${state.catalogSort === "rating" ? " selected" : ""}>С высоким рейтингом</option><option value="year"${state.catalogSort === "year" ? " selected" : ""}>Сначала новые</option><option value="title"${state.catalogSort === "title" ? " selected" : ""}>По алфавиту</option></select></label><button class="secondary-button catalog-random-button" data-catalog-random type="button"${items.length ? "" : " disabled"}>Выбрать случайно</button></div></div><div class="catalog-collection-heading"><h3>Подборки</h3><span>Автоматически по жанрам, рейтингу и вашей истории</span></div><div class="collection-list" role="group" aria-label="Подборки каталога">${collectionButtons}</div><div class="catalog-toolbar" role="group" aria-label="Тип и быстрые фильтры"><button class="filter-button ${state.view === "catalog" ? "is-active" : ""}" data-view="catalog" type="button" aria-pressed="${state.view === "catalog"}">Все</button><button class="filter-button ${state.view === "movies" ? "is-active" : ""}" data-view="movies" type="button" aria-pressed="${state.view === "movies"}">Фильмы</button><button class="filter-button ${state.view === "series" ? "is-active" : ""}" data-view="series" type="button" aria-pressed="${state.view === "series"}">Сериалы</button><button class="filter-button ${state.catalogPlayableOnly ? "is-active" : ""}" data-catalog-playable type="button" aria-pressed="${Boolean(state.catalogPlayableOnly)}">Можно смотреть</button><button class="filter-button ${state.catalogMoodOnly ? "is-active" : ""}" data-mood-filter="${escapeHtml(state.mood)}" type="button" aria-pressed="${Boolean(state.catalogMoodOnly)}">Под настроение: ${escapeHtml(moodDefinition().shortLabel)}</button></div>${genreFilterMarkup}<div class="catalog-result-row"><p><strong>${catalogCountLabel(items.length)}</strong>${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}</p>${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${items.length ? `<div class="poster-grid" id="catalog-results" tabindex="-1">${pageItems.map((item) => poster(item)).join("")}</div>${paginationMarkup}` : `<div class="empty-state"><div class="empty-pet">${petVisual()}</div><h2>Ничего не подошло</h2><p>${emptyCopy}</p><button class="primary-button" data-catalog-reset type="button">Сбросить фильтры</button></div>`}`;
     const liveStatus = $("#catalog-live-status");
     if (liveStatus) window.requestAnimationFrame(() => { liveStatus.textContent = `Каталог обновлён: ${catalogCountLabel(items.length)}.`; });
     bindPageActions();
@@ -4356,8 +4417,11 @@
     let lastSavedAt = 0;
     let sourceLinkExpired = false;
     let retryingExpiredSource = false;
-    const remotePlayerSettings = hlsTrackControlsMarkup("remote-player", { includeAudio: false });
-    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal player-cinematic" role="dialog" aria-modal="true" aria-labelledby="remote-player-title"><div class="modal-head"><div><div class="eyebrow">Сезон ${season} · серия ${episode}</div><h2 id="remote-player-title">${escapeHtml(item.title)}</h2></div><button class="icon-button" id="remote-player-close" type="button" aria-label="Закрыть">×</button></div>${playerSeriesMarkup(item, episode)}<div class="provider-frame video-frame"><video id="remote-player-video" playsinline preload="auto"></video><button class="video-play-overlay" id="remote-player-play-overlay" type="button" aria-label="Воспроизвести">${playerIcon("play")}</button><div class="video-loading" id="remote-player-loading" role="status" aria-live="polite">Подключаю внешний поток…</div><div class="video-error" id="remote-player-error" role="alert" hidden></div></div>${playerToolbarMarkup("remote-player", remotePlayerSettings)}<div class="provider-progress"><div class="player-range-wrap" id="remote-player-range-wrap"><span class="player-range-buffer" aria-hidden="true"></span><input id="remote-player-range" type="range" min="0" max="${duration || 1}" value="${position}" aria-label="Позиция просмотра"><output class="player-seek-time" aria-hidden="true">${formatTime(position)}</output></div><div class="player-progress-info"><span><span id="remote-player-position">${formatTime(position)}</span> / <span id="remote-player-duration">${formatDuration(duration)}</span></span><span class="player-buffer-status" id="remote-player-buffer-status" role="status">Буфер: загружается…</span></div></div><div id="remote-player-room-status" class="watch-room-status" role="status" aria-live="polite"${roomId ? "" : " hidden"}></div><p id="remote-player-status" class="notice" aria-live="polite">${escapeHtml(item.playbackRefreshWarning || "Позиция сохраняется автоматически.")}</p></section></div>`;
+    const remotePlayerSettings = hlsTrackControlsMarkup("remote-player");
+    const preferredVoice = String(titlePlaybackSelection(item).voice || "").trim();
+    const episodeVoices = episodeSourceOptions(item, season, episode);
+    const sourceFallback = preferredVoice && episodeVoices.length && !episodeVoices.some((entry) => String(entry.label || "").trim().toLocaleLowerCase() === preferredVoice.toLocaleLowerCase());
+    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal player-cinematic" role="dialog" aria-modal="true" aria-labelledby="remote-player-title"><div class="modal-head"><div><div class="eyebrow">Сезон ${season} · серия ${episode}</div><h2 id="remote-player-title">${escapeHtml(item.title)}</h2></div><button class="icon-button" id="remote-player-close" type="button" aria-label="Закрыть">×</button></div>${playerSeriesMarkup(item, episode)}<div class="provider-frame video-frame"><video id="remote-player-video" playsinline preload="auto"></video><button class="video-play-overlay" id="remote-player-play-overlay" type="button" aria-label="Воспроизвести">${playerIcon("play")}</button><div class="video-loading" id="remote-player-loading" role="status" aria-live="polite">Подключаю внешний поток…</div><div class="video-error" id="remote-player-error" role="alert" hidden></div></div>${playerToolbarMarkup("remote-player", remotePlayerSettings)}<p class="player-audio-notice" id="remote-player-audio-notice" role="status" aria-live="polite"${sourceFallback ? "" : " hidden"}>${sourceFallback ? `Озвучка «${escapeHtml(preferredVoice)}» недоступна в этой серии. Выбрана «${escapeHtml(selectedEpisodeSource(item, season, episode)?.label || "доступная") }».` : ""}</p><div class="provider-progress"><div class="player-range-wrap" id="remote-player-range-wrap"><span class="player-range-buffer" aria-hidden="true"></span><input id="remote-player-range" type="range" min="0" max="${duration || 1}" value="${position}" aria-label="Позиция просмотра"><output class="player-seek-time" aria-hidden="true">${formatTime(position)}</output></div><div class="player-progress-info"><span><span id="remote-player-position">${formatTime(position)}</span> / <span id="remote-player-duration">${formatDuration(duration)}</span></span><span class="player-buffer-status" id="remote-player-buffer-status" role="status">Буфер: загружается…</span></div></div><div id="remote-player-room-status" class="watch-room-status" role="status" aria-live="polite"${roomId ? "" : " hidden"}></div><p id="remote-player-status" class="notice" aria-live="polite">${escapeHtml(item.playbackRefreshWarning || "Позиция сохраняется автоматически.")}</p></section></div>`;
     const player = $(".player-modal");
     installPlayerFullscreenControls(player);
     const video = $("#remote-player-video");
@@ -4374,11 +4438,12 @@
     const playOverlay = $("#remote-player-play-overlay");
     const removeVolumeControl = bindPlayerVolumeControl(video, "remote-player");
     const removeSettingsControl = bindPlayerSettings("remote-player");
+    const removeLoadingState = bindPlayerLoadingState(video, loading, playButton);
     const roomStatus = $("#remote-player-room-status");
     let roomSync = null;
     const saveProgress = (completed = false) => { state.progress[contentId] = { titleId: item.id, providerId: "remote-source", seasonNumber: season, episodeNumber: episode, position, duration, completed, updatedAt: Date.now() }; saveState(); };
     const updateBuffer = () => updatePlayerBuffer(video, duration, rangeWrap, bufferStatus);
-    const onMetadata = () => { loading.hidden = true; videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); durationLabel.textContent = formatDuration(duration); updateBuffer(); if (position > 0 && position < duration) { video.currentTime = position; status.innerHTML = `<strong>Продолжение восстановлено.</strong> Вы остановились на ${formatTime(position)}.`; } };
+    const onMetadata = () => { videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); durationLabel.textContent = formatDuration(duration); updateBuffer(); if (position > 0 && position < duration) { video.currentTime = position; status.innerHTML = `<strong>Продолжение восстановлено.</strong> Вы остановились на ${formatTime(position)}.`; } };
     const onTime = () => { position = Number(video.currentTime || 0); duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); positionLabel.textContent = formatTime(position); updateBuffer(); if (Date.now() - lastSavedAt > 3000) { lastSavedAt = Date.now(); saveProgress(false); } };
     const onEnded = () => { position = duration || Number(video.currentTime || 0); saveProgress(true); roomSync?.publish({ position, playing: false }); status.innerHTML = "<strong>Серия завершена.</strong> Прогресс сохранён."; };
     const retryExpiredSeriesSource = async () => {
@@ -4413,8 +4478,8 @@
       showSourceErrorCard(videoError, statusCode, "Проверьте срок действия ссылки и разрешение источника на воспроизведение в браузере.");
       status.innerHTML = sourceErrorMarkup(statusCode, "<strong>Поток не открылся.</strong> Проверьте срок действия ссылки и разрешение источника на воспроизведение в браузере.");
     };
-    const onPlay = () => { setPlayerPlayButton(playButton, true); if (!roomSync?.isApplying()) roomSync?.publish({ playing: true }); };
-    const onPause = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; setPlayerPlayButton(playButton, false); saveProgress(false); if (!roomSync?.isApplying()) roomSync?.publish({ position, playing: false }); };
+    const onPlay = () => { setPlayerPlayButton(playButton, true, false); if (!roomSync?.isApplying()) roomSync?.publish({ playing: true }); };
+    const onPause = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; setPlayerPlayButton(playButton, false, false); saveProgress(false); if (!roomSync?.isApplying()) roomSync?.publish({ position, playing: false }); };
     const seekBy = (seconds) => { const currentPosition = Number.isFinite(video.currentTime) ? Number(video.currentTime) : Number(position || 0); const nextPosition = Math.max(0, Math.min(video.duration || duration || Number.MAX_SAFE_INTEGER, currentPosition + seconds)); position = nextPosition; video.currentTime = nextPosition; range.value = nextPosition; positionLabel.textContent = formatTime(nextPosition); saveProgress(false); roomSync?.publish({ position: nextPosition }); };
     video.addEventListener("loadedmetadata", onMetadata);
     video.addEventListener("timeupdate", onTime);
@@ -4448,18 +4513,17 @@
         video,
         sourceUrl,
         "remote-player",
-        () => { loading.hidden = true; videoError.hidden = true; status.innerHTML = "<strong>Master HLS готов.</strong> Качество, озвучка и субтитры доступны в настройках плеера."; },
+        () => { videoError.hidden = true; status.innerHTML = "<strong>Master HLS подключён.</strong> Жду первый фрагмент видео…"; },
         (_event, data) => { const statusCode = hlsResponseStatus(data); if (statusCode === 410 || data?.fatal) onError(statusCode); },
         HLS_PLAYBACK_CONFIG,
-        { preferredAudioKey: selectedHlsAudioKey(item) },
+        { preferredAudioKey: selectedHlsAudioKey(item), preferredAudioLabel: titlePlaybackSelection(item).hlsAudioLabel || "", preserveVolume: () => playerVolumeSnapshot(video), onAudioPreferenceChange: ({ key, label }) => { state.playbackSelections[item.id] = { ...titlePlaybackSelection(item), hlsAudio: key, hlsAudioLabel: label }; saveState(); } },
       );
     } else {
       video.src = sourceUrl;
       video.load();
     }
-    const close = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; saveProgress(false); roomSync?.publish({ position, playing: false }); roomSync?.dispose(); player._exitFullscreen?.(); video.pause(); hls?.destroy(); removeVolumeControl(); removeSettingsControl(); video.removeEventListener("loadedmetadata", onMetadata); video.removeEventListener("timeupdate", onTime); video.removeEventListener("ended", onEnded); video.removeEventListener("error", onError); video.removeEventListener("play", onPlay); video.removeEventListener("pause", onPause); player._removeFullscreenControls?.(); returnFromPlayer(); };
+    const close = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; saveProgress(false); roomSync?.publish({ position, playing: false }); roomSync?.dispose(); player._exitFullscreen?.(); video.pause(); hls?.destroy(); removeLoadingState(); removeVolumeControl(); removeSettingsControl(); video.removeEventListener("loadedmetadata", onMetadata); video.removeEventListener("timeupdate", onTime); video.removeEventListener("ended", onEnded); video.removeEventListener("error", onError); video.removeEventListener("play", onPlay); video.removeEventListener("pause", onPause); player._removeFullscreenControls?.(); returnFromPlayer(); };
     $("#remote-player-close").addEventListener("click", close);
-    $("#remote-player-close-player").addEventListener("click", close);
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
   }
 
@@ -4510,7 +4574,7 @@
     let duration = Number(existing.duration || 0);
     let lastSavedAt = 0;
     let activeVariant = selectedVideoVariant(item, variants);
-    const videoSettings = hlsTrackControlsMarkup("video", { includeAudio: false });
+    const videoSettings = hlsTrackControlsMarkup("video");
     modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal player-cinematic" role="dialog" aria-modal="true" aria-labelledby="video-player-title"><div class="modal-head"><div><div class="eyebrow">${episodeNumber ? `Сезон ${selectedSeason} · серия ${episodeNumber}` : "Фильм"}</div><h2 id="video-player-title">${escapeHtml(item.title)}</h2></div><button class="icon-button" id="video-close" type="button" aria-label="Закрыть">×</button></div>${playerSeriesMarkup(item, episodeNumber)}<div class="provider-frame video-frame"><video id="cinevault-video" playsinline preload="auto"></video><button class="video-play-overlay" id="video-play-overlay" type="button" aria-label="Воспроизвести">${playerIcon("play")}</button><div class="video-loading" id="video-loading" role="status" aria-live="polite">Подключаю видеопоток…</div><div class="video-error" id="video-error" role="alert" hidden></div></div>${playerToolbarMarkup("video", videoSettings)}<div class="provider-progress"><div class="player-range-wrap" id="video-range-wrap"><span class="player-range-buffer" aria-hidden="true"></span><input id="video-range" type="range" min="0" max="${duration || 1}" value="${position}" aria-label="Позиция просмотра"><output class="player-seek-time" aria-hidden="true">${formatTime(position)}</output></div><div class="player-progress-info"><span><span id="video-position">${formatTime(position)}</span> / <span id="video-duration">${formatDuration(duration)}</span></span><span class="player-buffer-status" id="video-buffer-status" role="status">Буфер: загружается…</span></div></div><div id="video-room-status" class="watch-room-status" role="status" aria-live="polite"${roomId ? "" : " hidden"}></div><p id="video-status" class="notice" aria-live="polite">${escapeHtml(item.playbackRefreshWarning || "Позиция сохраняется автоматически.")}</p><p class="attribution">${escapeHtml(item.providerNote || "Подключённый источник")} · <a href="${escapeHtml(item.licenseUrl || item.providerUrl || activeVariant.url)}" target="_blank" rel="noopener noreferrer">Источник и лицензия ↗</a></p></section></div>`;
     const fullscreenPlayer = $(".player-modal");
     installPlayerFullscreenControls(fullscreenPlayer);
@@ -4526,6 +4590,7 @@
     const playOverlay = $("#video-play-overlay");
     const removeVolumeControl = bindPlayerVolumeControl(video, "video");
     const removeSettingsControl = bindPlayerSettings("video");
+    const removeLoadingState = bindPlayerLoadingState(video, loading, playButton);
     const bufferStatus = $("#video-buffer-status");
     const roomStatus = $("#video-room-status");
     bindSeekTimePreview(range, rangeWrap);
@@ -4549,25 +4614,24 @@
       video.load();
       if (isHlsUrl(variant.url) && window.Hls && window.Hls.isSupported()) {
         hls = createHlsPlayer(video, variant.url, "video", () => {
-          loading.hidden = true;
           videoError.hidden = true;
-          status.innerHTML = "<strong>Master HLS готов.</strong> Качество, озвучка и субтитры доступны в настройках плеера.";
+          status.innerHTML = "<strong>Master HLS подключён.</strong> Жду первый фрагмент видео…";
         }, (_event, data) => {
           const statusCode = hlsResponseStatus(data);
           if (statusCode === 410 || data?.fatal) onError(statusCode);
-        }, HLS_PLAYBACK_CONFIG, { preferredAudioKey: selectedHlsAudioKey(item) });
+        }, HLS_PLAYBACK_CONFIG, { preferredAudioKey: selectedHlsAudioKey(item), preferredAudioLabel: titlePlaybackSelection(item).hlsAudioLabel || "", preserveVolume: () => playerVolumeSnapshot(video), onAudioPreferenceChange: ({ key, label }) => { state.playbackSelections[item.id] = { ...titlePlaybackSelection(item), hlsAudio: key, hlsAudioLabel: label }; saveState(); } });
       } else {
         video.src = variant.url;
         video.load();
       }
       status.innerHTML = initial ? "<strong>Подключаю видеопоток…</strong> Позиция восстановится автоматически." : `<strong>${escapeHtml(variant.quality)} · ${escapeHtml(variant.voice)}.</strong> Источник переключён без сброса позиции.`;
     };
-    const onLoadedMetadata = () => { loading.hidden = true; videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); durationLabel.textContent = formatDuration(duration); updateBuffer(); if (position > 0 && position < duration) { video.currentTime = position; status.innerHTML = `<strong>Продолжение восстановлено.</strong> Вы остановились на ${formatTime(position)}.`; } else { status.innerHTML = `<strong>Поток готов.</strong> ${escapeHtml(activeVariant.quality)} · ${escapeHtml(activeVariant.voice)}.`; } if (pendingPlay) { video.play().catch(() => { status.innerHTML = `<strong>Нажмите «Воспроизвести».</strong> Браузер заблокировал автозапуск.`; }); pendingPlay = false; } };
+    const onLoadedMetadata = () => { videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); durationLabel.textContent = formatDuration(duration); updateBuffer(); if (position > 0 && position < duration) { video.currentTime = position; status.innerHTML = `<strong>Продолжение восстановлено.</strong> Вы остановились на ${formatTime(position)}.`; } else { status.innerHTML = `<strong>Поток подключён.</strong> Жду первый фрагмент видео…`; } if (pendingPlay) { video.play().catch(() => { status.innerHTML = `<strong>Нажмите «Воспроизвести».</strong> Браузер заблокировал автозапуск.`; }); pendingPlay = false; } };
     const onTimeUpdate = () => { position = Number(video.currentTime || 0); duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); positionLabel.textContent = formatTime(position); updateBuffer(); if (Date.now() - lastSavedAt > 3000) { saveProgress(false); lastSavedAt = Date.now(); } };
     const onEnded = () => { position = duration || Number(video.currentTime || 0); saveProgress(true); roomSync?.publish({ position, playing: false }); status.innerHTML = `<strong>Просмотр завершён.</strong> Прогресс сохранён.`; };
     const onError = (statusCode = null) => { loading.hidden = true; showSourceErrorCard(videoError, statusCode, "Проверьте срок действия ссылки или выберите другой подключённый источник."); status.innerHTML = sourceErrorMarkup(statusCode, "<strong>Поток не открылся.</strong> Проверьте источник или выберите другой вариант."); };
-    const onPlay = () => { setPlayerPlayButton(playButton, true); if (!roomSync?.isApplying()) roomSync?.publish({ playing: true }); };
-    const onPause = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; setPlayerPlayButton(playButton, false); saveProgress(false); if (!roomSync?.isApplying()) roomSync?.publish({ position, playing: false }); };
+    const onPlay = () => { setPlayerPlayButton(playButton, true, false); if (!roomSync?.isApplying()) roomSync?.publish({ playing: true }); };
+    const onPause = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; setPlayerPlayButton(playButton, false, false); saveProgress(false); if (!roomSync?.isApplying()) roomSync?.publish({ position, playing: false }); };
     const seekBy = (seconds) => { const currentPosition = Number.isFinite(video.currentTime) ? Number(video.currentTime) : Number(position || 0); const nextPosition = Math.max(0, Math.min(video.duration || duration || Number.MAX_SAFE_INTEGER, currentPosition + seconds)); position = nextPosition; video.currentTime = nextPosition; range.value = nextPosition; positionLabel.textContent = formatTime(nextPosition); saveProgress(false); roomSync?.publish({ position: nextPosition }); };
     video.addEventListener("loadedmetadata", onLoadedMetadata);
     video.addEventListener("timeupdate", onTimeUpdate);
@@ -4596,9 +4660,8 @@
         if (nextRoomStatus) { nextRoomStatus.hidden = false; nextRoomStatus.textContent = copied ? "Комната создана. Ссылка скопирована." : "Комната создана. Ссылка находится в адресной строке."; }
       } catch (error) { roomStatus.hidden = false; roomStatus.textContent = `Комнату создать не удалось: ${error.message}`; roomStatus.classList.add("is-error"); }
     });
-    const close = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; saveProgress(false); roomSync?.publish({ position, playing: false }); roomSync?.dispose(); fullscreenPlayer._exitFullscreen?.(); video.pause(); hls?.destroy(); removeVolumeControl(); removeSettingsControl(); video.removeEventListener("loadedmetadata", onLoadedMetadata); video.removeEventListener("timeupdate", onTimeUpdate); video.removeEventListener("progress", updateBuffer); video.removeEventListener("canplay", updateBuffer); video.removeEventListener("ended", onEnded); video.removeEventListener("error", onError); video.removeEventListener("play", onPlay); video.removeEventListener("pause", onPause); fullscreenPlayer._removeFullscreenControls?.(); returnFromPlayer(); };
+    const close = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; saveProgress(false); roomSync?.publish({ position, playing: false }); roomSync?.dispose(); fullscreenPlayer._exitFullscreen?.(); video.pause(); hls?.destroy(); removeLoadingState(); removeVolumeControl(); removeSettingsControl(); video.removeEventListener("loadedmetadata", onLoadedMetadata); video.removeEventListener("timeupdate", onTimeUpdate); video.removeEventListener("progress", updateBuffer); video.removeEventListener("canplay", updateBuffer); video.removeEventListener("ended", onEnded); video.removeEventListener("error", onError); video.removeEventListener("play", onPlay); video.removeEventListener("pause", onPause); fullscreenPlayer._removeFullscreenControls?.(); returnFromPlayer(); };
     $("#video-close").addEventListener("click", close);
-    $("#video-close-player").addEventListener("click", close);
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
     setVariant(activeVariant, false, true);
   }
@@ -4675,7 +4738,7 @@
     let duration = Number(existing.duration || 0);
     let lastSaved = 0;
     let hls = null;
-    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal player-cinematic" role="dialog" aria-modal="true" aria-labelledby="library-player-title"><div class="modal-head"><div><div class="eyebrow">CineVault · каталог</div><h2 id="library-player-title">${escapeHtml(item.title)} · ${escapeHtml(item.episode_title)}</h2></div><button class="icon-button" id="player-close" type="button" aria-label="Закрыть">×</button></div><div class="provider-frame video-frame"><video id="library-video" playsinline preload="metadata"></video><button class="video-play-overlay" id="library-play-overlay" type="button" aria-label="Воспроизвести">${playerIcon("play")}</button><div class="video-loading" id="library-video-loading" role="status" aria-live="polite">Загружаю адаптивный поток…</div><div class="video-error" id="library-video-error" role="alert" hidden></div></div>${playerToolbarMarkup("library", hlsTrackControlsMarkup("library", { includeAudio: false }))}<div class="library-seekbar"><div class="player-range-wrap" id="library-range-wrap"><span class="player-range-buffer" aria-hidden="true"></span><input id="library-range" type="range" min="0" max="${duration || 1}" step="0.1" value="${position}" aria-label="Перемотка видео"><output class="player-seek-time" aria-hidden="true">${formatTime(position)}</output></div><div class="player-progress-info"><span><span id="library-player-position">${formatTime(position)}</span> / <span id="library-player-duration">${formatDuration(duration)}</span></span><span class="player-buffer-status" id="library-buffer-status" role="status">Буфер: загружается…</span></div></div><div id="library-room-status" class="watch-room-status" role="status" aria-live="polite"${roomId ? "" : " hidden"}></div><div class="library-skip-panel" id="library-skip-panel" hidden><span id="library-skip-label"></span><button class="secondary-button" id="library-skip-now" type="button"></button><label class="library-skip-toggle"><input id="library-skip-auto" type="checkbox"${state.skipSegments !== false ? " checked" : ""}> Автопропуск</label></div><p id="library-player-status" class="notice" aria-live="polite">${position > 0 ? "Продолжение просмотра." : "Позиция сохраняется автоматически."}</p></section></div>`;
+    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal player-cinematic" role="dialog" aria-modal="true" aria-labelledby="library-player-title"><div class="modal-head"><div><div class="eyebrow">CineVault · каталог</div><h2 id="library-player-title">${escapeHtml(item.title)} · ${escapeHtml(item.episode_title)}</h2></div><button class="icon-button" id="player-close" type="button" aria-label="Закрыть">×</button></div><div class="provider-frame video-frame"><video id="library-video" playsinline preload="auto"></video><button class="video-play-overlay" id="library-play-overlay" type="button" aria-label="Воспроизвести">${playerIcon("play")}</button><div class="video-loading" id="library-video-loading" role="status" aria-live="polite">Загружаю адаптивный поток…</div><div class="video-error" id="library-video-error" role="alert" hidden></div></div>${playerToolbarMarkup("library", hlsTrackControlsMarkup("library"))}<p class="player-audio-notice" id="library-audio-notice" role="status" aria-live="polite" hidden></p><div class="library-seekbar"><div class="player-range-wrap" id="library-range-wrap"><span class="player-range-buffer" aria-hidden="true"></span><input id="library-range" type="range" min="0" max="${duration || 1}" step="0.1" value="${position}" aria-label="Перемотка видео"><output class="player-seek-time" aria-hidden="true">${formatTime(position)}</output></div><div class="player-progress-info"><span><span id="library-player-position">${formatTime(position)}</span> / <span id="library-player-duration">${formatDuration(duration)}</span></span><span class="player-buffer-status" id="library-buffer-status" role="status">Буфер: загружается…</span></div></div><div id="library-room-status" class="watch-room-status" role="status" aria-live="polite"${roomId ? "" : " hidden"}></div><div class="library-skip-panel" id="library-skip-panel" hidden><span id="library-skip-label"></span><button class="secondary-button" id="library-skip-now" type="button"></button><label class="library-skip-toggle"><input id="library-skip-auto" type="checkbox"${state.skipSegments !== false ? " checked" : ""}> Автопропуск</label></div><p id="library-player-status" class="notice" aria-live="polite">${position > 0 ? "Продолжение просмотра." : "Позиция сохраняется автоматически."}</p></section></div>`;
     const fullscreenPlayer = $(".player-modal");
     installPlayerFullscreenControls(fullscreenPlayer);
     const video = $("#library-video");
@@ -4686,6 +4749,7 @@
     const playOverlay = $("#library-play-overlay");
     const removeVolumeControl = bindPlayerVolumeControl(video, "library");
     const removeSettingsControl = bindPlayerSettings("library");
+    const removeLoadingState = bindPlayerLoadingState(video, loading, play);
     const range = $("#library-range");
     const rangeWrap = $("#library-range-wrap");
     bindSeekTimePreview(range, rangeWrap);
@@ -4736,12 +4800,12 @@
       }
     };
     const updateBuffer = () => updatePlayerBuffer(video, duration, rangeWrap, bufferStatus);
-    const onMetadata = () => { loading.hidden = true; videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); $("#library-player-duration").textContent = formatDuration(duration); updateBuffer(); if (position > 0 && position < duration) video.currentTime = position; updateSkipControls(); maybeAutoSkip(); };
+    const onMetadata = () => { videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); $("#library-player-duration").textContent = formatDuration(duration); updateBuffer(); if (position > 0 && position < duration) video.currentTime = position; updateSkipControls(); maybeAutoSkip(); };
     const onTime = () => { position = Number(video.currentTime || 0); duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); updateBuffer(); updateSkipControls(); maybeAutoSkip(); saveProgress(false); };
     const onEnded = () => { position = duration || Number(video.currentTime || 0); saveProgress(true); roomSync?.publish({ position, playing: false }); status.innerHTML = "<strong>Серия завершена.</strong> Прогресс сохранён."; };
     const onError = () => { loading.hidden = true; showSourceErrorCard(videoError, null, "Проверьте состояние FFmpeg и доступность исходного файла на сервере."); status.innerHTML = "<strong>Поток не открылся.</strong> Проверь статус FFmpeg и доступность исходного файла на сервере."; };
-    const onPlay = () => { setPlayerPlayButton(play, true); if (!roomSync?.isApplying()) roomSync?.publish({ playing: true }); };
-    const onPause = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; setPlayerPlayButton(play, false); saveProgress(false, true); if (!roomSync?.isApplying()) roomSync?.publish({ position, playing: false }); };
+    const onPlay = () => { setPlayerPlayButton(play, true, false); if (!roomSync?.isApplying()) roomSync?.publish({ playing: true }); };
+    const onPause = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; setPlayerPlayButton(play, false, false); saveProgress(false, true); if (!roomSync?.isApplying()) roomSync?.publish({ position, playing: false }); };
     const seekBy = (seconds) => {
       const currentPosition = Number.isFinite(video.currentTime) ? Number(video.currentTime) : Number(position || 0);
       const nextPosition = Math.max(0, Math.min(video.duration || duration || Number.MAX_SAFE_INTEGER, currentPosition + seconds));
@@ -4781,14 +4845,13 @@
     });
     const streamUrl = item.offlineUrl || item.hls_url || item.source_url;
     if (item.hls_url && window.Hls && window.Hls.isSupported()) {
-      hls = createHlsPlayer(video, streamUrl, "library", () => { loading.hidden = true; }, (_event, data) => { if (data?.fatal) onError(); }, HLS_PLAYBACK_CONFIG, { preferredAudioKey: selectedHlsAudioKey(item) });
+      hls = createHlsPlayer(video, streamUrl, "library", () => { videoError.hidden = true; }, (_event, data) => { if (data?.fatal) onError(); }, HLS_PLAYBACK_CONFIG, { preferredAudioKey: selectedHlsAudioKey(item), preferredAudioLabel: titlePlaybackSelection(item).hlsAudioLabel || "", preserveVolume: () => playerVolumeSnapshot(video), onAudioPreferenceChange: ({ key, label }) => { state.playbackSelections[item.id] = { ...titlePlaybackSelection(item), hlsAudio: key, hlsAudioLabel: label }; saveState(); } });
     } else {
       video.src = streamUrl;
       video.load();
     }
-    const close = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; saveProgress(false, true); roomSync?.publish({ position, playing: false }); roomSync?.dispose(); fullscreenPlayer._exitFullscreen?.(); video.pause(); hls?.destroy(); removeVolumeControl(); removeSettingsControl(); video.removeEventListener("loadedmetadata", onMetadata); video.removeEventListener("timeupdate", onTime); video.removeEventListener("ended", onEnded); video.removeEventListener("error", onError); video.removeEventListener("play", onPlay); video.removeEventListener("pause", onPause); fullscreenPlayer._removeFullscreenControls?.(); returnFromPlayer(); };
+    const close = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; saveProgress(false, true); roomSync?.publish({ position, playing: false }); roomSync?.dispose(); fullscreenPlayer._exitFullscreen?.(); video.pause(); hls?.destroy(); removeLoadingState(); removeVolumeControl(); removeSettingsControl(); video.removeEventListener("loadedmetadata", onMetadata); video.removeEventListener("timeupdate", onTime); video.removeEventListener("ended", onEnded); video.removeEventListener("error", onError); video.removeEventListener("play", onPlay); video.removeEventListener("pause", onPause); fullscreenPlayer._removeFullscreenControls?.(); returnFromPlayer(); };
     $("#player-close").addEventListener("click", close);
-    $("#library-close-player").addEventListener("click", close);
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
   }
 
@@ -4819,7 +4882,7 @@
 
   function bindPageActions() {
     $$('[data-open-source-import]').forEach((button) => button.addEventListener("click", () => { const item = getTitle(button.dataset.openSourceImport); if (item) openCatalogSourceImport(item); }));
-    const beginCinematicWatch = () => document.documentElement.requestFullscreen?.().catch?.(() => {});
+    const beginCinematicWatch = () => { beginCinematicFullscreen(); };
     $$('[data-play-media]').forEach((button) => button.addEventListener("click", () => { beginCinematicWatch(); const item = getTitle(button.dataset.playMedia); const season = button.dataset.resumeSeason ? Number(button.dataset.resumeSeason) : null; const episode = button.dataset.episode ? Number(button.dataset.episode) : null; openItemPlayer(item, episode, season); }));
     $$('[data-demo-play]').forEach((button) => button.addEventListener("click", () => { beginCinematicWatch(); const item = getTitle(button.dataset.demoPlay); const season = button.dataset.resumeSeason ? Number(button.dataset.resumeSeason) : null; const episode = button.dataset.episode ? Number(button.dataset.episode) : (item?.kind === "series" ? (progressForTitle(item)?.episodeNumber || 1) : null); openItemPlayer(item, episode, season); }));
     const episodeImages = $$('[data-episode-poster]');
@@ -4998,7 +5061,10 @@
         const current = { ...titlePlaybackSelection(item) };
         if (controlId === "detail-playback-source") current.source = event.currentTarget.value;
         if (controlId === "detail-playback-voice") current.voice = event.currentTarget.value;
-        if (controlId === "detail-hls-audio") current.hlsAudio = event.currentTarget.value;
+        if (controlId === "detail-hls-audio") {
+          current.hlsAudio = event.currentTarget.value;
+          current.hlsAudioLabel = event.currentTarget.selectedOptions?.[0]?.textContent || "";
+        }
         state.playbackSelections[item.id] = current;
         saveState();
         if (controlId !== "detail-hls-audio") startDetailPrebuffer(item);

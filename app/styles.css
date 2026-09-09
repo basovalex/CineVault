@@ -648,6 +648,8 @@ button.episode-card-art:hover { border-color: var(--accent); transform: translat
 .player-play-button { width: 48px; min-width: 48px; height: 44px; min-height: 44px; border-color: color-mix(in srgb, var(--accent) 72%, var(--line)); border-radius: 13px; padding: 0; background: var(--accent); color: #202428; box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 22%, transparent); }
 .player-play-button .player-icon { width: 23px; height: 23px; }
 .player-play-button .player-icon path[fill="currentColor"] { transform: translateX(1px); transform-origin: center; }
+.player-play-button.is-loading { cursor: progress; }
+.player-play-button.is-loading .player-icon { animation: video-loading-spin .8s linear infinite; }
 .player-play-button:hover { background: color-mix(in srgb, var(--accent) 84%, #fff); }
 .player-room-button { grid-auto-flow: column; gap: 6px; padding-inline: 12px; font-size: 14px; }
 .player-control-label { font-size: 12px; font-weight: 650; }
@@ -663,6 +665,8 @@ button.episode-card-art:hover { border-color: var(--accent); transform: translat
 .player-volume-level { position: absolute; z-index: 13; right: 0; bottom: calc(100% + 10px); display: flex; width: 134px; min-height: 44px; align-items: center; border: 1px solid var(--line); border-radius: 12px; padding: 0 12px; background: color-mix(in srgb, var(--surface) 94%, #000); box-shadow: 0 14px 34px rgba(0,0,0,.3); opacity: 0; visibility: hidden; transform: translateY(4px); transition-property: opacity, transform, visibility; transition-duration: 150ms; transition-timing-function: cubic-bezier(.2, 0, 0, 1); }
 .player-volume:hover .player-volume-level, .player-volume:focus-within .player-volume-level { opacity: 1; visibility: visible; transform: translateY(0); }
 .player-volume-level input { width: 100%; min-width: 0; }
+.player-audio-notice { margin: 10px 0 0; border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line)); border-radius: 11px; padding: 9px 11px; background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface)); color: var(--text); font-size: 12px; line-height: 1.45; }
+.player-audio-notice[hidden] { display: none; }
 .watch-room-status { margin-top: 9px; min-height: 18px; color: var(--accent); font-size: 11px; line-height: 1.4; }
 .watch-room-status[hidden] { display: none; }
 .watch-room-status.is-error { color: var(--danger); }
@@ -674,16 +678,20 @@ button.episode-card-art:hover { border-color: var(--accent); transform: translat
   .player-modal .modal-head h2 { max-width: calc(100vw - 110px); font-size: 23px; }
   .player-modal .player-series-bar .player-select { min-width: 118px; }
   .player-progress-info { min-width: 0; text-align: left; }
-  .player-toolbar-compact { align-items: flex-start; }
-  .player-utility-actions { margin-left: 0; }
+  .player-toolbar-compact { position: relative; align-items: flex-start; }
+  .player-utility-actions { width: 100%; margin-left: 0; }
+  .player-utility-actions .player-volume { flex: 1 1 150px; justify-content: stretch; }
+  .player-volume-level { position: static; display: flex; flex: 1 1 auto; width: auto; min-width: 96px; box-shadow: none; opacity: 1; visibility: visible; transform: none; }
+  .player-settings { position: static; }
+  .player-settings-panel { position: absolute; z-index: 16; right: 0; bottom: calc(100% + 10px); left: 0; width: auto; max-height: min(48svh, 340px); overflow-y: auto; overscroll-behavior: contain; }
   .player-room-button .player-control-label { display: none; }
   .player-room-button { padding: 0; }
-  .player-settings-panel { width: min(300px, calc(100vw - 32px)); }
 }
 
 /* Mobile player: keep the video and every control reachable on narrow screens. */
 @media (max-width: 720px) {
   body { overflow-x: hidden; }
+  .player-modal .player-volume { display: none; }
   .modal-backdrop { place-items: start center; padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }
   .player-modal { max-height: calc(100svh - max(8px, env(safe-area-inset-top)) - max(8px, env(safe-area-inset-bottom))); overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .player-modal .provider-frame.video-frame { min-height: 0; aspect-ratio: 16 / 9; }
@@ -697,6 +705,10 @@ button.episode-card-art:hover { border-color: var(--accent); transform: translat
   .player-modal .player-progress-info { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; }
   .player-modal .player-buffer-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .player-modal button, .player-modal select, .player-modal input[type="range"] { -webkit-tap-highlight-color: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-play-button.is-loading .player-icon { animation: none; }
 }
 
 /* Catalog discovery: combine genre, type and availability without a permanent sidebar. */
