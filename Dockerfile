@@ -6,11 +6,13 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 10001 --shell /usr/sbin/nologin cinevault
+    && useradd --create-home --uid 10001 --shell /usr/sbin/nologin cinevault \
+    && pip install --no-cache-dir requests
 
 WORKDIR /opt/cinevault
 COPY --chown=cinevault:cinevault app ./app
 COPY --chown=cinevault:cinevault tools ./tools
+COPY --chown=cinevault:cinevault kinopoisk_media_system_fixed ./kinopoisk_media_system_fixed
 
 RUN mkdir -p /data/media-library /inbox \
     && chown -R cinevault:cinevault /data/media-library /inbox

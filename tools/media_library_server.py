@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import cgi
+import html
 import hashlib
 import hmac
 import json
@@ -18,10 +19,13 @@ import mimetypes
 import os
 import re
 import shutil
+import shlex
 import sqlite3
 import ssl
 import subprocess
+import sys
 import threading
+import time
 import uuid
 import urllib.error
 import urllib.parse
@@ -42,8 +46,73 @@ from urllib.parse import unquote, urlparse
 ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT / "app"
 DEFAULT_DATA_DIR = ROOT / "data" / "media-library"
+CATALOG_IMPORTS_PATH = APP_DIR / "data" / "catalog_imports.json"
+SITEMAP_VIEW_PATHS = ("/", "/catalog/", "/movies/", "/series/")
+SITEMAP_SEED_TITLE_IDS = {
+    "sintel-open",
+    "big-buck-bunny-open",
+    "elephants-dream-open",
+    "gentlemen-of-fortune-rutube",
+    "desperate-housewives",
+    "the-mentalist",
+    "interstellar",
+    "about-time",
+    "the-office",
+    "little-women",
+    "knives-out",
+    "the-holiday",
+    "arrival",
+    "shawshank-redemption",
+    "green-mile",
+    "forrest-gump",
+    "the-matrix",
+    "prestige",
+    "parasite",
+    "grand-budapest",
+    "lord-of-the-rings",
+    "harry-potter-1",
+}
+# Some catalog imports merge into richer in-app seed cards. Sitemap URLs must
+# therefore use the same stable card IDs as the browser router.
+SITEMAP_TITLE_ID_BY_KINOPOISK_ID = {
+    160958: "desperate-housewives",
+    412344: "the-mentalist",
+}
+APP_ROUTE_RE = re.compile(
+    r"^/(?:title/[^/]+/?|catalog/?|movies/?|series/?|library/?|favorites/?|evening/?|history/?|settings/?)$"
+)
+DEFAULT_KINOPOISK_UPDATE_DELAY_SECONDS = 0
+DEFAULT_KINOPOISK_UPDATE_TIMEOUT_SECONDS = 5 * 60
+KINOPOISK_REFRESH_COOLDOWN_SECONDS = 15
+DEFAULT_KINOPOISK_IMPORT_TIMEOUT_SECONDS = 30 * 60
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024 * 1024
+MAX_SOURCE_JSON_BYTES = 10 * 1024 * 1024
 MAX_TITLE_LENGTH = 200
+MAX_EXTERNAL_EMBED_URL_LENGTH = 4096
+EXTERNAL_EMBED_HOSTS = {
+    "cinemar.cc",
+    "www.cinemar.cc",
+    "rutube.ru",
+    "www.rutube.ru",
+    "youtube.com",
+    "www.youtube.com",
+    "youtu.be",
+}
+# Query parameters in this list are normally short-lived credentials, not a
+# stable embed identity. They must never be persisted in catalog JSON.
+UNSTABLE_SOURCE_QUERY_KEYS = {
+    "token",
+    "access_token",
+    "auth",
+    "auth_token",
+    "signature",
+    "sig",
+    "expires",
+    "expiry",
+    "expires_at",
+    "expires_in",
+    "hdnts",
+}
 ALLOWED_EXTENSIONS = {".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi"}
 QUALITY_PRESETS = (("360p", 360, 600_000), ("720p", 720, 2_500_000), ("1080p", 1080, 5_000_000))
 HLS_SEGMENT_SECONDS = 4
@@ -58,6 +127,282 @@ UPLOAD_SEASON_DIR_RE = re.compile(r"(?:season|сезон)[ ._-]*(\d{1,2})$", re.
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def sitemap_title_ids(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[str]:
+    """Return stable public card IDs from seed data and the current catalog."""
+    title_ids = set(SITEMAP_SEED_TITLE_IDS)
+    try:
+        payload = json.loads(Path(catalog_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = []
+    for entry in payload if isinstance(payload, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            kinopoisk_id = int(entry.get("kinopoiskId") or 0)
+        except (TypeError, ValueError):
+            kinopoisk_id = 0
+        title_id = SITEMAP_TITLE_ID_BY_KINOPOISK_ID.get(kinopoisk_id, str(entry.get("id") or "").strip())
+        if title_id:
+            title_ids.add(title_id)
+    return sorted(title_ids)
+
+
+def build_sitemap_xml(base_url: str, title_ids: Iterable[str]) -> str:
+    """Build a compact sitemap for public catalogue and detail routes."""
+    base = str(base_url).rstrip("/")
+    paths = list(SITEMAP_VIEW_PATHS)
+    paths.extend(f"/title/{urllib.parse.quote(str(title_id), safe='-._~')}/" for title_id in title_ids)
+    locations = "".join(
+        f"<url><loc>{html.escape(base + path, quote=False)}</loc></url>"
+        for path in dict.fromkeys(paths)
+    )
+    return f'<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{locations}</urlset>'
+
+
+def default_kinopoisk_updater_dir() -> Path:
+    """Return the local Kinopoisk helper checkout, with an env override."""
+    configured = os.environ.get("CINEVAULT_KINOPOISK_UPDATER_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / "PycharmProjects" / "parsers" / "lk_dreamjob_reviews_parser-main" / "kinopoisk_media_system_fixed"
+
+
+def positive_env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def kinopoisk_update_command(updater_dir: Path, kinopoisk_id: int, delay_seconds: float = 0) -> list[str]:
+    command = [
+        sys.executable,
+        str(updater_dir / "update_media.py"),
+        "--delay-seconds",
+        "{:g}".format(max(0, float(delay_seconds))),
+        "--only",
+        str(int(kinopoisk_id)),
+    ]
+    return command
+
+
+def parse_kinopoisk_import_input(value: Any) -> int:
+    """Accept one Kinopoisk numeric ID or a canonical film/series URL."""
+    raw = str(value or "").strip()
+    if raw.isdigit():
+        kinopoisk_id = int(raw)
+    else:
+        match = re.fullmatch(
+            r"https?://(?:www\.)?kinopoisk\.ru/(?:film|series)/(\d+)/?(?:[?#].*)?",
+            raw,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            raise ValueError("Укажи Kinopoisk ID или ссылку на фильм либо сериал")
+        kinopoisk_id = int(match.group(1))
+    if kinopoisk_id < 1:
+        raise ValueError("Kinopoisk ID должен быть положительным числом")
+    return kinopoisk_id
+
+
+def kinopoisk_import_command(script_path: Path, kinopoisk_id: int) -> list[str]:
+    """Run the project wrapper that calls add_media.py and syncs CineVault."""
+    return [sys.executable, str(script_path), str(int(kinopoisk_id))]
+
+
+class KinopoiskCatalogImporter:
+    """Run one local add_media.py import without blocking an HTTP request."""
+
+    def __init__(
+        self,
+        script_path: Path = ROOT / "tools" / "add_kinopoisk_title.py",
+        catalog_path: Path = CATALOG_IMPORTS_PATH,
+        timeout_seconds: int = DEFAULT_KINOPOISK_IMPORT_TIMEOUT_SECONDS,
+    ):
+        self.script_path = Path(script_path).expanduser().resolve()
+        self.catalog_path = Path(catalog_path).expanduser().resolve()
+        self.timeout_seconds = max(1, int(timeout_seconds))
+        self._lock = threading.Lock()
+        self._jobs: Dict[str, Dict[str, Any]] = {}
+
+    def _catalog_entry(self, kinopoisk_id: int) -> Optional[Dict[str, Any]]:
+        try:
+            catalog = json.loads(self.catalog_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        for item in catalog if isinstance(catalog, list) else []:
+            try:
+                if isinstance(item, dict) and int(item.get("kinopoiskId") or 0) == kinopoisk_id:
+                    return dict(item)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    @staticmethod
+    def _public_job(job: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            key: job[key]
+            for key in ("id", "kinopoisk_id", "status", "created_at", "started_at", "finished_at", "error", "entry")
+            if job.get(key) is not None
+        }
+
+    def start(self, raw_input: Any) -> Dict[str, Any]:
+        kinopoisk_id = parse_kinopoisk_import_input(raw_input)
+        if not self.script_path.is_file():
+            raise FileNotFoundError("Локальная команда добавления Kinopoisk не найдена")
+        with self._lock:
+            active = next((job for job in self._jobs.values() if job["status"] in {"queued", "running"}), None)
+            if active:
+                if active["kinopoisk_id"] == kinopoisk_id:
+                    return self._public_job(active)
+                raise RuntimeError("Сейчас добавляется другая карточка. Дождись её завершения и попробуй снова.")
+            job = {
+                "id": uuid.uuid4().hex,
+                "kinopoisk_id": kinopoisk_id,
+                "status": "queued",
+                "created_at": now_iso(),
+                "started_at": None,
+                "finished_at": None,
+                "error": None,
+                "entry": None,
+            }
+            self._jobs[job["id"]] = job
+        threading.Thread(target=self._run, args=(job["id"],), daemon=True, name="cinevault-kinopoisk-import").start()
+        return self._public_job(job)
+
+    def status(self, job_id: str) -> Dict[str, Any]:
+        with self._lock:
+            job = self._jobs.get(str(job_id))
+            if job is None:
+                raise KeyError("Задача импорта не найдена")
+            return self._public_job(job)
+
+    def _run(self, job_id: str) -> None:
+        with self._lock:
+            job = self._jobs[job_id]
+            job["status"] = "running"
+            job["started_at"] = now_iso()
+            kinopoisk_id = int(job["kinopoisk_id"])
+        print(f"Kinopoisk catalog import: starting ID {kinopoisk_id}", flush=True)
+        try:
+            result = subprocess.run(
+                kinopoisk_import_command(self.script_path, kinopoisk_id),
+                cwd=str(ROOT),
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+            )
+            if result.returncode:
+                details = "\n".join(part.strip() for part in (result.stderr, result.stdout) if part and part.strip())
+                raise RuntimeError((details or "Команда add_media.py завершилась с ошибкой")[-1200:])
+            entry = self._catalog_entry(kinopoisk_id)
+            if entry is None:
+                raise RuntimeError("Импорт завершился, но карточка не появилась в каталоге CineVault")
+            with self._lock:
+                job = self._jobs[job_id]
+                job["status"] = "completed"
+                job["entry"] = entry
+                job["finished_at"] = now_iso()
+            print(f"Kinopoisk catalog import: completed ID {kinopoisk_id}", flush=True)
+        except subprocess.TimeoutExpired:
+            error = "Импорт Kinopoisk не уложился в лимит времени. Попробуй ещё раз позже."
+            with self._lock:
+                job = self._jobs[job_id]
+                job.update({"status": "failed", "error": error, "finished_at": now_iso()})
+            print(f"Kinopoisk catalog import: timed out ID {kinopoisk_id}", flush=True)
+        except (OSError, RuntimeError) as exc:
+            with self._lock:
+                job = self._jobs[job_id]
+                job.update({"status": "failed", "error": str(exc), "finished_at": now_iso()})
+            print(f"Kinopoisk catalog import: failed ID {kinopoisk_id}", flush=True)
+
+
+class KinopoiskOnDemandUpdater:
+    """Refresh one imported Kinopoisk title immediately before playback."""
+
+    def __init__(
+        self,
+        updater_dir: Path,
+        delay_seconds: float = DEFAULT_KINOPOISK_UPDATE_DELAY_SECONDS,
+        catalog_path: Path = CATALOG_IMPORTS_PATH,
+        timeout_seconds: int = DEFAULT_KINOPOISK_UPDATE_TIMEOUT_SECONDS,
+    ):
+        self.updater_dir = updater_dir.expanduser().resolve()
+        self.delay_seconds = max(0, float(delay_seconds))
+        self.catalog_path = Path(catalog_path).expanduser().resolve()
+        self.timeout_seconds = max(1, int(timeout_seconds))
+        self._lock = threading.Lock()
+        self._last_refreshes: Dict[int, float] = {}
+
+    @property
+    def script_path(self) -> Path:
+        return self.updater_dir / "update_media.py"
+
+    def catalog_entry(self, kinopoisk_id: int) -> Dict[str, Any]:
+        try:
+            catalog = json.loads(self.catalog_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Каталог CineVault временно недоступен") from exc
+        for item in catalog if isinstance(catalog, list) else []:
+            if isinstance(item, dict) and int(item.get("kinopoiskId") or 0) == kinopoisk_id:
+                return dict(item)
+        raise KeyError("Карточка Kinopoisk не найдена в каталоге CineVault")
+
+    def refresh(self, kinopoisk_id: Any, force: bool = False) -> Dict[str, Any]:
+        try:
+            resolved_id = int(str(kinopoisk_id).strip())
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Kinopoisk ID должен быть положительным числом") from exc
+        if resolved_id < 1:
+            raise ValueError("Kinopoisk ID должен быть положительным числом")
+        # Reject unknown IDs before starting the external helper. Viewers may
+        # refresh existing cards, but cannot use this endpoint as a generic
+        # command runner or add arbitrary provider URLs.
+        self.catalog_entry(resolved_id)
+        if not self.script_path.is_file():
+            raise FileNotFoundError("Локальный Kinopoisk updater не найден")
+
+        with self._lock:
+            last_refresh = self._last_refreshes.get(resolved_id, 0.0)
+            if not force and last_refresh and time.monotonic() - last_refresh < KINOPOISK_REFRESH_COOLDOWN_SECONDS:
+                return {"refreshed": False, "cached": True, "entry": self.catalog_entry(resolved_id)}
+            print("Kinopoisk playback refresh: starting ID {}".format(resolved_id), flush=True)
+            try:
+                result = subprocess.run(
+                    kinopoisk_update_command(self.updater_dir, resolved_id, self.delay_seconds),
+                    cwd=str(self.updater_dir),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout_seconds,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError("Обновление Kinopoisk не уложилось в лимит времени") from exc
+            except OSError as exc:
+                raise RuntimeError("Не удалось запустить Kinopoisk updater") from exc
+            if result.returncode:
+                print("Kinopoisk playback refresh: failed ID {}".format(resolved_id), flush=True)
+                raise RuntimeError("Kinopoisk updater завершился с ошибкой")
+
+            output = "{}\n{}".format(result.stdout or "", result.stderr or "")
+            refreshed = "Успешно: 1" in output
+            entry = self.catalog_entry(resolved_id)
+            self._last_refreshes[resolved_id] = time.monotonic()
+            print(
+                "Kinopoisk playback refresh: {} ID {}".format(
+                    "completed" if refreshed else "kept previous source for",
+                    resolved_id,
+                ),
+                flush=True,
+            )
+            payload = {"refreshed": refreshed, "cached": False, "entry": entry}
+            if not refreshed:
+                payload["warning"] = "Источник не отдал новый поток; используется предыдущая ссылка"
+            return payload
 
 
 def slugify(value: str) -> str:
@@ -119,6 +464,244 @@ def load_local_tmdb_token() -> str:
 def open_https(request):
     context = ssl.create_default_context(cafile=certifi.where()) if certifi else ssl.create_default_context()
     return urllib.request.urlopen(request, timeout=15, context=context)
+
+
+def parse_external_embed_input(value: Any) -> str:
+    """Return a validated user-supplied embed URL without replaying a cURL request.
+
+    Some providers expose a player through a short-lived request to a playlist
+    API.  We deliberately keep that request opaque: accepting a copied cURL
+    only means extracting its Referer/embed page, never sending its encrypted
+    body, cookies, or headers from CineVault.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("Вставь URL embed-плеера или скопированный cURL")
+    candidate = raw
+    if raw.lower().startswith("curl ") or " -H " in raw or " --header " in raw:
+        try:
+            tokens = shlex.split(raw)
+        except ValueError as exc:
+            raise ValueError("Не удалось разобрать cURL") from exc
+        for index, token in enumerate(tokens):
+            if token in {"-H", "--header"} and index + 1 < len(tokens):
+                header = tokens[index + 1]
+                name, separator, header_value = header.partition(":")
+                if separator and name.strip().lower() in {"referer", "referrer"}:
+                    candidate = header_value.strip()
+                    break
+            if token in {"-e", "--referer"} and index + 1 < len(tokens):
+                candidate = tokens[index + 1].strip()
+                break
+    if len(candidate) > MAX_EXTERNAL_EMBED_URL_LENGTH:
+        raise ValueError("Embed-ссылка слишком длинная")
+    parsed = urllib.parse.urlparse(candidate)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme != "https" or host not in EXTERNAL_EMBED_HOSTS:
+        raise ValueError("Нужна HTTPS-ссылка на разрешённый embed-плеер (/embed/...)")
+    query_keys = {key.lower() for key in urllib.parse.parse_qs(parsed.query, keep_blank_values=True)}
+
+    if query_keys & UNSTABLE_SOURCE_QUERY_KEYS:
+        raise ValueError("временный токен")
+
+    if host in {"rutube.ru", "www.rutube.ru"}:
+        match = re.fullmatch(r"/video/([a-zA-Z0-9]+)(?:/)?", parsed.path) or re.fullmatch(r"/play/embed/([a-zA-Z0-9]+)(?:/)?", parsed.path)
+        if match:
+            return f"https://rutube.ru/play/embed/{match.group(1)}"
+    if not parsed.path.startswith("/embed/"):
+        raise ValueError("Нужна HTTPS-ссылка на разрешённый embed-плеер (/embed/...)")
+    return candidate
+
+
+def _catalog_source_hosts() -> set:
+    configured = {
+        value.strip().lower().rstrip(".")
+        for value in str(os.environ.get("CINEVAULT_ALLOWED_VIDEO_HOSTS", "") or "").split(",")
+        if value.strip()
+    }
+    return {"localhost", "127.0.0.1", "::1", "archive.org", "download.archive.org", *configured}
+
+
+def parse_catalog_source_url(value: Any, source_kind: str = "embed") -> Dict[str, str]:
+    """Validate one stable URL from a manually supplied provider JSON.
+
+    The importer accepts stable official embeds or first-party/open direct media
+    URLs. Short-lived signed URLs and arbitrary third-party hosts are rejected.
+    """
+    candidate = str(value or "").strip()
+    if len(candidate) > MAX_EXTERNAL_EMBED_URL_LENGTH:
+        raise ValueError("Ссылка слишком длинная")
+    parsed = urllib.parse.urlparse(candidate)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    query_keys = {key.lower() for key in urllib.parse.parse_qs(parsed.query, keep_blank_values=True)}
+
+    if parsed.scheme != "https":
+        raise ValueError("нужен HTTPS")
+    if host in EXTERNAL_EMBED_HOSTS:
+        if query_keys & UNSTABLE_SOURCE_QUERY_KEYS:
+            raise ValueError("временный токен")
+        if host in {"rutube.ru", "www.rutube.ru"}:
+            match = re.fullmatch(r"/(?:video|play/embed)/([a-zA-Z0-9]+)(?:/)?", parsed.path)
+            if match:
+                return {"url": f"https://rutube.ru/play/embed/{match.group(1)}", "type": "embed"}
+        if parsed.path.startswith("/embed/"):
+            return {"url": candidate, "type": "embed"}
+        raise ValueError("нужен путь /embed/...")
+    if host not in _catalog_source_hosts():
+        raise ValueError("хост не разрешён")
+    suffix = parsed.path.lower()
+    if not (suffix.endswith((".m3u8", ".mp4", ".m4v", ".webm", ".mov")) or "/download/" in suffix):
+        raise ValueError("не удалось определить стабильный медиа-адрес")
+    media_type = "application/vnd.apple.mpegurl" if suffix.endswith(".m3u8") else "video/mp4"
+    return {"url": candidate, "type": media_type}
+
+
+def normalize_catalog_source_json(payload: Any) -> Dict[str, Any]:
+    """Convert the provider JSON shape into catalog videoSources."""
+    if isinstance(payload, dict):
+        rows = (
+            payload.get("data")
+            or payload.get("episodes")
+            or payload.get("items")
+            or payload.get("videoSources")
+            or payload.get("sources")
+            or [payload]
+        )
+    elif isinstance(payload, list):
+        rows = payload
+    else:
+        rows = []
+    if isinstance(rows, dict):
+        rows = [rows]
+    variants = []
+    skipped = []
+    seen = set()
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        translations = (
+            row.get("translations")
+            or row.get("episodeVariants")
+            or row.get("variants")
+            or row.get("videoSources")
+            or row.get("sources")
+            or []
+        )
+        if isinstance(translations, dict):
+            translations = [translations]
+        if not isinstance(translations, list) or not translations:
+            translations = [row]
+        for index, translation in enumerate(translations):
+            if not isinstance(translation, dict):
+                continue
+            raw_url = (
+                translation.get("m3u8")
+                or translation.get("hlsUrl")
+                or translation.get("hls_url")
+                or translation.get("filepath")
+                or translation.get("url")
+                or translation.get("sourceUrl")
+                or translation.get("source_url")
+                or translation.get("iframeUrl")
+                or row.get("m3u8")
+                or row.get("hlsUrl")
+                or row.get("hls_url")
+                or row.get("iframeUrl")
+                or row.get("filepath")
+                or row.get("url")
+            )
+            label = str(translation.get("name") or translation.get("title") or translation.get("label") or row.get("name") or row.get("title") or "Оригинал").strip()[:MAX_TITLE_LENGTH]
+            try:
+                source = parse_catalog_source_url(
+                    raw_url,
+                    "embed" if translation.get("iframeUrl") or row.get("iframeUrl") else "media",
+                )
+            except ValueError as exc:
+                skipped.append({"label": label, "reason": str(exc)})
+                continue
+            quality = str(
+                translation.get("quality")
+                or translation.get("streamQuality")
+                or translation.get("resolution")
+                or row.get("quality")
+                or row.get("streamQuality")
+                or row.get("resolution")
+                or "Авто"
+            ).strip()[:40]
+            variant_id = str(translation.get("id") or row.get("id") or f"source-{len(variants) + 1}").strip()[:120]
+            # A master HLS URL already contains its AUDIO/SUBTITLES groups and
+            # quality variants. Never store the same master once per label.
+            key = source["url"]
+            if key in seen:
+                continue
+            seen.add(key)
+            variants.append({"id": variant_id, "url": source["url"], "type": source["type"], "quality": quality or "Авто", "voice": label or "Оригинал"})
+    return {"variants": variants, "skipped": skipped, "source_count": len(variants) + len(skipped)}
+
+
+def update_catalog_from_source_json(
+    source_payload: Any,
+    kinopoisk_id: Any,
+    title: Any = "",
+    kind: str = "movie",
+    metadata: Optional[Dict[str, Any]] = None,
+    catalog_path: Path = CATALOG_IMPORTS_PATH,
+) -> Dict[str, Any]:
+    try:
+        kp_id = int(str(kinopoisk_id).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Kinopoisk ID должен быть числом") from exc
+    if kp_id <= 0:
+        raise ValueError("Некорректный Kinopoisk ID")
+    if kind not in {"movie", "series"}:
+        raise ValueError("Тип должен быть movie или series")
+    normalized = normalize_catalog_source_json(source_payload)
+
+    try:
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8")) if catalog_path.is_file() else []
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Не удалось прочитать catalog_imports.json") from exc
+    if not isinstance(catalog, list):
+        raise ValueError("catalog_imports.json должен содержать массив")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    existing_index = next((index for index, item in enumerate(catalog) if isinstance(item, dict) and int(item.get("kinopoiskId") or 0) == kp_id), None)
+    existing = dict(catalog[existing_index]) if existing_index is not None else {}
+    resolved_title = str(title or metadata.get("title") or existing.get("title") or f"Kinopoisk {kp_id}").strip()[:MAX_TITLE_LENGTH]
+    if not resolved_title:
+        raise ValueError("Название тайтла обязательно")
+    entry = {
+        **existing,
+        "id": existing.get("id") or f"kinopoisk-{kp_id}",
+        "kind": kind,
+        "title": resolved_title,
+        "originalTitle": str(metadata.get("original_title") or metadata.get("originalTitle") or existing.get("originalTitle") or resolved_title).strip()[:MAX_TITLE_LENGTH],
+        "year": metadata.get("year", existing.get("year")) or "—",
+        "description": str(metadata.get("overview") or metadata.get("description") or existing.get("description") or "").strip(),
+        "tags": list(dict.fromkeys([*(existing.get("tags") or []), "для нас"])),
+        "runtime": metadata.get("runtime", existing.get("runtime")) or 0,
+        "kinopoiskId": kp_id,
+        "poster": existing.get("poster") or "linear-gradient(145deg, #425466, #171b28)",
+        "posterImage": str(metadata.get("poster_url") or metadata.get("posterImage") or existing.get("posterImage") or "").strip(),
+        "providerUrl": f"https://www.kinopoisk.ru/{'series' if kind == 'series' else 'film'}/{kp_id}/",
+        "providerName": "CineVault · JSON-источник",
+        "providerNote": "Варианты озвучки импортированы вручную из JSON. Источник открывается напрямую в браузере.",
+        "videoSources": normalized["variants"],
+    }
+    if metadata.get("seasons"):
+        entry["seasons"] = metadata["seasons"]
+    elif kind == "series" and not entry.get("seasons"):
+        entry["seasons"] = [1]
+    if normalized["skipped"]:
+        entry["videoSourcesSkipped"] = normalized["skipped"]
+    if existing_index is None:
+        catalog.append(entry)
+    else:
+        catalog[existing_index] = entry
+    catalog_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = catalog_path.with_suffix(catalog_path.suffix + ".tmp")
+    temporary_path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary_path, catalog_path)
+    return {"entry": entry, "accepted": len(normalized["variants"]), "skipped": normalized["skipped"], "created": existing_index is None}
 
 
 class MediaLibrary:
@@ -191,6 +774,7 @@ class MediaLibrary:
                     id TEXT PRIMARY KEY,
                     share_code TEXT NOT NULL UNIQUE,
                     episode_id TEXT NOT NULL REFERENCES episodes(id),
+                    target_key TEXT,
                     state_json TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -230,6 +814,16 @@ class MediaLibrary:
                 if column not in existing_columns:
                     self._db.execute(f"ALTER TABLE titles ADD COLUMN {column} {definition}")
             self._db.execute("CREATE INDEX IF NOT EXISTS idx_titles_metadata ON titles(metadata_provider, metadata_external_id)")
+            episode_columns = {row[1] for row in self._db.execute("PRAGMA table_info(episodes)").fetchall()}
+            for column, definition in {
+                "source_type": "TEXT NOT NULL DEFAULT 'local'",
+                "external_url": "TEXT",
+            }.items():
+                if column not in episode_columns:
+                    self._db.execute(f"ALTER TABLE episodes ADD COLUMN {column} {definition}")
+            room_columns = {row[1] for row in self._db.execute("PRAGMA table_info(watch_rooms)").fetchall()}
+            if "target_key" not in room_columns:
+                self._db.execute("ALTER TABLE watch_rooms ADD COLUMN target_key TEXT")
             self._db.commit()
 
     def _execute(self, query: str, params: Iterable[Any] = ()) -> sqlite3.Cursor:
@@ -239,8 +833,10 @@ class MediaLibrary:
             return cursor
 
     def _episode_payload(self, row: sqlite3.Row) -> Dict[str, Any]:
+        source_type = row["source_type"] if "source_type" in row.keys() else "local"
+        external_url = row["external_url"] if "external_url" in row.keys() else None
         hls_file = self.hls_dir / row["id"] / "master.m3u8"
-        hls_ready = hls_file.is_file()
+        hls_ready = source_type != "external_embed" and hls_file.is_file()
         available_qualities = [
             label for label, _, _ in QUALITY_PRESETS
             if (self.hls_dir / row["id"] / label / "index.m3u8").is_file()
@@ -272,12 +868,14 @@ class MediaLibrary:
             "season": row["season_number"] or None,
             "episode": row["episode_number"] or None,
             "episode_title": row["episode_title"],
-            "status": "ready" if hls_ready else row["status"],
+            "status": "ready" if source_type == "external_embed" or hls_ready else row["status"],
             "error": row["error_message"],
             "hls_url": f"/media/hls/{row['id']}/master.m3u8" if hls_ready else None,
             "available_qualities": available_qualities,
-            "source_url": f"/media/source/{row['id']}/{quote_path(Path(row['source_path']).name)}",
-            "offline_manifest_url": f"/api/library/episodes/{row['id']}/offline-manifest",
+            "source_type": source_type,
+            "source_url": None if source_type == "external_embed" else f"/media/source/{row['id']}/{quote_path(Path(row['source_path']).name)}",
+            "embed_url": external_url if source_type == "external_embed" else None,
+            "offline_manifest_url": None if source_type == "external_embed" else f"/api/library/episodes/{row['id']}/offline-manifest",
             "skip_segments": skip_segments,
             "progress": {
                 "position": float(progress["position_seconds"]),
@@ -719,6 +1317,67 @@ class MediaLibrary:
                 shutil.rmtree(final_dir, ignore_errors=True)
             raise
 
+    def create_external_embed(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Add a user-supplied official embed without fetching the provider.
+
+        The external page stays responsible for authentication, cookies,
+        playback and expiration.  CineVault stores only its HTTPS embed URL.
+        """
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        title = str(metadata.get("title") or payload.get("title") or "").strip()[:MAX_TITLE_LENGTH]
+        if not title:
+            raise ValueError("Название тайтла обязательно")
+        embed_url = parse_external_embed_input(payload.get("embed_url") or payload.get("url") or payload.get("curl"))
+        episode_title = str(payload.get("episode_title") or "").strip()[:MAX_TITLE_LENGTH]
+        try:
+            season = int(payload.get("season") or 0)
+            episode = int(payload.get("episode") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Сезон и серия должны быть числами") from exc
+        if (season < 0 or episode < 0) or ((season == 0) != (episode == 0)):
+            raise ValueError("Для фильма сезон и серия должны быть 0, для сериала — больше 0")
+        kind = str(metadata.get("kind") or payload.get("kind") or ("series" if season else "movie"))
+        if kind not in {"series", "movie"}:
+            raise ValueError("Некорректный тип тайтла")
+
+        with self._lock:
+            existing = self._db.execute(
+                "SELECT id FROM titles WHERE lower(title) = lower(?) AND kind = ?",
+                (title, kind),
+            ).fetchone()
+            if existing:
+                title_id = existing["id"]
+                self._db.execute(
+                    "UPDATE titles SET original_title = ?, year = ?, overview = ?, poster_url = ?, metadata_provider = ?, metadata_external_id = ?, metadata_json = ?, updated_at = ? WHERE id = ?",
+                    (metadata.get("original_title"), metadata.get("year"), metadata.get("overview"), metadata.get("poster_url"), str(metadata.get("provider") or "")[:40] or None, str(metadata.get("external_id") or "")[:80] or None, json.dumps(metadata, ensure_ascii=False), now_iso(), title_id),
+                )
+            else:
+                title_id = self._new_title_id(title)
+                timestamp = now_iso()
+                self._db.execute(
+                    "INSERT INTO titles(id, kind, title, original_title, year, overview, poster_url, metadata_provider, metadata_external_id, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (title_id, kind, title, metadata.get("original_title"), metadata.get("year"), metadata.get("overview"), metadata.get("poster_url"), str(metadata.get("provider") or "")[:40] or None, str(metadata.get("external_id") or "")[:80] or None, json.dumps(metadata, ensure_ascii=False), timestamp, timestamp),
+                )
+            episode_row = self._db.execute(
+                "SELECT id FROM episodes WHERE title_id = ? AND season_number = ? AND episode_number = ?",
+                (title_id, season, episode),
+            ).fetchone()
+            episode_id = episode_row["id"] if episode_row else uuid.uuid4().hex
+            timestamp = now_iso()
+            episode_label = episode_title or (f"Серия {episode}" if episode else "Фильм")
+            if episode_row:
+                self._db.execute(
+                    "UPDATE episodes SET episode_title = ?, source_path = ?, hls_path = NULL, source_type = 'external_embed', external_url = ?, status = 'ready', error_message = NULL, updated_at = ? WHERE id = ?",
+                    (episode_label, f"external://{episode_id}", embed_url, timestamp, episode_id),
+                )
+            else:
+                self._db.execute(
+                    "INSERT INTO episodes(id, title_id, season_number, episode_number, episode_title, source_path, hls_path, source_type, external_url, status, error_message, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NULL, 'external_embed', ?, 'ready', NULL, ?, ?)",
+                    (episode_id, title_id, season, episode, episode_label, f"external://{episode_id}", embed_url, timestamp, timestamp),
+                )
+            self._db.commit()
+        return {"episode_id": episode_id, "title_id": title_id, "status": "ready", "source_type": "external_embed", "embed_url": embed_url}
+
     def import_file(
         self,
         source_file: Path,
@@ -844,6 +1503,12 @@ class MediaLibrary:
         return next(item for item in self.list_library() if item["id"] == episode_id)["progress"]
 
     def offline_manifest(self, episode_id: str, quality: Optional[str] = None) -> Dict[str, Any]:
+        with self._lock:
+            source = self._db.execute("SELECT source_type FROM episodes WHERE id = ?", (episode_id,)).fetchone()
+        if not source:
+            raise FileNotFoundError("Серия не найдена")
+        if source["source_type"] == "external_embed":
+            raise ValueError("Внешний embed нельзя скачать через CineVault")
         allowed = {item[0] for item in QUALITY_PRESETS}
         if quality is not None and quality not in allowed:
             raise ValueError("Неизвестное качество")
@@ -871,26 +1536,64 @@ class MediaLibrary:
             "resource_sizes": resource_sizes,
         }
 
-    def create_room(self, episode_id: str) -> Dict[str, Any]:
-        if not self._db.execute("SELECT 1 FROM episodes WHERE id = ?", (episode_id,)).fetchone():
-            raise KeyError("Серия не найдена")
+    def create_room(self, episode_id: str = "", payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        payload = payload or {}
+        episode_id = str(payload.get("episode_id", episode_id) or "").strip()
+        target_key = str(payload.get("target_key", "") or "").strip()
+        title_id = str(payload.get("title_id", "") or "").strip()
+        season = max(0, int(payload.get("season", 0) or 0))
+        episode = max(0, int(payload.get("episode", 0) or 0))
+        local_episode = self._db.execute("SELECT * FROM episodes WHERE id = ?", (episode_id,)).fetchone() if episode_id else None
+        if not local_episode and not target_key:
+            raise KeyError("Укажите episode_id локальной серии или target_key для внешнего потока")
+        if local_episode:
+            title_id = title_id or str(local_episode["title_id"])
+            season = season or int(local_episode["season_number"])
+            episode = episode or int(local_episode["episode_number"])
+            target_key = target_key or episode_id
+        if not target_key:
+            target_key = f"{title_id}-s{season}e{episode}" if title_id else episode_id
         room_id = uuid.uuid4().hex[:12]
         share_code = uuid.uuid4().hex[:8].upper()
-        state = {"episode_id": episode_id, "position": 0, "playing": False, "seq": 0, "updated_at": now_iso()}
-        self._execute("INSERT INTO watch_rooms(id, share_code, episode_id, state_json, updated_at) VALUES (?, ?, ?, ?, ?)", (room_id, share_code, episode_id, json.dumps(state), state["updated_at"]))
+        state = {
+            "episode_id": episode_id,
+            "target_key": target_key,
+            "title_id": title_id,
+            "season": season,
+            "episode": episode,
+            "position": 0,
+            "playing": False,
+            "seq": 0,
+            "updated_at": now_iso(),
+        }
+        self._execute("INSERT INTO watch_rooms(id, share_code, episode_id, target_key, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)", (room_id, share_code, episode_id, target_key, json.dumps(state), state["updated_at"]))
         return {"room_id": room_id, "share_code": share_code, "state": state}
 
     def get_room(self, room_id: str) -> Dict[str, Any]:
         row = self._db.execute("SELECT * FROM watch_rooms WHERE id = ?", (room_id,)).fetchone()
         if not row:
             raise KeyError("Комната не найдена")
-        return {"room_id": row["id"], "share_code": row["share_code"], "state": json.loads(row["state_json"])}
+        state = json.loads(row["state_json"])
+        if row["target_key"] and not state.get("target_key"):
+            state["target_key"] = row["target_key"]
+        return {"room_id": row["id"], "share_code": row["share_code"], "state": state}
 
     def update_room(self, room_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         current = self.get_room(room_id)
         state = current["state"]
-        state.update({"position": max(0.0, float(payload.get("position", state["position"]))), "playing": bool(payload.get("playing", state["playing"])), "seq": int(state.get("seq", 0)) + 1, "updated_at": now_iso()})
-        self._execute("UPDATE watch_rooms SET state_json = ?, updated_at = ? WHERE id = ?", (json.dumps(state), state["updated_at"], room_id))
+        if "position" in payload:
+            state["position"] = max(0.0, float(payload["position"]))
+        if "playing" in payload:
+            value = payload["playing"]
+            state["playing"] = value if isinstance(value, bool) else str(value).lower() in {"1", "true", "yes", "on"}
+        for key in ("target_key", "title_id"):
+            if payload.get(key) is not None:
+                state[key] = str(payload[key] or "").strip()
+        for key in ("season", "episode"):
+            if payload.get(key) is not None:
+                state[key] = max(0, int(payload[key] or 0))
+        state.update({"seq": int(state.get("seq", 0)) + 1, "updated_at": now_iso()})
+        self._execute("UPDATE watch_rooms SET episode_id = ?, target_key = ?, state_json = ?, updated_at = ? WHERE id = ?", (str(state.get("episode_id", "") or ""), str(state.get("target_key", "") or ""), json.dumps(state), state["updated_at"], room_id))
         return {"room_id": room_id, "share_code": current["share_code"], "state": state}
 
 
@@ -905,16 +1608,66 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
     def library(self) -> MediaLibrary:
         return self.server.library  # type: ignore[attr-defined]
 
+    def public_site_url(self) -> str:
+        configured = str(getattr(self.server, "public_base_url", "") or "").strip()
+        parsed = urlparse(configured)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            return configured.rstrip("/")
+        host = self.headers.get("Host", "localhost").strip()
+        if not re.fullmatch(r"[A-Za-z0-9.:[\]-]+", host):
+            host = "localhost"
+        forwarded_proto = self.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip().lower()
+        scheme = forwarded_proto if forwarded_proto in {"http", "https"} else "http"
+        return f"{scheme}://{host}"
+
+    def cors_origin(self) -> str:
+        origin = self.headers.get("Origin", "").strip()
+        if not origin:
+            return ""
+        configured = {
+            value.strip()
+            for value in str(getattr(self.server, "cors_origins", "") or "").split(",")
+            if value.strip()
+        }
+        viewer_token = str(getattr(self.server, "viewer_token", "") or "")
+        # The local MVP has no cookie-based auth. When viewer auth is enabled,
+        # require an explicit origin allow-list instead of reflecting any site.
+        if origin in configured or "*" in configured or (not viewer_token and not configured):
+            return origin
+        return ""
+
+    def send_cors_headers(self, preflight: bool = False) -> None:
+        origin = self.cors_origin()
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        if preflight:
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-CineVault-Admin-Token")
+            self.send_header("Access-Control-Max-Age", "600")
+
     def send_json(self, status: int, payload: Dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        self.send_cors_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
+    def send_text(self, status: int, body: str, content_type: str, cache_control: str = "no-store") -> None:
+        encoded = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", cache_control)
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
     def admin_authorized(self) -> bool:
+        if bool(getattr(self.server, "local_open_admin", False)):  # type: ignore[attr-defined]
+            return True
         expected = str(getattr(self.server, "admin_token", "") or "")  # type: ignore[attr-defined]
         if not expected:
             return False
@@ -939,19 +1692,39 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
         self.send_json(401, {"error": "Требуется viewer-токен CineVault"})
         return False
 
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        self.send_response(204)
+        self.send_cors_headers(preflight=True)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         protected = parsed.path.startswith("/api/") and parsed.path != "/api/health" or parsed.path.startswith("/media/")
         if protected and not self.require_viewer():
             return
         if parsed.path == "/config.local.js":
-            body = b"window.CINEVAULT_CONFIG = {};"
+            config = {
+                "apiBaseUrl": str(getattr(self.server, "api_base_url", "") or ""),
+                "publicBaseUrl": str(getattr(self.server, "public_base_url", "") or ""),
+            }
+            body = f"window.CINEVAULT_CONFIG = {json.dumps(config, ensure_ascii=False)};".encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/javascript; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
+            self.send_cors_headers()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif parsed.path == "/sitemap.xml":
+            self.send_text(
+                200,
+                build_sitemap_xml(self.public_site_url(), sitemap_title_ids()),
+                "application/xml; charset=utf-8",
+                cache_control="no-cache",
+            )
+        elif parsed.path == "/robots.txt":
+            self.send_text(200, "User-agent: *\nAllow: /\nSitemap: /sitemap.xml\n", "text/plain; charset=utf-8", cache_control="no-cache")
         elif parsed.path == "/api/health":
             self.send_json(200, {"ok": True, "service": "cinevault-media-library"})
         elif parsed.path == "/api/catalog/search":
@@ -976,6 +1749,15 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
             with self.library._lock:
                 rows = self.library._db.execute("SELECT id, catalog_id, kind, title, original_title, year, status, created_at, updated_at FROM catalog_requests ORDER BY created_at DESC").fetchall()
             self.send_json(200, {"items": [dict(row) for row in rows]})
+        elif parsed.path.startswith("/api/catalog/kinopoisk-imports/"):
+            importer = getattr(self.server, "kinopoisk_catalog_importer", None)
+            if importer is None:
+                self.send_json(503, {"error": "Добавление Kinopoisk сейчас недоступно"})
+                return
+            try:
+                self.send_json(200, importer.status(parsed.path.rsplit("/", 1)[-1]))
+            except KeyError as exc:
+                self.send_json(404, {"error": str(exc)})
         elif parsed.path == "/api/history":
             self.send_json(200, {"items": self.library.list_history()})
         elif parsed.path.startswith("/api/library/episodes/") and parsed.path.endswith("/skip-segments"):
@@ -1000,6 +1782,8 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
         elif parsed.path.startswith("/media/"):
             self.serve_media(parsed.path)
         else:
+            if parsed.path == "/" or APP_ROUTE_RE.fullmatch(parsed.path):
+                self.path = "/index.html"
             super().do_GET()
 
     def do_POST(self) -> None:  # noqa: N802
@@ -1014,11 +1798,54 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                 else:
                     self.handle_upload()
                 return
+            if parsed.path == "/api/library/external-embed":
+                if not self.admin_authorized():
+                    self.send_json(403, {"error": "Импорт доступен только администратору backend"})
+                    return
+                self.send_json(201, self.library.create_external_embed(self.read_json()))
+                return
+            if parsed.path == "/api/catalog/source-json":
+                if not self.admin_authorized():
+                    self.send_json(403, {"error": "Импорт доступен только администратору backend"})
+                    return
+                self.handle_source_json_import()
+                return
+            if parsed.path == "/api/playback/refresh":
+                if not self.require_viewer():
+                    return
+                updater = getattr(self.server, "kinopoisk_updater", None)
+                if updater is None:
+                    self.send_json(503, {"error": "Обновление Kinopoisk при запуске плеера отключено"})
+                    return
+                payload = self.read_json()
+                try:
+                    self.send_json(200, updater.refresh(payload.get("kinopoisk_id"), force=bool(payload.get("force"))))
+                except FileNotFoundError as exc:
+                    self.send_json(503, {"error": str(exc)})
+                except KeyError as exc:
+                    self.send_json(404, {"error": str(exc)})
+                except RuntimeError as exc:
+                    self.send_json(502, {"error": str(exc)})
+                return
+            if parsed.path == "/api/catalog/kinopoisk-imports":
+                if not self.require_viewer():
+                    return
+                importer = getattr(self.server, "kinopoisk_catalog_importer", None)
+                if importer is None:
+                    self.send_json(503, {"error": "Добавление Kinopoisk сейчас недоступно"})
+                    return
+                try:
+                    self.send_json(202, importer.start(self.read_json().get("kinopoisk")))
+                except FileNotFoundError as exc:
+                    self.send_json(503, {"error": str(exc)})
+                except RuntimeError as exc:
+                    self.send_json(409, {"error": str(exc)})
+                return
             if parsed.path == "/api/watch/rooms":
                 if not self.require_viewer():
                     return
                 payload = self.read_json()
-                self.send_json(201, self.library.create_room(str(payload.get("episode_id", ""))))
+                self.send_json(201, self.library.create_room(str(payload.get("episode_id", "")), payload))
                 return
             if parsed.path == "/api/catalog/requests":
                 if not self.require_viewer():
@@ -1095,6 +1922,37 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
         for item, (season, episode, episode_title) in parsed_items:
             results.append(self.library.create_upload(title, season, episode, episode_title, item.filename, item.file, metadata=metadata))
         self.send_json(201, {"count": len(results), "items": results})
+
+    def handle_source_json_import(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length <= 0 or length > MAX_SOURCE_JSON_BYTES:
+            raise ValueError("JSON-файл слишком большой или пустой")
+        form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": self.headers.get("Content-Type", "")})
+        file_item = form["source_json"] if "source_json" in form else None
+        if file_item is None or not getattr(file_item, "filename", None):
+            raise ValueError("Выберите JSON-файл источника")
+        try:
+            source_payload = json.loads(file_item.file.read(MAX_SOURCE_JSON_BYTES + 1).decode("utf-8"))
+        except UnicodeDecodeError as exc:
+            raise ValueError("JSON-файл должен быть в кодировке UTF-8") from exc
+        metadata_raw = form.getfirst("metadata", "{}") or "{}"
+        try:
+            metadata = json.loads(metadata_raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Поле metadata содержит некорректный JSON") from exc
+        result = update_catalog_from_source_json(
+            source_payload,
+            form.getfirst("kinopoisk_id", ""),
+            form.getfirst("title", ""),
+            form.getfirst("kind", "movie") or "movie",
+            metadata,
+        )
+        self.send_json(201, {
+            "created": result["created"],
+            "accepted": result["accepted"],
+            "skipped": result["skipped"],
+            "entry": result["entry"],
+        })
 
     def do_HEAD(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -1199,19 +2057,60 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8081)
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--no-transcode", action="store_true", help="Store uploads without starting FFmpeg jobs")
+    parser.add_argument("--open-admin", action="store_true", help="Allow local admin imports without a token; only valid with 127.0.0.1/localhost")
     parser.add_argument("--ffmpeg", default=None, help="Explicit FFmpeg executable path")
+    parser.add_argument(
+        "--kinopoisk-updater-dir",
+        type=Path,
+        default=default_kinopoisk_updater_dir(),
+        help="Path to kinopoisk_media_system_fixed; one title is refreshed when its player opens",
+    )
+    parser.add_argument(
+        "--kinopoisk-update-delay-seconds",
+        type=float,
+        default=float(os.environ.get("CINEVAULT_KINOPOISK_UPDATE_DELAY_SECONDS", DEFAULT_KINOPOISK_UPDATE_DELAY_SECONDS)),
+        help="Delay passed to update_media.py (single-title playback refresh defaults to 0)",
+    )
+    parser.add_argument(
+        "--disable-kinopoisk-playback-refresh",
+        action="store_true",
+        help="Do not run update_media.py when a Kinopoisk player opens",
+    )
     args = parser.parse_args()
+    if args.kinopoisk_update_delay_seconds < 0:
+        parser.error("--kinopoisk-update-delay-seconds must not be negative")
     tmdb_token = os.environ.get("CINEVAULT_TMDB_API_TOKEN", "").strip() or load_local_tmdb_token()
     library = MediaLibrary(args.data_dir, ffmpeg_path=args.ffmpeg, transcode=not args.no_transcode, tmdb_api_token=tmdb_token)
     handler = lambda *a, **kw: MediaLibraryHandler(*a, directory=str(APP_DIR), **kw)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     server.library = library  # type: ignore[attr-defined]
+    server.local_open_admin = args.open_admin and args.host.lower() in {"127.0.0.1", "localhost", "::1"}  # type: ignore[attr-defined]
     server.admin_token = os.environ.get("CINEVAULT_ADMIN_TOKEN", "").strip()  # type: ignore[attr-defined]
     server.viewer_token = os.environ.get("CINEVAULT_VIEWER_TOKEN", "").strip()  # type: ignore[attr-defined]
+    server.cors_origins = os.environ.get("CINEVAULT_CORS_ORIGINS", "").strip()  # type: ignore[attr-defined]
+    server.api_base_url = os.environ.get("CINEVAULT_API_BASE_URL", "").strip()  # type: ignore[attr-defined]
+    server.public_base_url = os.environ.get("CINEVAULT_PUBLIC_URL", "").strip()  # type: ignore[attr-defined]
+    updater = None
+    if not args.disable_kinopoisk_playback_refresh:
+        updater = KinopoiskOnDemandUpdater(
+            args.kinopoisk_updater_dir,
+            args.kinopoisk_update_delay_seconds,
+        )
+    server.kinopoisk_updater = updater  # type: ignore[attr-defined]
+    server.kinopoisk_catalog_importer = KinopoiskCatalogImporter()  # type: ignore[attr-defined]
     print(f"CineVault media library: http://{args.host}:{args.port}", flush=True)
     print(f"Data directory: {library.root}", flush=True)
-    print("Admin browser upload: enabled." if server.admin_token else "Admin browser upload: disabled; use CINEVAULT_ADMIN_TOKEN or the backend import CLI.", flush=True)
+    if server.local_open_admin:
+        print("Admin browser upload: enabled (local-only; token not required).", flush=True)
+    else:
+        print("Admin browser upload: enabled." if server.admin_token else "Admin browser upload: disabled; use CINEVAULT_ADMIN_TOKEN or the backend import CLI.", flush=True)
     print("Private viewer access: enabled." if server.viewer_token else "Private viewer access: disabled; set CINEVAULT_VIEWER_TOKEN before internet exposure.", flush=True)
+    if updater and updater.script_path.is_file():
+        print("Kinopoisk playback refresh: enabled for individual titles.", flush=True)
+    elif updater:
+        print("Kinopoisk playback refresh: updater not found; previous sources remain available.", flush=True)
+    else:
+        print("Kinopoisk playback refresh: disabled.", flush=True)
     print("Only user-supplied files are accepted; no third-party stream extraction is enabled.", flush=True)
     try:
         server.serve_forever()

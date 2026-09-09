@@ -4,11 +4,22 @@ services:
     restart: unless-stopped
     init: true
     ports:
-      - "${CINEVAULT_PORT:-8081}:8081"
+      # Keep the backend private until an HTTPS reverse proxy with real viewer
+      # authentication is configured.  Override CINEVAULT_BIND_HOST explicitly
+      # only when that boundary exists.
+      - "${CINEVAULT_BIND_HOST:-127.0.0.1}:${CINEVAULT_PORT:-8081}:8081"
     environment:
       CINEVAULT_ADMIN_TOKEN: ${CINEVAULT_ADMIN_TOKEN:?set CINEVAULT_ADMIN_TOKEN in .env}
-      CINEVAULT_VIEWER_TOKEN: ${CINEVAULT_VIEWER_TOKEN:?set CINEVAULT_VIEWER_TOKEN in .env}
+      # The browser has no token-login screen yet.  Leave this empty for a
+      # private localhost deployment; use reverse-proxy authentication before
+      # exposing the app to the public internet.
+      CINEVAULT_VIEWER_TOKEN: ${CINEVAULT_VIEWER_TOKEN:-}
       CINEVAULT_TMDB_API_TOKEN: ${CINEVAULT_TMDB_API_TOKEN:-}
+      CINEVAULT_SERVICE_DIR: /opt/cinevault
+      CINEVAULT_KINOPOISK_UPDATER_DIR: /opt/cinevault/kinopoisk_media_system_fixed
+      CINEVAULT_APBUGALL_TOKEN: ${CINEVAULT_APBUGALL_TOKEN:-}
+      CINEVAULT_DEVICE_FP: ${CINEVAULT_DEVICE_FP:-}
+      CINEVAULT_IFRAME_REQUEST_ID: ${CINEVAULT_IFRAME_REQUEST_ID:-}
     volumes:
       - ${CINEVAULT_DATA_DIR:-./data/media-library}:/data/media-library
       - ${CINEVAULT_INBOX_DIR:-./inbox}:/inbox:ro

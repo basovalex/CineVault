@@ -4,6 +4,9 @@ output/playwright/
 data/media-library/
 *.sqlite3
 .playwright-hdrezka-profile/
+kinopoisk_media_system_fixed/generated/
+kinopoisk_media_system_fixed/*.log
+kinopoisk_media_system_fixed/*.zip
 
 # Local and generated files
 .DS_Store

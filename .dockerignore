@@ -9,6 +9,8 @@ output
 .playwright-hdrezka-profile
 __pycache__
 *.pyc
+.DS_Store
+kinopoisk_media_system_fixed/generated
 tests
 docs
 fixtures
