@@ -3595,23 +3595,27 @@
   function requestPlayerFullscreen(video) {
     const player = video?.closest(".player-modal") || video;
     if (!player) return;
+    const enterNativeVideoFullscreen = () => {
+      if (typeof video?.webkitEnterFullscreen === "function") {
+        try { video.webkitEnterFullscreen(); return true; } catch {}
+      }
+      return false;
+    };
     if (video?.webkitDisplayingFullscreen) { video.webkitExitFullscreen?.(); return; }
     if (document.fullscreenElement === player || document.fullscreenElement === video || (player.classList?.contains("player-cinematic") && document.fullscreenElement)) { document.exitFullscreen?.().catch?.(() => {}); return; }
     if (player.classList?.contains("player-cinematic") && typeof document.documentElement.requestFullscreen === "function") {
-      document.documentElement.requestFullscreen().catch?.(() => {});
+      document.documentElement.requestFullscreen().catch(() => { enterNativeVideoFullscreen(); });
       return;
     }
     if (typeof player.requestFullscreen === "function") {
-      player.requestFullscreen().catch?.(() => {});
+      player.requestFullscreen().catch(() => { enterNativeVideoFullscreen(); });
       return;
     }
     if (typeof player.webkitRequestFullscreen === "function") {
       try { player.webkitRequestFullscreen(); return; } catch {}
     }
     // iOS Safari does not support fullscreen on arbitrary containers.
-    if (typeof video?.webkitEnterFullscreen === "function") {
-      try { video.webkitEnterFullscreen(); } catch {}
-    }
+    enterNativeVideoFullscreen();
   }
   function installPlayerFullscreenControls(player) {
     if (!player || player.dataset.fullscreenControls === "true") return;
