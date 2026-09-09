@@ -3193,22 +3193,25 @@
     if (!video || !loading) return () => {};
     let busy = !loading.hidden;
     const setBusy = (nextBusy, label = "") => {
-      busy = Boolean(nextBusy);
+      busy = Boolean(nextBusy) && !video.paused && !video.ended;
       loading.hidden = !busy;
-      if (label) loading.textContent = label;
+      loading.setAttribute("aria-label", label || "Загрузка видео");
       setPlayerPlayButton(playButton, !video.paused && !video.ended, busy);
     };
-    const start = () => setBusy(true, "Загружаю видеопоток…");
-    const wait = () => setBusy(true, "Буферизую видео…");
+    const start = () => { if (!video.paused && !video.ended) setBusy(true, "Загрузка видеопотока"); };
+    const wait = () => { if (!video.paused && !video.ended) setBusy(true, "Буферизация видео"); };
     const ready = () => setBusy(false);
+    const pause = () => setBusy(false);
     ["loadstart", "stalled", "seeking"].forEach((eventName) => video.addEventListener(eventName, start));
     video.addEventListener("waiting", wait);
     ["canplay", "playing", "error", "ended"].forEach((eventName) => video.addEventListener(eventName, ready));
+    video.addEventListener("pause", pause);
     setBusy(busy);
     return () => {
       ["loadstart", "stalled", "seeking"].forEach((eventName) => video.removeEventListener(eventName, start));
       video.removeEventListener("waiting", wait);
       ["canplay", "playing", "error", "ended"].forEach((eventName) => video.removeEventListener(eventName, ready));
+      video.removeEventListener("pause", pause);
     };
   }
   function playerSeriesMarkup(item, episodeNumber = 1) {

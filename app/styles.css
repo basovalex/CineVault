@@ -350,7 +350,7 @@ button.episode-card-art:hover { border-color: var(--accent); transform: translat
 .video-play-overlay[hidden] { display: none; }
 .video-play-overlay:focus-visible { outline: 3px solid rgba(241,154,191,.7); outline-offset: 4px; }
 .app-shell[data-theme="graphite"] .video-play-overlay:focus-visible { outline-color: rgba(196,205,213,.8); }
-.video-loading { position: absolute; z-index: 5; inset: 0; display: grid; align-content: center; justify-items: center; gap: 12px; padding: 24px; background: rgba(8,7,12,.78); color: var(--text); font-size: 14px; font-weight: 600; line-height: 1.4; text-align: center; pointer-events: none; }
+.video-loading { position: absolute; z-index: 5; inset: 0; display: grid; align-content: center; justify-items: center; gap: 12px; padding: 24px; background: rgba(8,7,12,.78); color: var(--text); font-size: 0; font-weight: 600; line-height: 1.4; text-align: center; pointer-events: none; }
 .video-loading::before { content: ""; width: 30px; height: 30px; border: 3px solid rgba(255,255,255,.22); border-top-color: var(--accent); border-radius: 50%; }
 .video-error { position: absolute; z-index: 6; inset: 0; display: grid; align-content: center; justify-items: center; gap: 16px; padding: clamp(24px, 5vw, 64px); background: linear-gradient(145deg, color-mix(in srgb, var(--surface) 94%, #08090b), rgba(8, 9, 11, .92)); color: var(--text); text-align: center; }
 .video-error[hidden] { display: none; }
