@@ -1,0 +1,70 @@
+[
+  {
+    "season": 1,
+    "episode": 1,
+    "episode_id": 3612859,
+    "token": "https://tazaromikaz.link/content-router/r/1788910537/QbBslyzQbjzRRJB69oZ8Cw/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/HELLO/fa14248850b3f0647ccd56254d14eb/338466/parsed.json?pl=M4h48aG3hD2bYA3bAB8b8smn1dNxUS3qaC4bJyQ41bBnbmnTSTCgGqfyqbPwxREbThZXnzdk47",
+    "is_full_url": true,
+    "sources": [
+      {
+        "label": "Не требуется",
+        "url": "https://tazaromikaz.link/content-router/r/1788910537/QbBslyzQbjzRRJB69oZ8Cw/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/HELLO/fa14248850b3f0647ccd56254d14eb/338466/parsed.json?pl=M4h48aG3hD2bYA3bAB8b8smn1dNxUS3qaC4bJyQ41bBnbmnTSTCgGqfyqbPwxREbThZXnzdk47",
+        "variant_id": 1898808,
+        "dubbing_studio_id": null,
+        "quality": "DVDRIP",
+        "has_adv": null
+      }
+    ]
+  },
+  {
+    "season": 1,
+    "episode": 2,
+    "episode_id": 3612862,
+    "token": "https://tazaromikaz.link/content-router/r/1788910537/LgTPO_cKwQ2IXLF-okff4w/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/HELLO/fa14248850b3f0647ccd56254d14eb/338468/parsed.json?pl=M4h48aG3hD2bYA3bAB8b8smn1dNxUS3qaC4bJyQ41bBnbmnTSTCgGqfyqbPwxREbThZXnzdk47",
+    "is_full_url": true,
+    "sources": [
+      {
+        "label": "Не требуется",
+        "url": "https://tazaromikaz.link/content-router/r/1788910537/LgTPO_cKwQ2IXLF-okff4w/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/HELLO/fa14248850b3f0647ccd56254d14eb/338468/parsed.json?pl=M4h48aG3hD2bYA3bAB8b8smn1dNxUS3qaC4bJyQ41bBnbmnTSTCgGqfyqbPwxREbThZXnzdk47",
+        "variant_id": 1898811,
+        "dubbing_studio_id": null,
+        "quality": "DVDRIP",
+        "has_adv": null
+      }
+    ]
+  },
+  {
+    "season": 1,
+    "episode": 3,
+    "episode_id": 3612865,
+    "token": "https://tazaromikaz.link/content-router/r/1788910537/_o-9EAb16N9yaH_cK1b3TA/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/HELLO/fa14248850b3f0647ccd56254d14eb/338471/parsed.json?pl=M4h48aG3hD2bYA3bAB8b8smn1dNxUS3qaC4bJyQ41bBnbmnTSTCgGqfyqbPwxREbThZXnzdk47",
+    "is_full_url": true,
+    "sources": [
+      {
+        "label": "Не требуется",
+        "url": "https://tazaromikaz.link/content-router/r/1788910537/_o-9EAb16N9yaH_cK1b3TA/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/HELLO/fa14248850b3f0647ccd56254d14eb/338471/parsed.json?pl=M4h48aG3hD2bYA3bAB8b8smn1dNxUS3qaC4bJyQ41bBnbmnTSTCgGqfyqbPwxREbThZXnzdk47",
+        "variant_id": 1898814,
+        "dubbing_studio_id": null,
+        "quality": "DVDRIP",
+        "has_adv": null
+      }
+    ]
+  },
+  {
+    "season": 1,
+    "episode": 4,
+    "episode_id": 3612866,
+    "token": "https://tazaromikaz.link/content-router/r/1788910537/bFBkEaal4ctvf2Wm-_soPg/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/HELLO/fa14248850b3f0647ccd56254d14eb/338473/parsed.json?pl=M4h48aG3hD2bYA3bAB8b8smn1dNxUS3qaC4bJyQ41bBnbmnTSTCgGqfyqbPwxREbThZXnzdk47",
+    "is_full_url": true,
+    "sources": [
+      {
+        "label": "Не требуется",
+        "url": "https://tazaromikaz.link/content-router/r/1788910537/bFBkEaal4ctvf2Wm-_soPg/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/HELLO/fa14248850b3f0647ccd56254d14eb/338473/parsed.json?pl=M4h48aG3hD2bYA3bAB8b8smn1dNxUS3qaC4bJyQ41bBnbmnTSTCgGqfyqbPwxREbThZXnzdk47",
+        "variant_id": 1898815,
+        "dubbing_studio_id": null,
+        "quality": "DVDRIP",
+        "has_adv": null
+      }
+    ]
+  }
+]

@@ -15,6 +15,12 @@ curl -fsS http://127.0.0.1:8081/api/health
 docker compose logs -f cinevault
 ```
 
+The compose file binds port 8081 to `127.0.0.1` by default. This lets you
+test from the VPS itself or through an SSH tunnel without making CineVault
+public. `CINEVAULT_VIEWER_TOKEN` may be empty for this private mode; do not put
+that token into browser JavaScript. Before changing the bind host, put an HTTPS
+reverse proxy with a real password/login boundary in front of the service.
+
 The data directory is a bind mount, so SQLite, originals, HLS playlists and segments survive container recreation. `restart: unless-stopped` brings the service back after a reboot. The container includes FFmpeg and runs as a non-root user.
 
 Progress and history are stored in the same SQLite database on the persistent volume. `/api/history` is shared by all users of this backend, so a viewed episode and its last position remain available after changing browser, device or container.

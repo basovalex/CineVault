@@ -1,6 +1,6 @@
-const SHELL_CACHE = "cinevault-shell-v4";
+const SHELL_CACHE = "cinevault-shell-v15";
 const MEDIA_CACHE = "cinevault-media-v1";
-const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./manifest.json", "./favicon.svg"];
+const SHELL = ["/", "/index.html", "/styles.css", "/app.js", "/manifest.json", "/favicon.svg"];
 const SHELL_PATHS = new Set(["/", "/index.html", "/styles.css", "/app.js", "/manifest.json", "/favicon.svg"]);
 
 self.addEventListener("install", (event) => {
@@ -19,6 +19,10 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
+  if (event.request.mode === "navigate") {
+    event.respondWith(fetch(event.request).catch(() => caches.match("/index.html")));
+    return;
+  }
   if (SHELL_PATHS.has(url.pathname)) {
     event.respondWith(fetch(event.request).then((response) => {
       if (response.ok) caches.open(SHELL_CACHE).then((cache) => cache.put(event.request, response.clone()));

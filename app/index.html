@@ -3,45 +3,32 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#15132a">
+  <meta name="theme-color" content="#292e34">
   <meta name="description" content="Личная медиатека CineVault для просмотра разрешённых видео дома и в поездках">
-  <link rel="manifest" href="./manifest.json">
-  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <base href="/">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="canonical" href="/">
+  <link rel="sitemap" type="application/xml" href="/sitemap.xml">
   <title>CineVault — кино для нас</title>
-    <link rel="stylesheet" href="./styles.css?v=20260806-skip-3">
+  <style>.settings-grid [data-set-theme="night"] { display: none !important; }</style>
+    <link rel="stylesheet" href="/styles.css?v=20260909-catalog-discovery-3">
 </head>
 <body>
-  <div id="app" class="app-shell" data-theme="night">
-    <div class="ambient-decor" aria-hidden="true">
-      <span class="decor decor-butterfly decor-butterfly-a">🦋</span>
-      <span class="decor decor-butterfly decor-butterfly-b">🦋</span>
-      <span class="decor decor-butterfly decor-butterfly-c">🦋</span>
-      <span class="decor decor-flower decor-flower-a">✿</span>
-      <span class="decor decor-flower decor-flower-b">✿</span>
-      <span class="decor decor-flower decor-flower-c">✿</span>
-      <span class="decor decor-cloud decor-cloud-a">☁</span>
-      <span class="decor decor-cloud decor-cloud-b">☁</span>
-      <span class="decor decor-cloud decor-cloud-c">☁</span>
-      <span class="decor decor-sparkle decor-sparkle-a">✦</span>
-      <span class="decor decor-sparkle decor-sparkle-b">✧</span>
-      <span class="decor decor-sparkle decor-sparkle-c">✦</span>
-      <span class="decor decor-heart decor-heart-a">♡</span>
-      <span class="decor decor-heart decor-heart-b">♡</span>
-      <span class="decor decor-heart decor-heart-c">♥</span>
-    </div>
+  <div id="app" class="app-shell" data-theme="graphite">
     <aside class="sidebar" aria-label="Основная навигация">
       <div class="brand"><span class="brand-mark">✦</span><span>CineVault</span></div>
       <nav class="nav-list">
-        <button class="nav-item is-active" data-view="home"><span>⌂</span><span>Для нас</span></button>
-        <button class="nav-item" data-view="catalog"><span>▦</span><span>Каталог</span></button>
-        <button class="nav-item" data-view="movies"><span>▣</span><span>Фильмы</span></button>
-        <button class="nav-item" data-view="series"><span>▤</span><span>Сериалы</span></button>
-        <button class="nav-item" data-view="library"><span>▥</span><span>Моя медиатека</span></button>
-        <button class="nav-item" data-view="favorites"><span>♡</span><span>Избранное</span></button>
-        <button class="nav-item" data-view="evening"><span>☾</span><span>Наш вечер</span></button>
+        <a class="nav-item is-active" href="/" data-view="home" aria-label="Для нас" title="Для нас"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 10 8-6 8 6v9a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg><span>Для нас</span></a>
+        <a class="nav-item" href="/catalog/" data-view="catalog" aria-label="Каталог" title="Каталог"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg><span>Каталог</span></a>
+        <a class="nav-item" href="/movies/" data-view="movies" aria-label="Фильмы" title="Фильмы"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v13H4z"/><path d="M4 7h16l-2-3H6zM8 4l2 3m3-3 2 3m3-3 2 3"/></svg><span>Фильмы</span></a>
+        <a class="nav-item" href="/series/" data-view="series" aria-label="Сериалы" title="Сериалы"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="13" rx="2"/><path d="M8 6V4m4 2V4m4 2V4M9 11h6m-6 4h6"/></svg><span>Сериалы</span></a>
+        <a class="nav-item" href="/library/" data-view="library" aria-label="Моя медиатека" title="Моя медиатека"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h4v14H5zM11 5h4v14h-4zM17 5h2v14h-2z"/><path d="M6 8h2m5 0h2m4 0h1"/></svg><span>Моя медиатека</span></a>
+        <a class="nav-item" href="/favorites/" data-view="favorites" aria-label="Избранное" title="Избранное"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 8.7c0 5-8.8 10.3-8.8 10.3S3.2 13.7 3.2 8.7A4.6 4.6 0 0 1 12 6.2a4.6 4.6 0 0 1 8.8 2.5Z"/></svg><span>Избранное</span></a>
+        <a class="nav-item" href="/evening/" data-view="evening" aria-label="Наш вечер" title="Наш вечер"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.5A8 8 0 1 1 8.5 4 6.7 6.7 0 0 0 20 15.5Z"/></svg><span>Наш вечер</span></a>
       </nav>
       <div class="sidebar-bottom">
-        <button class="nav-item" data-view="settings"><span>⚙</span><span>Настройки</span></button>
+        <a class="nav-item" href="/settings/" data-view="settings" aria-label="Настройки" title="Настройки"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1a2 2 0 0 1-2.8 2.8l-.1-.1a2 2 0 0 0-3.4 1.4v.2a2 2 0 0 1-4 0v-.2a2 2 0 0 0-3.4-1.4l-.1.1a2 2 0 0 1-2.8-2.8l.1-.1A2 2 0 0 0 3.6 12a2 2 0 0 0-.6-1.4l-.1-.1A2 2 0 0 1 5.7 7.7l.1.1A2 2 0 0 0 9.2 6.4v-.2a2 2 0 0 1 4 0v.2a2 2 0 0 0 3.4 1.4l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a2 2 0 0 0 0 3.4Z"/></svg><span>Настройки</span></a>
         <p>Локальный профиль.<br>Без обязательного аккаунта.</p>
       </div>
     </aside>
@@ -49,47 +36,26 @@
     <main class="main-area">
       <header class="topbar">
         <label class="search-box">
+          <span class="sr-only">Поиск по каталогу</span>
           <span aria-hidden="true">⌕</span>
-          <input id="search" type="search" placeholder="Найти фильм или сериал" autocomplete="off">
+        <input id="search" type="search" placeholder="Найти фильм, сериал или актёра" autocomplete="off" aria-controls="search-suggestions">
           <kbd>⌘ K</kbd>
         </label>
-        <div class="top-actions">
-          <button id="theme-toggle" class="soft-button" type="button" aria-label="Переключить тему">◐ Тема</button>
-          <button id="companion-open" class="profile-button" type="button" aria-label="Выбрать питомца"><span id="header-pet">🐶</span><span id="header-pet-name">говно</span></button>
-        </div>
+        <div id="search-suggestions" class="search-suggestions" aria-label="Быстрые результаты поиска" hidden></div>
       </header>
 
       <div id="page" class="page" tabindex="-1"></div>
+      <div id="catalog-live-status" class="sr-only" role="status" aria-live="polite"></div>
     </main>
 
-    <div id="companion-popover" class="popover" hidden>
-      <div class="popover-title">Выбрать питомца</div>
-      <button class="pet-choice is-selected" data-pet="plush" type="button"><span>🐶</span><span><strong>говно</strong><small>жирненький уютный мопсик</small></span></button>
-      <button class="pet-choice" data-pet="noir" type="button"><span>🐈‍⬛</span><span><strong>Нуар</strong><small>спокойный советчик</small></span></button>
-      <button class="pet-choice" data-pet="pixie" type="button"><span>🐰</span><span><strong>Пикси</strong><small>нежный романтик</small></span></button>
-      <button class="pet-choice" data-pet="moti" type="button"><span>🐻</span><span><strong>Моти</strong><small>любит комедии</small></span></button>
-    </div>
-
     <div id="modal-root"></div>
-
-    <aside id="assistant-rail" class="assistant-rail" aria-label="Помощник по рекомендациям">
-      <div class="assistant-bubble" id="assistant-bubble">
-        <div class="assistant-bubble-head"><strong id="assistant-name">говно</strong><button id="assistant-collapse" type="button" aria-label="Свернуть помощника">−</button></div>
-        <p id="assistant-copy">Я рядом. Давай найду что-нибудь хорошее на вечер.</p>
-        <button id="assistant-recommend" class="assistant-action" type="button">Подобрать для нас</button>
-        <span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span>
-      </div>
-      <button id="assistant-pet" class="assistant-pet" type="button" aria-label="Открыть совет питомца"><img src="./assets/pug-mascot.png" alt="Мопс-помощник"></button>
-      <span class="pet-state pet-state-sleep" aria-hidden="true">Zzz</span>
-      <span class="pet-state pet-state-snack" aria-hidden="true">●</span>
-    </aside>
   </div>
-  <script src="./config.local.js"></script>
+  <script src="/config.local.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" crossorigin="anonymous"></script>
-    <script src="./app.js?v=20260806-skip-3" defer></script>
+    <script src="/app.js?v=20260909-catalog-discovery-3" defer></script>
   <script>
     if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js?v=20260806-4").catch(() => {}));
+      window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js?v=20260909-catalog-discovery-3").catch(() => {}));
     }
   </script>
 </body>

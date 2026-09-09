@@ -1,0 +1,138 @@
+[
+  {
+    "season": 1,
+    "episode": 1,
+    "episode_id": 3467065,
+    "token": "https://tazaromikaz.link/content-router/r/1788939572/Ep_iMAWoTHNHOyXQ8iDVng/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/episodes/63793_63793/63793_63793__master.m3u8?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+    "is_full_url": true,
+    "sources": [
+      {
+        "label": "оригинальный",
+        "url": "https://tazaromikaz.link/content-router/r/1788939572/Ep_iMAWoTHNHOyXQ8iDVng/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/episodes/63793_63793/63793_63793__master.m3u8?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+        "variant_id": 1370786,
+        "dubbing_studio_id": null,
+        "quality": null,
+        "has_adv": null
+      }
+    ]
+  },
+  {
+    "season": 1,
+    "episode": 2,
+    "episode_id": 3467066,
+    "token": "https://tazaromikaz.link/content-router/r/1788939572/WlntJnrtx16KXKyJqMczfQ/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/mp4/63794.mp4?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+    "is_full_url": true,
+    "sources": [
+      {
+        "label": "оригинальный",
+        "url": "https://tazaromikaz.link/content-router/r/1788939572/WlntJnrtx16KXKyJqMczfQ/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/mp4/63794.mp4?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+        "variant_id": 1370787,
+        "dubbing_studio_id": null,
+        "quality": null,
+        "has_adv": null
+      }
+    ]
+  },
+  {
+    "season": 1,
+    "episode": 3,
+    "episode_id": 3467067,
+    "token": "https://tazaromikaz.link/content-router/r/1788939572/jGgS_KCyTrfn2E7e3id8TA/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/mp4/63795.mp4?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+    "is_full_url": true,
+    "sources": [
+      {
+        "label": "оригинальный",
+        "url": "https://tazaromikaz.link/content-router/r/1788939572/jGgS_KCyTrfn2E7e3id8TA/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/mp4/63795.mp4?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+        "variant_id": 1370788,
+        "dubbing_studio_id": null,
+        "quality": null,
+        "has_adv": null
+      }
+    ]
+  },
+  {
+    "season": 1,
+    "episode": 4,
+    "episode_id": 3467068,
+    "token": "https://tazaromikaz.link/content-router/r/1788939572/_Ji163ZNtce4PfmHxdLb7w/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/mp4/63796.mp4?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+    "is_full_url": true,
+    "sources": [
+      {
+        "label": "оригинальный",
+        "url": "https://tazaromikaz.link/content-router/r/1788939572/_Ji163ZNtce4PfmHxdLb7w/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/mp4/63796.mp4?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+        "variant_id": 1370789,
+        "dubbing_studio_id": null,
+        "quality": null,
+        "has_adv": null
+      }
+    ]
+  },
+  {
+    "season": 1,
+    "episode": 5,
+    "episode_id": 3467069,
+    "token": "https://tazaromikaz.link/content-router/r/1788939572/U8FQtiGPuXNZnnTN8ITKUA/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/mp4/63797.mp4?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+    "is_full_url": true,
+    "sources": [
+      {
+        "label": "оригинальный",
+        "url": "https://tazaromikaz.link/content-router/r/1788939572/U8FQtiGPuXNZnnTN8ITKUA/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/mp4/63797.mp4?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+        "variant_id": 1370790,
+        "dubbing_studio_id": null,
+        "quality": null,
+        "has_adv": null
+      }
+    ]
+  },
+  {
+    "season": 1,
+    "episode": 6,
+    "episode_id": 3467070,
+    "token": "https://tazaromikaz.link/content-router/r/1788939572/XF8aGsiDmxXcWl8dxh05iw/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/mp4/63798.mp4?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+    "is_full_url": true,
+    "sources": [
+      {
+        "label": "оригинальный",
+        "url": "https://tazaromikaz.link/content-router/r/1788939572/XF8aGsiDmxXcWl8dxh05iw/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/mp4/63798.mp4?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+        "variant_id": 1370791,
+        "dubbing_studio_id": null,
+        "quality": null,
+        "has_adv": null
+      }
+    ]
+  },
+  {
+    "season": 1,
+    "episode": 7,
+    "episode_id": 3467071,
+    "token": "https://tazaromikaz.link/content-router/r/1788939572/nhEn-NOnn490cyEhzS_2zA/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/mp4/63800.mp4?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+    "is_full_url": true,
+    "sources": [
+      {
+        "label": "оригинальный",
+        "url": "https://tazaromikaz.link/content-router/r/1788939572/nhEn-NOnn490cyEhzS_2zA/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/mp4/63800.mp4?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+        "variant_id": 1370792,
+        "dubbing_studio_id": null,
+        "quality": null,
+        "has_adv": null
+      }
+    ]
+  },
+  {
+    "season": 1,
+    "episode": 8,
+    "episode_id": 3467072,
+    "token": "https://tazaromikaz.link/content-router/r/1788939572/N6XV7USaECeOLxToXoShRg/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/mp4/63801.mp4?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+    "is_full_url": true,
+    "sources": [
+      {
+        "label": "оригинальный",
+        "url": "https://tazaromikaz.link/content-router/r/1788939572/N6XV7USaECeOLxToXoShRg/babd288b95330fde3e20aaa4f0b174ed/3ee6cf63-1f40-4043-8187-39e8815e9d8e/movies/files/mp4/63801.mp4?pl=CmwTo4wuFq3JJA1PbT5NKgqkPa4fTADDmcDyVwv2p3aJjDF346VCj2droYrDJKHTV5mknk",
+        "variant_id": 1370793,
+        "dubbing_studio_id": null,
+        "quality": null,
+        "has_adv": null
+      }
+    ]
+  }
+]
