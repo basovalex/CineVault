@@ -4808,7 +4808,7 @@
       }
     };
     const onError = (statusCode = null) => {
-      if ((Number(statusCode) === 410 || statusCode == null) && shouldRefreshKinopoiskPlayback(item)) {
+      if ((Number(statusCode) === 410 || !Number(statusCode)) && shouldRefreshKinopoiskPlayback(item)) {
         retryExpiredSource();
         return;
       }
