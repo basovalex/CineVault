@@ -2317,7 +2317,7 @@
 }
   };
 
-  const defaultState = { view: "home", theme: "graphite", companion: "plush", mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "rating", catalogPage: 1, favorites: [], watchlist: [], progress: {}, ratings: {}, history: [], offline: {}, voiceSelections: {}, playbackSelections: {}, playerVolume: 1, playerMuted: false, rutubeUrl: "", skipSegments: true };
+  const defaultState = { view: "home", theme: "graphite", companion: "plush", mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "rating", catalogPage: 1, favorites: [], watchlist: [], progress: {}, ratings: {}, history: [], recommendationHistory: [], offline: {}, voiceSelections: {}, playbackSelections: {}, playerVolume: 1, playerMuted: false, rutubeUrl: "", skipSegments: true };
   const ROUTE_PATHS = Object.freeze({ home: "/", catalog: "/catalog/", movies: "/movies/", series: "/series/", library: "/library/", favorites: "/favorites/", evening: "/evening/", history: "/history/", settings: "/settings/" });
   const ROUTE_VIEWS = Object.freeze(Object.fromEntries(Object.entries(ROUTE_PATHS).map(([view, path]) => [path, view])));
   let state = loadState();
@@ -2455,7 +2455,12 @@
     renderRoute(route);
   }
 
-  function openTitleRoute(id) {
+  function setAssistantCopy(text) {
+    const copy = $("#assistant-copy");
+    if (copy) copy.textContent = text;
+  }
+
+  function openTitleRoute(id, { recommendation = false } = {}) {
     const item = getTitle(id);
     if (!item) return;
     hideSearchSuggestions();
@@ -2468,6 +2473,7 @@
       routeForTitle(item.id),
     );
     renderRoute(route);
+    if (recommendation) setAssistantCopy(`Вот «${item.title}». ${recommendationReason(item)}`);
   }
 
   function returnFromDetails() {
@@ -3860,12 +3866,22 @@
     const unseen = catalog.filter((item) => !hasSharedHistory(item));
     const candidates = sortPersonalRecommendations(unseen.length ? unseen : catalog);
     if (!candidates.length) return null;
-    const candidateKey = candidates.map((item) => item.id).join("|");
-    if (candidateKey !== recommendationCandidateKey) {
-      recommendationCandidateKey = candidateKey;
-      recommendationCursor = 0;
+    const now = Date.now();
+    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+    const history = Array.isArray(state.recommendationHistory) ? state.recommendationHistory : [];
+    const recentIds = new Set(history.filter((entry) => Number(entry?.at || 0) > weekAgo).map((entry) => String(entry?.id || entry)).filter(Boolean));
+    const freshCandidates = candidates.filter((item) => !recentIds.has(item.id));
+    const pool = (freshCandidates.length ? freshCandidates : candidates).slice(0, Math.min(24, candidates.length));
+    const totalWeight = pool.reduce((sum, _item, index) => sum + Math.pow(pool.length - index, 1.35), 0);
+    let cursor = Math.random() * totalWeight;
+    let pick = pool[pool.length - 1];
+    for (let index = 0; index < pool.length; index += 1) {
+      cursor -= Math.pow(pool.length - index, 1.35);
+      if (cursor <= 0) { pick = pool[index]; break; }
     }
-    const pick = candidates[recommendationCursor % candidates.length];
+    state.recommendationHistory = [...history, { id: pick.id, at: now }].slice(-40);
+    saveState();
+    recommendationCandidateKey = candidates.map((item) => item.id).join("|");
     recommendationCursor += 1;
     return pick;
   }
@@ -5340,8 +5356,8 @@
   });
 
   $("#assistant-collapse")?.addEventListener("click", (event) => { const collapsed = $("#assistant-rail").classList.toggle("is-collapsed"); event.currentTarget.setAttribute("aria-expanded", String(!collapsed)); event.currentTarget.setAttribute("aria-label", collapsed ? "Развернуть помощника" : "Свернуть помощника"); });
-  $("#assistant-pet")?.addEventListener("click", () => { $("#assistant-rail").classList.remove("is-collapsed"); setPetState("happy"); $("#assistant-copy").textContent = "Я выберу вариант по настроению, жанру и рейтингу."; });
-  $("#assistant-recommend")?.addEventListener("click", () => { const pick = nextRecommendation(); if (!pick) return; setPetState("happy"); openTitleRoute(pick.id); });
+  $("#assistant-pet")?.addEventListener("click", () => { $("#assistant-rail").classList.remove("is-collapsed"); setPetState("happy"); setAssistantCopy("Я выберу вариант по твоему вкусу, настроению и истории просмотра."); });
+  $("#assistant-recommend")?.addEventListener("click", () => { setAssistantCopy("Секунду, ищу что-нибудь подходящее…"); const pick = nextRecommendation(); if (!pick) { setAssistantCopy("Пока не нашёл подходящих вариантов."); return; } setPetState("happy"); openTitleRoute(pick.id, { recommendation: true }); });
 
   startPetStates();
   renderRoute(initialRoute, { replaceHistory: true });
