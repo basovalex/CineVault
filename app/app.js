@@ -2325,6 +2325,13 @@
   const initialRoute = readRouteFromLocation();
   if (initialRoute.type === "view") state.view = initialRoute.view;
   let catalog = [...seedCatalog, ...openMediaCatalog].map((item) => ({ ...item }));
+  const posterOverrides = Object.freeze({
+    "kinopoisk-5304403": "https://old.mvapspdmpg.com/movies/files/posters/147213.jpeg",
+  });
+  function applyPosterOverrides() {
+    catalog = catalog.map((item) => posterOverrides[item.id] ? { ...item, posterImage: posterOverrides[item.id] } : item);
+  }
+  applyPosterOverrides();
   Object.assign(catalog.find((item) => item.id === "desperate-housewives"), importedDesperateHousewives);
   let tmdbStatus = tmdbCredential ? "Загружаю постеры и данные TMDB…" : "TMDB-ключ не найден";
   let tmdbSyncStarted = false;
@@ -2340,6 +2347,8 @@
   const episodeAssetStates = {};
   let libraryEpisodes = [];
   let libraryHistory = [];
+  let recommendationCursor = 0;
+  let recommendationCandidateKey = "";
   let libraryStatus = "Проверяю сервер медиатеки…";
   let adminToken = String(sessionStorage.getItem("cinevault.adminToken") || "").trim();
   let activeWatchRoomId = new URLSearchParams(window.location.search).get("room") || "";
@@ -2530,6 +2539,7 @@
         merged.tags = [...new Set([...(existing.tags || []), ...(entry.tags || [])])];
         catalog = catalog.map((item) => item === existing ? merged : item);
       });
+      applyPosterOverrides();
       if (activeTitleId) renderDetails(activeTitleId);
     } catch (error) {
       // Static catalog remains available when no generated import file exists.
@@ -3841,7 +3851,22 @@
 
   function recommendation() {
     const unseen = catalog.filter((item) => !hasSharedHistory(item));
-    return sortDiscoveryItems(unseen.length ? unseen : catalog, "mood")[0] || catalog[0];
+    const candidates = unseen.length ? unseen : catalog;
+    return sortPersonalRecommendations(candidates)[0] || catalog[0];
+  }
+
+  function nextRecommendation() {
+    const unseen = catalog.filter((item) => !hasSharedHistory(item));
+    const candidates = sortPersonalRecommendations(unseen.length ? unseen : catalog);
+    if (!candidates.length) return null;
+    const candidateKey = candidates.map((item) => item.id).join("|");
+    if (candidateKey !== recommendationCandidateKey) {
+      recommendationCandidateKey = candidateKey;
+      recommendationCursor = 0;
+    }
+    const pick = candidates[recommendationCursor % candidates.length];
+    recommendationCursor += 1;
+    return pick;
   }
 
   function poster(item, extra = "") {
@@ -3886,7 +3911,7 @@
     const continueItems = Object.entries(state.progress).map(([contentId, progress]) => ({ item: getTitleForProgress(contentId, progress), progress: { ...progress, contentId } })).filter((entry) => entry.item && !entry.progress.completed).sort((a, b) => b.progress.updatedAt - a.progress.updatedAt);
     const moodTitle = moodDefinition(state.mood)?.title || state.mood;
     const shelves = [
-      discoveryShelf({ id: "popular", eyebrow: "В твоей библиотеке", title: "Популярное", description: "Рейтинг, свежие добавления и то, что чаще открывали дома.", items: collectionItems("popular", 8) }),
+      discoveryShelf({ id: "personal", eyebrow: "Персонально для тебя", title: "Мопс советует", description: "Похожие на то, что тебе уже понравилось, с учётом жанров, актёров и режиссёров.", items: personalCollectionItems(8) }),
       discoveryShelf({ id: "mood", eyebrow: "Под твоё настроение", title: moodTitle, description: moodDefinition(state.mood)?.description || "Подборка по жанрам и атмосфере.", items: collectionItems("mood", 8) }),
       discoveryShelf({ id: "evening", eyebrow: "Без лишнего выбора", title: "На один вечер", description: "Фильмы, которые удобно включить сегодня.", items: collectionItems("evening", 8) }),
       discoveryShelf({ id: "anime", eyebrow: "Отдельная полка", title: "Аниме", description: "Сериалы и фильмы с жанром «аниме».", items: collectionItems("anime", 8) }),
@@ -3973,8 +3998,79 @@
     return [...items].sort((left, right) => discoveryScore(right, collectionId) - discoveryScore(left, collectionId) || catalogRatingValue(right) - catalogRatingValue(left) || Number(right.year || 0) - Number(left.year || 0) || String(left.title || "").localeCompare(String(right.title || ""), "ru"));
   }
 
+  function recommendationInteractionWeight(item) {
+    const progress = progressForTitle(item);
+    const progressRatio = progress?.duration > 0 ? Number(progress.position || 0) / Number(progress.duration) : 0;
+    let weight = 0;
+    if (state.favorites.includes(item.id)) weight += 6;
+    if (state.watchlist.includes(item.id)) weight += 2;
+    if (hasSharedHistory(item)) weight += progress?.completed || progressRatio >= .8 ? 5 : 3;
+    if (progressRatio >= .2 && progressRatio < .8) weight += 1;
+    return weight;
+  }
+
+  function addProfileValues(profileMap, values, weight) {
+    const list = Array.isArray(values) ? values : values ? [values] : [];
+    for (const value of list) {
+      const normalized = normalizeCatalogGenre(value);
+      if (normalized) profileMap.set(normalized, (profileMap.get(normalized) || 0) + weight);
+    }
+  }
+
+  function recommendationProfile() {
+    const profile = { genres: new Map(), actors: new Map(), directors: new Map(), countries: new Map(), kinds: new Map(), years: [], runtimes: [] };
+    catalog.forEach((item) => {
+      const weight = recommendationInteractionWeight(item);
+      if (!weight) return;
+      addProfileValues(profile.genres, genresForItem(item), weight);
+      addProfileValues(profile.actors, item.actors, weight * .9);
+      addProfileValues(profile.directors, item.directors, weight * 1.2);
+      addProfileValues(profile.countries, item.countries, weight * .45);
+      const kind = String(item.kind || "").trim();
+      if (kind) profile.kinds.set(kind, (profile.kinds.get(kind) || 0) + weight);
+      if (Number(item.year)) profile.years.push({ value: Number(item.year), weight });
+      if (Number(item.runtime)) profile.runtimes.push({ value: Number(item.runtime), weight });
+    });
+    return profile;
+  }
+
+  function profileOverlap(values, profileMap) {
+    const list = Array.isArray(values) ? values : values ? [values] : [];
+    return list.reduce((score, value) => score + (profileMap.get(normalizeCatalogGenre(value)) || 0), 0);
+  }
+
+  function weightedAverage(values) {
+    const totalWeight = values.reduce((sum, entry) => sum + entry.weight, 0);
+    return totalWeight ? values.reduce((sum, entry) => sum + entry.value * entry.weight, 0) / totalWeight : 0;
+  }
+
+  function personalRecommendationScore(item, profile) {
+    const genreScore = profileOverlap(genresForItem(item), profile.genres) * 2.2;
+    const actorScore = profileOverlap(item.actors, profile.actors) * 1.3;
+    const directorScore = profileOverlap(item.directors, profile.directors) * 1.7;
+    const countryScore = profileOverlap(item.countries, profile.countries) * .55;
+    const kindScore = (profile.kinds.get(String(item.kind || "").trim()) || 0) * .7;
+    const averageYear = weightedAverage(profile.years);
+    const averageRuntime = weightedAverage(profile.runtimes);
+    const yearScore = averageYear && Number(item.year) ? Math.max(0, 4 - Math.abs(Number(item.year) - averageYear) / 12) : 0;
+    const runtimeScore = averageRuntime && Number(item.runtime) ? Math.max(0, 2 - Math.abs(Number(item.runtime) - averageRuntime) / 45) : 0;
+    const moodScoreValue = moodScore(item) * 1.15;
+    const qualityScore = catalogRatingValue(item) * 1.4;
+    return genreScore + actorScore + directorScore + countryScore + kindScore + yearScore + runtimeScore + moodScoreValue + qualityScore;
+  }
+
+  function sortPersonalRecommendations(items) {
+    const profile = recommendationProfile();
+    return [...items].sort((left, right) => personalRecommendationScore(right, profile) - personalRecommendationScore(left, profile) || discoveryScore(right, "mood") - discoveryScore(left, "mood") || String(left.title || "").localeCompare(String(right.title || ""), "ru"));
+  }
+
   function collectionItems(collectionId, limit = 8) {
     return sortDiscoveryItems(catalog.filter((item) => matchesCollection(item, collectionId)), collectionId).slice(0, limit);
+  }
+
+  function personalCollectionItems(limit = 8) {
+    const unseen = catalog.filter((item) => !hasSharedHistory(item));
+    return sortPersonalRecommendations(unseen.length ? unseen : catalog).slice(0, limit);
   }
 
   function catalogCollectionDefinition(collectionId = state.catalogCollection) {
@@ -3985,7 +4081,12 @@
     const tags = itemDiscoveryTags(item);
     const moodMatch = (catalogMoodTags[state.mood] || []).map(normalizeCatalogGenre).find((tag) => tags.has(tag));
     const rating = catalogRatingValue(item);
-    return `${moodMatch ? `Подходит под настроение: ${moodMatch}.` : "Подходит по жанру и атмосфере."}${rating ? ` Рейтинг в каталоге — ${rating.toFixed(1)}.` : ""}`;
+    const profile = recommendationProfile();
+    const personalGenre = genresForItem(item).find((genre) => profile.genres.has(normalizeCatalogGenre(genre)));
+    const personalActor = (Array.isArray(item.actors) ? item.actors : item.actors ? [item.actors] : []).find((actor) => profile.actors.has(normalizeCatalogGenre(actor)));
+    const personalDirector = (Array.isArray(item.directors) ? item.directors : item.directors ? [item.directors] : []).find((director) => profile.directors.has(normalizeCatalogGenre(director)));
+    const personalMatch = personalActor ? `Похожий актёр: ${personalActor}.` : personalDirector ? `Похожий режиссёр: ${personalDirector}.` : personalGenre ? `Совпадает любимый жанр: ${personalGenre}.` : "Подобрано по твоему профилю и рейтингу.";
+    return `${personalMatch} ${moodMatch ? `Подходит под настроение: ${moodMatch}.` : ""}${rating ? ` Рейтинг в каталоге — ${rating.toFixed(1)}.` : ""}`.trim();
   }
 
   function catalogSearchText(item) {
@@ -5239,7 +5340,7 @@
 
   $("#assistant-collapse")?.addEventListener("click", (event) => { const collapsed = $("#assistant-rail").classList.toggle("is-collapsed"); event.currentTarget.setAttribute("aria-expanded", String(!collapsed)); event.currentTarget.setAttribute("aria-label", collapsed ? "Развернуть помощника" : "Свернуть помощника"); });
   $("#assistant-pet")?.addEventListener("click", () => { $("#assistant-rail").classList.remove("is-collapsed"); setPetState("happy"); $("#assistant-copy").textContent = "Я выберу вариант по настроению, жанру и рейтингу."; });
-  $("#assistant-recommend")?.addEventListener("click", () => { const pick = recommendation(); if (!pick) return; setPetState("happy"); openTitleRoute(pick.id); });
+  $("#assistant-recommend")?.addEventListener("click", () => { const pick = nextRecommendation(); if (!pick) return; setPetState("happy"); openTitleRoute(pick.id); });
 
   startPetStates();
   renderRoute(initialRoute, { replaceHistory: true });
