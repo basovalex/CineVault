@@ -2338,6 +2338,8 @@
   let initialCatalogReady = false;
   // Keep the first screen responsive: the small seed catalog can render
   // immediately while the larger imported catalog arrives in the background.
+  // Render the lightweight seed catalog immediately; imported data hydrates in
+  // the background so the home page never waits for the full catalog/API.
   let catalogHydrating = initialRoute.type === "title";
   let selectedSeason = 1;
   let seasonTransitionTimer = null;
@@ -3798,7 +3800,11 @@
     if (!item) return;
     rememberTasteInteraction(item, "played");
     stopDetailPrebuffer();
-    if (refreshSource) item = await refreshKinopoiskPlayback(item);
+    if (refreshSource) {
+      const detailStatus = $("#detail-prebuffer-status");
+      if (detailStatus) detailStatus.textContent = "Обновляю выбранный видеопоток…";
+      item = await refreshKinopoiskPlayback(item);
+    }
     if (roomId !== null) activeWatchRoomId = String(roomId || "");
     rememberPlayerContext();
     const titleProgress = item.kind === "series" ? progressForTitle(item) : null;
@@ -4447,7 +4453,8 @@
     activeTitleId = id;
     loadOnlineEpisodeAssets(item);
     const progress = progressForTitle(item);
-    const shouldRefreshDetailPlayback = !skipPlaybackRefresh && shouldRefreshKinopoiskPlayback(item);
+    // Series streams refresh only when the user opens a specific episode.
+    const shouldRefreshDetailPlayback = item.kind !== "series" && !skipPlaybackRefresh && shouldRefreshKinopoiskPlayback(item);
     const favorite = state.favorites.includes(item.id);
     const resumeEpisode = progress?.episodeNumber || null;
     const detailWatch = hasPlayableSource(item) ? watchButton(item, progress && !progress.completed ? "Продолжить просмотр" : "Смотреть") : item.providerUrl ? watchButton(item, "Смотреть") : "";
@@ -4459,7 +4466,7 @@
     const showProviderPanel = item.providerUrl && !isKinopoiskMetadata && !isKinopoiskUrl;
     const sourceLink = showProviderPanel ? `<a class="secondary-button" href="${escapeHtml(item.providerUrl)}" target="_blank" rel="noopener noreferrer">Открыть источник ↗</a>` : "";
     const providerPanel = showProviderPanel ? `<div class="provider-list"><div class="provider-row"><div><strong>${escapeHtml(sourceTitle)}</strong><small>${escapeHtml(sourceNote)}${item.licenseUrl ? ` · <a href="${escapeHtml(item.licenseUrl)}" target="_blank" rel="noopener noreferrer">условия лицензии ↗</a>` : ""}</small></div>${sourceLink}</div></div>` : "";
-    const sourceImportAction = item.kinopoiskId ? `<button class="secondary-button" data-open-source-import="${escapeHtml(item.id)}" type="button">Добавить источник</button>` : "";
+    const sourceImportAction = "";
     const genres = detailList(item.genres?.length ? item.genres : item.tags).filter((tag) => tag.toLowerCase() !== "для нас");
     const countries = detailList(item.countries || item.country);
     const directors = detailList(item.directors || item.director);
@@ -5434,7 +5441,8 @@
 
   startPetStates();
   renderRoute(initialRoute, { replaceHistory: true });
-  const hydrateCatalog = () => Promise.all([loadImportedCatalog(), loadLibraryData(false)])
+  const hydrateCatalog = () => {
+    const importedCatalog = loadImportedCatalog()
     .then(() => {
       catalogHydrating = false;
       initialCatalogReady = true;
@@ -5445,6 +5453,11 @@
       render();
       return openWatchRoomFromUrl();
     });
+    loadLibraryData(false)
+      .then(() => render())
+      .catch(() => {});
+    return importedCatalog;
+  };
   if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(hydrateCatalog, { timeout: 1200 });
   else window.setTimeout(hydrateCatalog, 0);
   syncCatalogFromTmdb();
