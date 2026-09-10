@@ -3804,7 +3804,7 @@
     const historyIds = new Set(libraryHistory.map((entry) => entry.id));
     return state.history.includes(item.id) || Boolean(item.libraryEpisodes?.some((episode) => historyIds.has(episode.id)));
   }
-  function getPet() { return ({ plush: ["🐶", "говно", "жирненький уютный мопсик"], noir: ["🐈‍⬛", "Нуар", "спокойный советчик"], pixie: ["🐰", "Пикси", "нежный романтик"], moti: ["🐻", "Моти", "любит комедии"] })[state.companion] || ["🐶", "говно", "жирненький уютный мопсик"]; }
+  function getPet() { return ({ plush: ["🐶", "Мопс", "уютный помощник по выбору кино"], noir: ["🐈‍⬛", "Нуар", "спокойный советчик"], pixie: ["🐰", "Пикси", "нежный романтик"], moti: ["🐻", "Моти", "любит комедии"] })[state.companion] || ["🐶", "Мопс", "уютный помощник по выбору кино"]; }
   function petVisual(className = "") { const [emoji, name] = getPet(); return state.companion === "plush" ? `<img class="pet-avatar ${className}" src="./assets/pug-mascot.png" alt="${escapeHtml(name)}">` : `<span class="pet-emoji ${className}" aria-label="${escapeHtml(name)}">${emoji}</span>`; }
   function syncAssistant() { const [, petName, description] = getPet(); $("#header-pet") && ($("#header-pet").innerHTML = petVisual("header-pet-visual")); $("#header-pet-name") && ($("#header-pet-name").textContent = petName); $("#assistant-name") && ($("#assistant-name").textContent = petName); $("#assistant-pet img")?.setAttribute("alt", petName); $("#assistant-copy") && ($("#assistant-copy").textContent = state.companion === "plush" ? "Я рядом. Иногда ем, иногда сплю, но рекомендации держу под контролем." : `${description}. Подберу фильм под ваше настроение.`); $$(".pet-choice").forEach((button) => button.classList.toggle("is-selected", button.dataset.pet === state.companion)); }
   function setPetState(mode = "idle") { const rail = $("#assistant-rail"); const pet = $("#assistant-pet"); if (!rail || !pet) return; rail.classList.remove("is-sleeping", "is-snacking"); pet.classList.remove("is-sleeping", "is-eating", "is-falling", "is-happy"); if (mode === "sleep") { rail.classList.add("is-sleeping"); pet.classList.add("is-sleeping"); } if (mode === "snack") { rail.classList.add("is-snacking"); pet.classList.add("is-eating"); } if (mode === "fall") pet.classList.add("is-falling"); if (mode === "happy") pet.classList.add("is-happy"); }
@@ -3880,11 +3880,13 @@
 
   const catalogGenreAliases = { "экшен": "боевик", "семейное": "семейный", "романтика": "мелодрама" };
   const catalogNonGenres = new Set(["для нас", "уютно", "романтично", "смеяться", "напряжённо", "атмосферно", "на вечер", "классика", "сериал", "фильм", "медиатека"]);
+  // Mood filters use real catalog genres. Editorial tags remain useful for copy,
+  // but must not be the only reason a large imported catalog matches.
   const catalogMoodTags = {
-    "уютно": ["уютно", "комедия", "семейный", "мультфильм", "приключения", "фэнтези"],
-    "романтично": ["романтично", "романтика", "мелодрама", "комедия", "драма"],
-    "смеяться": ["смеяться", "комедия", "мультфильм", "семейный"],
-    "напряжённо": ["напряжённо", "триллер", "детектив", "ужасы", "криминал", "боевик"],
+    "уютно": ["комедия", "семейный", "мультфильм", "приключения", "фэнтези", "мелодрама"],
+    "романтично": ["мелодрама", "комедия", "драма"],
+    "смеяться": ["комедия", "мультфильм", "семейный"],
+    "напряжённо": ["триллер", "детектив", "ужасы", "криминал", "боевик"],
   };
   const moodDefinitions = Object.freeze({
     "уютно": { shortLabel: "Уютно", title: "Уютное на вечер", description: "Тёплые истории, приключения и фильмы, которые не хочется спешить выключать." },
@@ -5218,9 +5220,9 @@
     if (video && !isTextControl) event.preventDefault();
   });
 
-  $("#assistant-collapse")?.addEventListener("click", () => $("#assistant-rail").classList.toggle("is-collapsed"));
-  $("#assistant-pet")?.addEventListener("click", () => { $("#assistant-rail").classList.remove("is-collapsed"); setPetState("happy"); $("#assistant-copy").textContent = "Я проснулся! Нажми «Подобрать для нас», и я подберу вариант под ваше настроение."; });
-  $("#assistant-recommend")?.addEventListener("click", () => { const pick = recommendation(); navigateToView("home"); setPetState("happy"); $("#assistant-copy").textContent = `${pick.title} выглядит хорошим вариантом на сегодня. Открыть карточку или начать демо?`; });
+  $("#assistant-collapse")?.addEventListener("click", (event) => { const collapsed = $("#assistant-rail").classList.toggle("is-collapsed"); event.currentTarget.setAttribute("aria-expanded", String(!collapsed)); event.currentTarget.setAttribute("aria-label", collapsed ? "Развернуть помощника" : "Свернуть помощника"); });
+  $("#assistant-pet")?.addEventListener("click", () => { $("#assistant-rail").classList.remove("is-collapsed"); setPetState("happy"); $("#assistant-copy").textContent = "Я выберу вариант по настроению, жанру и рейтингу."; });
+  $("#assistant-recommend")?.addEventListener("click", () => { const pick = recommendation(); if (!pick) return; setPetState("happy"); openTitleRoute(pick.id); });
 
   startPetStates();
   page.innerHTML = `<section class="empty-state" role="status"><div class="empty-pet">◌</div><h2>Загружаю каталог…</h2><p>Подготавливаю сериалы, названия серий и превью.</p></section>`;

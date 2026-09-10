@@ -524,7 +524,8 @@ button.episode-card-art:hover { border-color: var(--accent); transform: translat
 .app-shell[data-theme="graphite"] { background: var(--bg); }
 .app-shell[data-theme="graphite"] .hero-card { background: var(--surface); }
 .hero-card::before, .hero-card::after, .companion-card::before, .empty-state::before { display: none; }
-.ambient-decor, .assistant-rail, .popover { display: none !important; }
+.ambient-decor, .popover { display: none !important; }
+.assistant-rail { display: grid; }
 .main-area { padding-right: clamp(18px, 4vw, 55px); }
 .page { max-width: 1220px; }
 .topbar { margin-bottom: 36px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }

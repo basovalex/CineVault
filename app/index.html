@@ -46,6 +46,19 @@
       <div id="catalog-live-status" class="sr-only" role="status" aria-live="polite"></div>
     </main>
 
+    <aside id="assistant-rail" class="assistant-rail" aria-label="Помощник CineVault">
+      <div class="assistant-bubble" aria-live="polite">
+        <div class="assistant-bubble-head"><strong><span id="assistant-name">Мопс</span> рядом</strong><button id="assistant-collapse" type="button" aria-label="Свернуть помощника" aria-expanded="true">×</button></div>
+        <p id="assistant-copy">Я помогу выбрать фильм по настроению, жанру и рейтингу.</p>
+        <button id="assistant-recommend" class="assistant-action" type="button">Подобрать фильм</button>
+      </div>
+      <button id="assistant-pet" class="assistant-pet" type="button" aria-label="Открыть помощника">
+        <img src="/assets/pug-mascot.png" alt="Мопс">
+        <span class="pet-state pet-state-sleep" aria-hidden="true">z z</span>
+        <span class="pet-state pet-state-snack" aria-hidden="true">Ням</span>
+      </button>
+    </aside>
+
     <div id="modal-root"></div>
   </div>
   <script src="/config.local.js"></script>
