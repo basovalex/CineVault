@@ -12,7 +12,7 @@
   <link rel="sitemap" type="application/xml" href="/sitemap.xml">
   <title>CineVault — кино для вас</title>
   <style>.settings-grid [data-set-theme="night"] { display: none !important; }</style>
-    <link rel="stylesheet" href="/styles.css?v=20260910-catalog-cleanup-1">
+    <link rel="stylesheet" href="/styles.css?v=20260910-lazy-loading-1">
 </head>
 <body>
   <div id="app" class="app-shell" data-theme="graphite">
@@ -63,10 +63,10 @@
   </div>
   <script src="/config.local.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" crossorigin="anonymous"></script>
-    <script src="/app.js?v=20260910-catalog-cleanup-1" defer></script>
+    <script src="/app.js?v=20260910-lazy-loading-1" defer></script>
   <script>
     if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js?v=20260910-progressive-loading-2").catch(() => {}));
+      window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js?v=20260910-progressive-loading-3").catch(() => {}));
     }
   </script>
 </body>

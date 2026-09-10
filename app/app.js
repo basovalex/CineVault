@@ -2336,11 +2336,10 @@
   let tmdbStatus = tmdbCredential ? "Загружаю постеры и данные TMDB…" : "TMDB-ключ не найден";
   let tmdbSyncStarted = false;
   let initialCatalogReady = false;
-  // Keep the first screen responsive: the small seed catalog can render
-  // immediately while the larger imported catalog arrives in the background.
-  // Render the lightweight seed catalog immediately; imported data hydrates in
-  // the background so the home page never waits for the full catalog/API.
-  let catalogHydrating = initialRoute.type === "title";
+  // Keep the first screen coherent: show one lightweight loading state until
+  // the imported catalog is ready instead of exposing the seed catalog.
+  let catalogHydrating = initialRoute.type === "title" || (initialRoute.type === "view" && ["home", "catalog", "movies", "series", "favorites", "evening", "history"].includes(initialRoute.view));
+  let lazyPosterObserver = null;
   let selectedSeason = 1;
   let seasonTransitionTimer = null;
   let activeTitleId = null;
@@ -3848,8 +3847,30 @@
   function renderCatalogLoading() {
     const viewLabels = { home: "Для вас", catalog: "Каталог", movies: "Фильмы", series: "Сериалы", favorites: "Избранное", evening: "Наш вечер", history: "История просмотра" };
     const label = viewLabels[state.view] || "Каталог";
-    const skeletons = Array.from({ length: 8 }, (_, index) => `<div class="catalog-loading-card" aria-hidden="true"><div class="catalog-loading-poster"></div><span class="catalog-loading-line catalog-loading-line-wide"></span><span class="catalog-loading-line"></span></div>`).join("");
-    page.innerHTML = `<section class="catalog-loading-shell" role="status" aria-live="polite"><div class="eyebrow">CineVault</div><h1>${label}</h1><p>Подготавливаю страницу и загружаю карточки…</p><div class="catalog-loading-grid">${skeletons}</div></section>`;
+    page.innerHTML = `<section class="catalog-loading-shell" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><div><div class="eyebrow">CineVault</div><h1>${label}</h1><p>Загружаю страницу…</p></div></section>`;
+  }
+
+  function hydrateLazyPosters() {
+    if (lazyPosterObserver) lazyPosterObserver.disconnect();
+    const nodes = $$("[data-lazy-poster]");
+    if (!nodes.length) return;
+    const load = (node) => {
+      const url = node.dataset.lazyPoster;
+      if (!url || node.dataset.posterLoaded) return;
+      node.style.backgroundImage = `linear-gradient(180deg, transparent 38%, rgba(0,0,0,.18)), url(${JSON.stringify(url)})`;
+      node.dataset.posterLoaded = "true";
+      node.removeAttribute("data-lazy-poster");
+    };
+    if (!("IntersectionObserver" in window)) {
+      nodes.forEach(load);
+      return;
+    }
+    lazyPosterObserver = new IntersectionObserver((entries) => entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      load(entry.target);
+      lazyPosterObserver?.unobserve(entry.target);
+    }), { rootMargin: "300px 0px" });
+    nodes.forEach((node) => lazyPosterObserver.observe(node));
   }
   function switchSeason(nextSeason) {
     const next = Math.max(1, Number(nextSeason) || 1);
@@ -3904,7 +3925,8 @@
     const progressPct = progress ? Math.min(100, Math.round((progress.position / progress.duration) * 100)) : 0;
     const meta = [item.year, catalogRatingLabel(item), item.kind === "series" ? `${item.seasons.length} сезонов` : formatRuntime(item.runtime)].filter(Boolean);
     const genres = genresForItem(item).slice(0, 3);
-    return `<a class="poster-card ${extra}" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="Открыть ${escapeHtml(item.title)}"><div class="poster-art" style="${posterStyle(item)}">${posterTitleArt(item)}${progress ? `<span class="progress-bar" style="--progress:${progressPct}%"><i></i></span>` : ""}</div><div class="poster-card-copy"><strong>${escapeHtml(item.title)}</strong><div class="poster-card-meta">${meta.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div><p class="poster-card-description">${escapeHtml(item.description || "Подробности появятся после синхронизации каталога.")}</p><div class="poster-card-tags">${genres.map((genre) => `<span>#${escapeHtml(genre)}</span>`).join("")}</div></div></a>`;
+    const posterAttrs = item.posterImage ? ` data-lazy-poster="${escapeHtml(item.posterImage)}" style="--poster:${escapeHtml(item.poster || "linear-gradient(145deg, #5c3b63, #221b31)")}"` : ` style="${posterStyle(item)}"`;
+    return `<a class="poster-card ${extra}" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="Открыть ${escapeHtml(item.title)}"><div class="poster-art"${posterAttrs}>${posterTitleArt(item)}${progress ? `<span class="progress-bar" style="--progress:${progressPct}%"><i></i></span>` : ""}</div><div class="poster-card-copy"><strong>${escapeHtml(item.title)}</strong><div class="poster-card-meta">${meta.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div><p class="poster-card-description">${escapeHtml(item.description || "Подробности появятся после синхронизации каталога.")}</p><div class="poster-card-tags">${genres.map((genre) => `<span>#${escapeHtml(genre)}</span>`).join("")}</div></div></a>`;
   }
 
   function resumePoster(item, progress) {
@@ -3912,7 +3934,8 @@
     const episodeText = progress.episodeNumber ? ` · S${String(progress.seasonNumber).padStart(2, "0")}E${String(progress.episodeNumber).padStart(2, "0")}` : "";
     const playbackAttr = hasPlayableSource(item) ? `data-play-media="${item.id}"` : `data-demo-play="${item.id}"`;
     const episodeAttrs = progress.episodeNumber ? `data-resume-season="${Number(progress.seasonNumber) || 1}" data-episode="${Number(progress.episodeNumber)}"` : "";
-    return `<button class="poster-card" ${playbackAttr} ${episodeAttrs} type="button"><div class="poster-art" style="${posterStyle(item)}">${posterTitleArt(item)}<span class="progress-bar" style="--progress:${progressPct}%"><i></i></span></div><strong>${escapeHtml(item.title)}</strong><small>${item.kind === "series" ? `${item.seasons.length} сезонов${episodeText}` : `${item.year} · ${formatTime(progress.position)} из ${formatTime(progress.duration)}`}</small></button>`;
+    const posterAttrs = item.posterImage ? ` data-lazy-poster="${escapeHtml(item.posterImage)}" style="--poster:${escapeHtml(item.poster || "linear-gradient(145deg, #5c3b63, #221b31)")}"` : ` style="${posterStyle(item)}"`;
+    return `<button class="poster-card" ${playbackAttr} ${episodeAttrs} type="button"><div class="poster-art"${posterAttrs}>${posterTitleArt(item)}<span class="progress-bar" style="--progress:${progressPct}%"><i></i></span></div><strong>${escapeHtml(item.title)}</strong><small>${item.kind === "series" ? `${item.seasons.length} сезонов${episodeText}` : `${item.year} · ${formatTime(progress.position)} из ${formatTime(progress.duration)}`}</small></button>`;
   }
 
   function render() {
@@ -3930,6 +3953,7 @@
     else if (["catalog", "movies", "series", "favorites", "evening", "history"].includes(state.view)) renderCatalogView();
     else if (state.view === "library") renderLibraryView();
     else if (state.view === "settings") renderSettings();
+    hydrateLazyPosters();
     page.focus({ preventScroll: true });
   }
 
