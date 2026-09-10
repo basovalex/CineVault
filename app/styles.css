@@ -171,11 +171,11 @@ h3 { margin-bottom: 7px; font-size: 15px; }
 .catalog-result-row strong { font-size: 14px; font-variant-numeric: tabular-nums; }
 .catalog-result-row span { color: var(--muted); font-size: 12px; }
 .catalog-result-row .text-button { min-height: 40px; padding: 8px; white-space: nowrap; }
-.catalog-pagination { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 26px; padding: 14px 0; border-top: 1px solid var(--line); }
+.catalog-pagination { display: flex; align-items: center; justify-content: center; gap: clamp(18px, 4vw, 44px); margin-top: 26px; padding: 14px 0; border-top: 1px solid var(--line); }
 .catalog-pagination p { margin: 0; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; text-align: center; }
 .catalog-pagination p strong { color: var(--text); }
 .catalog-pagination span { white-space: nowrap; }
-.catalog-pagination .secondary-button { min-width: 108px; }
+.catalog-pagination .catalog-page-arrow { display: inline-grid; place-items: center; width: 48px; min-width: 48px; height: 44px; min-height: 44px; padding: 0; font-size: 22px; line-height: 1; }
 .catalog-loading-shell { border: 1px solid var(--line); border-radius: 22px; padding: clamp(24px, 4vw, 42px); background: var(--surface); }
 .catalog-loading-shell h1 { margin: 7px 0 8px; }
 .catalog-loading-shell > p { margin: 0; color: var(--muted); }
@@ -738,9 +738,9 @@ button.episode-card-art:hover { border-color: var(--accent); transform: translat
   .genre-list::after { content: ""; flex: 0 0 16px; }
   .genre-chip { flex: 0 0 auto; scroll-snap-align: start; }
   .catalog-result-row { align-items: flex-start; }
-  .catalog-pagination { align-items: stretch; flex-wrap: wrap; justify-content: center; }
-  .catalog-pagination p { flex: 1 0 100%; order: -1; }
-  .catalog-pagination .secondary-button { flex: 1 1 130px; min-height: 44px; }
+  .catalog-pagination { gap: 18px; }
+  .catalog-pagination p { max-width: calc(100vw - 150px); }
+  .catalog-pagination .catalog-page-arrow { flex: 0 0 48px; }
 }
 
 @media (max-width: 430px) {
