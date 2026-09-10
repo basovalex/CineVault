@@ -2317,7 +2317,7 @@
 }
   };
 
-  const defaultState = { view: "home", theme: "graphite", companion: "plush", mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "rating", catalogPage: 1, favorites: [], watchlist: [], progress: {}, ratings: {}, history: [], recommendationHistory: [], offline: {}, voiceSelections: {}, playbackSelections: {}, playerVolume: 1, playerMuted: false, rutubeUrl: "", skipSegments: true };
+  const defaultState = { view: "home", theme: "graphite", companion: "plush", mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "rating", catalogPage: 1, favorites: [], watchlist: [], progress: {}, ratings: {}, history: [], recommendationHistory: [], tasteMemory: [], offline: {}, voiceSelections: {}, playbackSelections: {}, playerVolume: 1, playerMuted: false, rutubeUrl: "", skipSegments: true };
   const ROUTE_PATHS = Object.freeze({ home: "/", catalog: "/catalog/", movies: "/movies/", series: "/series/", library: "/library/", favorites: "/favorites/", evening: "/evening/", history: "/history/", settings: "/settings/" });
   const ROUTE_VIEWS = Object.freeze(Object.fromEntries(Object.entries(ROUTE_PATHS).map(([view, path]) => [path, view])));
   let state = loadState();
@@ -2336,7 +2336,9 @@
   let tmdbStatus = tmdbCredential ? "Загружаю постеры и данные TMDB…" : "TMDB-ключ не найден";
   let tmdbSyncStarted = false;
   let initialCatalogReady = false;
-  let catalogHydrating = true;
+  // Keep the first screen responsive: the small seed catalog can render
+  // immediately while the larger imported catalog arrives in the background.
+  let catalogHydrating = initialRoute.type === "title";
   let selectedSeason = 1;
   let seasonTransitionTimer = null;
   let activeTitleId = null;
@@ -2460,9 +2462,20 @@
     if (copy) copy.textContent = text;
   }
 
+  function rememberTasteInteraction(item, type = "opened") {
+    if (!item?.id) return;
+    const now = Date.now();
+    const memory = Array.isArray(state.tasteMemory) ? state.tasteMemory : [];
+    const previous = memory[memory.length - 1];
+    if (previous?.id === item.id && previous?.type === type && now - Number(previous.at || 0) < 15000) return;
+    state.tasteMemory = [...memory, { id: item.id, type, mood: state.mood, at: now }].slice(-500);
+    saveState();
+  }
+
   function openTitleRoute(id, { recommendation = false } = {}) {
     const item = getTitle(id);
     if (!item) return;
+    rememberTasteInteraction(item, recommendation ? "recommendation_opened" : "opened");
     hideSearchSuggestions();
     const returnView = ROUTE_PATHS[state.view] ? state.view : "catalog";
     updateCurrentHistoryScroll();
@@ -3776,6 +3789,7 @@
   function hasPlayableSource(item) { return Boolean(libraryEpisodeFor(item) || item?.rutubeId || getVideoVariants(item).length || Object.values(item?.episodeSourceTokens || {}).some((source) => source.sourceUrl)); }
   async function openItemPlayer(item, episodeNumber = null, seasonNumber = null, roomId = null, refreshSource = true) {
     if (!item) return;
+    rememberTasteInteraction(item, "played");
     stopDetailPrebuffer();
     if (refreshSource) item = await refreshKinopoiskPlayback(item);
     if (roomId !== null) activeWatchRoomId = String(roomId || "");
@@ -3859,7 +3873,9 @@
   function recommendation() {
     const unseen = catalog.filter((item) => !hasSharedHistory(item));
     const candidates = unseen.length ? unseen : catalog;
-    return sortPersonalRecommendations(candidates)[0] || catalog[0];
+    const ranked = sortPersonalRecommendations(candidates);
+    const pool = ranked.slice(0, Math.min(24, ranked.length));
+    return pool[Math.floor(Math.random() * pool.length)] || catalog[0];
   }
 
   function nextRecommendation() {
@@ -4048,6 +4064,24 @@
       if (Number(item.year)) profile.years.push({ value: Number(item.year), weight });
       if (Number(item.runtime)) profile.runtimes.push({ value: Number(item.runtime), weight });
     });
+    const now = Date.now();
+    const memory = Array.isArray(state.tasteMemory) ? state.tasteMemory : [];
+    memory.forEach((entry) => {
+      const item = getTitle(entry?.id);
+      if (!item) return;
+      const ageDays = Math.max(0, (now - Number(entry.at || now)) / (24 * 60 * 60 * 1000));
+      const freshness = Math.max(.35, 1 - ageDays / 120);
+      const baseWeight = entry.type === "played" ? 7 : entry.type === "recommendation_opened" ? 1.5 : 3;
+      const weight = baseWeight * freshness;
+      addProfileValues(profile.genres, genresForItem(item), weight);
+      addProfileValues(profile.actors, item.actors, weight * .8);
+      addProfileValues(profile.directors, item.directors, weight * 1.1);
+      addProfileValues(profile.countries, item.countries, weight * .4);
+      const kind = String(item.kind || "").trim();
+      if (kind) profile.kinds.set(kind, (profile.kinds.get(kind) || 0) + weight);
+      if (Number(item.year)) profile.years.push({ value: Number(item.year), weight });
+      if (Number(item.runtime)) profile.runtimes.push({ value: Number(item.runtime), weight });
+    });
     return profile;
   }
 
@@ -4066,14 +4100,19 @@
     const actorScore = profileOverlap(item.actors, profile.actors) * 1.3;
     const directorScore = profileOverlap(item.directors, profile.directors) * 1.7;
     const countryScore = profileOverlap(item.countries, profile.countries) * .55;
-    const kindScore = (profile.kinds.get(String(item.kind || "").trim()) || 0) * .7;
+    const kindScore = (profile.kinds.get(String(item.kind || "").trim()) || 0) * 1.35;
     const averageYear = weightedAverage(profile.years);
     const averageRuntime = weightedAverage(profile.runtimes);
     const yearScore = averageYear && Number(item.year) ? Math.max(0, 4 - Math.abs(Number(item.year) - averageYear) / 12) : 0;
     const runtimeScore = averageRuntime && Number(item.runtime) ? Math.max(0, 2 - Math.abs(Number(item.runtime) - averageRuntime) / 45) : 0;
-    const moodScoreValue = moodScore(item) * 1.15;
+    const moodScoreValue = moodScore(item) * .45;
     const qualityScore = catalogRatingValue(item) * 1.4;
-    return genreScore + actorScore + directorScore + countryScore + kindScore + yearScore + runtimeScore + moodScoreValue + qualityScore;
+    const tags = new Set(genresForItem(item).map(normalizeCatalogGenre));
+    const isChildLike = tags.has("мультфильм") || tags.has("детский") || tags.has("аниме");
+    const childInterest = ["мультфильм", "детский", "аниме", "семейный"].reduce((sum, tag) => sum + (profile.genres.get(tag) || 0), 0);
+    const adultInterest = [...profile.genres.entries()].filter(([tag]) => !["мультфильм", "детский", "аниме", "семейный"].includes(tag)).reduce((sum, [, value]) => sum + value, 0);
+    const childBiasCorrection = isChildLike && adultInterest > childInterest * 1.25 ? -8 : 0;
+    return genreScore + actorScore + directorScore + countryScore + kindScore + yearScore + runtimeScore + moodScoreValue + qualityScore + childBiasCorrection;
   }
 
   function sortPersonalRecommendations(items) {
@@ -4087,7 +4126,20 @@
 
   function personalCollectionItems(limit = 8) {
     const unseen = catalog.filter((item) => !hasSharedHistory(item));
-    return sortPersonalRecommendations(unseen.length ? unseen : catalog).slice(0, limit);
+    const ranked = sortPersonalRecommendations(unseen.length ? unseen : catalog);
+    const now = Date.now();
+    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+    const recentIds = new Set((Array.isArray(state.recommendationHistory) ? state.recommendationHistory : [])
+      .filter((entry) => Number(entry?.at || 0) > weekAgo)
+      .map((entry) => String(entry?.id || entry))
+      .filter(Boolean));
+    const freshPool = ranked.filter((item) => !recentIds.has(item.id));
+    const pool = (freshPool.length >= limit ? freshPool : ranked).slice(0, Math.min(36, ranked.length));
+    for (let index = pool.length - 1; index > 0; index -= 1) {
+      const swapIndex = Math.floor(Math.random() * (index + 1));
+      [pool[index], pool[swapIndex]] = [pool[swapIndex], pool[index]];
+    }
+    return pool.slice(0, limit);
   }
 
   function catalogCollectionDefinition(collectionId = state.catalogCollection) {
@@ -5407,7 +5459,7 @@
 
   startPetStates();
   renderRoute(initialRoute, { replaceHistory: true });
-  Promise.all([loadImportedCatalog(), loadLibraryData(false)])
+  const hydrateCatalog = () => Promise.all([loadImportedCatalog(), loadLibraryData(false)])
     .then(() => {
       catalogHydrating = false;
       initialCatalogReady = true;
@@ -5418,5 +5470,7 @@
       render();
       return openWatchRoomFromUrl();
     });
+  if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(hydrateCatalog, { timeout: 1200 });
+  else window.setTimeout(hydrateCatalog, 0);
   syncCatalogFromTmdb();
 })();
