@@ -19,7 +19,10 @@
   const viewerToken = String(window.CINEVAULT_CONFIG?.viewerToken || "").trim();
   const HLS_PLAYBACK_CONFIG = {
     enableWorker: true,
-    capLevelToPlayerSize: true,
+    // Do not silently downgrade to 480p just because the player is displayed
+    // in a smaller window. Start at the best rendition the manifest exposes;
+    // the viewer can still lower it manually when bandwidth is limited.
+    capLevelToPlayerSize: false,
     startFragPrefetch: true,
     maxBufferLength: 30,
     maxMaxBufferLength: 90,
@@ -2856,13 +2859,26 @@
     tmdbSyncStarted = true;
     const cache = loadMetadataCache();
     let synced = 0;
-    const results = await Promise.allSettled(seedCatalog.map(async (item) => {
-      const cached = cache[item.id];
-      const update = cached || await fetchTmdbDetails(item);
-      catalog = catalog.map((entry) => entry.id === item.id && !String(entry.providerName || "").startsWith("Kinopoisk") ? { ...entry, ...update } : entry);
-      cache[item.id] = update;
-      synced += 1;
-    }));
+    const results = [];
+    const queue = [...seedCatalog];
+    const worker = async () => {
+      while (queue.length) {
+        const item = queue.shift();
+        if (!item) return;
+        try {
+          const cached = cache[item.id];
+          const update = cached || await fetchTmdbDetails(item);
+          catalog = catalog.map((entry) => entry.id === item.id && !String(entry.providerName || "").startsWith("Kinopoisk") ? { ...entry, ...update } : entry);
+          cache[item.id] = update;
+          synced += 1;
+          results.push({ status: "fulfilled" });
+          scheduleCatalogRefresh();
+        } catch (error) {
+          results.push({ status: "rejected", reason: error });
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, queue.length) }, () => worker()));
     saveMetadataCache(cache);
     const failed = results.filter((result) => result.status === "rejected").length;
     tmdbStatus = failed ? `TMDB: загружено ${synced} из ${seedCatalog.length}, остальные оставлены локально` : `TMDB: постеры и данные обновлены (${synced})`;
@@ -3098,6 +3114,7 @@
     const subtitleSelect = $(`#${prefix}-hls-subtitle`);
     const audioNotice = $(`#${prefix}-audio-notice`);
     let preferredSubtitleKey = "";
+    let selectedQuality = null;
 
     const uniqueTracks = (tracks) => {
       const seen = new Set();
@@ -3116,7 +3133,13 @@
         if (!current || bitrate > current.bitrate) unique.set(tier.key, { value: index, label: tier.label, rank: tier.rank, bitrate });
       });
       const levels = [...unique.values()].sort((a, b) => b.rank - a.rank || b.bitrate - a.bitrate);
-      setSelectOptions(qualitySelect, [{ value: -1, label: "Авто" }, ...levels], hls.autoLevelEnabled ? -1 : hls.currentLevel);
+      const best = levels[0];
+      if (selectedQuality === null && best) {
+        selectedQuality = best.value;
+        hls.currentLevel = best.value;
+      }
+      const activeQuality = selectedQuality === null ? (hls.autoLevelEnabled ? -1 : hls.currentLevel) : selectedQuality;
+      setSelectOptions(qualitySelect, [{ value: -1, label: "Авто" }, ...levels], activeQuality);
       if (qualityWrap) qualityWrap.hidden = levels.length < 2;
       updatePlayerSettingsState(prefix);
     };
@@ -3148,7 +3171,10 @@
       if (subtitleWrap) subtitleWrap.hidden = tracks.length === 0;
       updatePlayerSettingsState(prefix);
     };
-    const onQualityChange = () => { hls.currentLevel = Number(qualitySelect.value); };
+    const onQualityChange = () => {
+      selectedQuality = Number(qualitySelect.value);
+      hls.currentLevel = selectedQuality;
+    };
     const onAudioChange = () => {
       const index = Number(audioSelect.value);
       preferredAudioKey = hlsTrackKey(hls.audioTracks?.[index], String(index));
@@ -3872,6 +3898,14 @@
     }), { rootMargin: "300px 0px" });
     nodes.forEach((node) => lazyPosterObserver.observe(node));
   }
+  function scheduleCatalogRefresh() {
+    if (scheduleCatalogRefresh.pending) return;
+    scheduleCatalogRefresh.pending = true;
+    window.requestAnimationFrame(() => {
+      scheduleCatalogRefresh.pending = false;
+      if (initialCatalogReady) render();
+    });
+  }
   function switchSeason(nextSeason) {
     const next = Math.max(1, Number(nextSeason) || 1);
     if (next === selectedSeason && !seasonTransitionTimer) return;
@@ -3925,8 +3959,9 @@
     const progressPct = progress ? Math.min(100, Math.round((progress.position / progress.duration) * 100)) : 0;
     const meta = [item.year, catalogRatingLabel(item), item.kind === "series" ? `${item.seasons.length} сезонов` : formatRuntime(item.runtime)].filter(Boolean);
     const genres = genresForItem(item).slice(0, 3);
-    const posterAttrs = item.posterImage ? ` data-lazy-poster="${escapeHtml(item.posterImage)}" style="--poster:${escapeHtml(item.poster || "linear-gradient(145deg, #5c3b63, #221b31)")}"` : ` style="${posterStyle(item)}"`;
-    return `<a class="poster-card ${extra}" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="Открыть ${escapeHtml(item.title)}"><div class="poster-art"${posterAttrs}>${posterTitleArt(item)}${progress ? `<span class="progress-bar" style="--progress:${progressPct}%"><i></i></span>` : ""}</div><div class="poster-card-copy"><strong>${escapeHtml(item.title)}</strong><div class="poster-card-meta">${meta.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div><p class="poster-card-description">${escapeHtml(item.description || "Подробности появятся после синхронизации каталога.")}</p><div class="poster-card-tags">${genres.map((genre) => `<span>#${escapeHtml(genre)}</span>`).join("")}</div></div></a>`;
+    const posterAttrs = item.posterImage ? ` style="--poster:${escapeHtml(item.poster || "linear-gradient(145deg, #5c3b63, #221b31)")}"` : ` style="${posterStyle(item)}"`;
+    const posterImage = item.posterImage ? `<img class="poster-art-image" src="${escapeHtml(item.posterImage)}" alt="" loading="lazy" decoding="async" aria-hidden="true">` : "";
+    return `<a class="poster-card ${extra}" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="Открыть ${escapeHtml(item.title)}"><div class="poster-art"${posterAttrs}>${posterImage}${posterTitleArt(item)}${progress ? `<span class="progress-bar" style="--progress:${progressPct}%"><i></i></span>` : ""}</div><div class="poster-card-copy"><strong>${escapeHtml(item.title)}</strong><div class="poster-card-meta">${meta.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div><p class="poster-card-description">${escapeHtml(item.description || "Подробности появятся после синхронизации каталога.")}</p><div class="poster-card-tags">${genres.map((genre) => `<span>#${escapeHtml(genre)}</span>`).join("")}</div></div></a>`;
   }
 
   function resumePoster(item, progress) {
@@ -3934,8 +3969,9 @@
     const episodeText = progress.episodeNumber ? ` · S${String(progress.seasonNumber).padStart(2, "0")}E${String(progress.episodeNumber).padStart(2, "0")}` : "";
     const playbackAttr = hasPlayableSource(item) ? `data-play-media="${item.id}"` : `data-demo-play="${item.id}"`;
     const episodeAttrs = progress.episodeNumber ? `data-resume-season="${Number(progress.seasonNumber) || 1}" data-episode="${Number(progress.episodeNumber)}"` : "";
-    const posterAttrs = item.posterImage ? ` data-lazy-poster="${escapeHtml(item.posterImage)}" style="--poster:${escapeHtml(item.poster || "linear-gradient(145deg, #5c3b63, #221b31)")}"` : ` style="${posterStyle(item)}"`;
-    return `<button class="poster-card" ${playbackAttr} ${episodeAttrs} type="button"><div class="poster-art"${posterAttrs}>${posterTitleArt(item)}<span class="progress-bar" style="--progress:${progressPct}%"><i></i></span></div><strong>${escapeHtml(item.title)}</strong><small>${item.kind === "series" ? `${item.seasons.length} сезонов${episodeText}` : `${item.year} · ${formatTime(progress.position)} из ${formatTime(progress.duration)}`}</small></button>`;
+    const posterAttrs = item.posterImage ? ` style="--poster:${escapeHtml(item.poster || "linear-gradient(145deg, #5c3b63, #221b31)")}"` : ` style="${posterStyle(item)}"`;
+    const posterImage = item.posterImage ? `<img class="poster-art-image" src="${escapeHtml(item.posterImage)}" alt="" loading="lazy" decoding="async" aria-hidden="true">` : "";
+    return `<button class="poster-card" ${playbackAttr} ${episodeAttrs} type="button"><div class="poster-art"${posterAttrs}>${posterImage}${posterTitleArt(item)}<span class="progress-bar" style="--progress:${progressPct}%"><i></i></span></div><strong>${escapeHtml(item.title)}</strong><small>${item.kind === "series" ? `${item.seasons.length} сезонов${episodeText}` : `${item.year} · ${formatTime(progress.position)} из ${formatTime(progress.duration)}`}</small></button>`;
   }
 
   function render() {
@@ -4793,7 +4829,14 @@
     let duration = Number(existing.duration || 0);
     let lastSavedAt = 0;
     let activeVariant = selectedVideoVariant(item, variants);
-    const videoSettings = hlsTrackControlsMarkup("video");
+    const variantSettings = variants.length > 1
+      ? playerSelectMarkup("video-variant", "Видеопоток", variants.map((variant) => ({
+        value: variant.id,
+        label: [variant.quality, variant.voice, variant.sourceName].filter(Boolean).join(" · "),
+        selected: variant.id === activeVariant.id,
+      })))
+      : "";
+    const videoSettings = `${variantSettings}${hlsTrackControlsMarkup("video")}`;
     modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal player-cinematic" role="dialog" aria-modal="true" aria-labelledby="video-player-title"><div class="modal-head"><div><div class="eyebrow">${episodeNumber ? `Сезон ${selectedSeason} · серия ${episodeNumber}` : "Фильм"}</div><h2 id="video-player-title">${escapeHtml(item.title)}</h2></div><button class="icon-button" id="video-close" type="button" aria-label="Закрыть">×</button></div>${playerSeriesMarkup(item, episodeNumber)}<div class="provider-frame video-frame"><video id="cinevault-video" playsinline preload="auto"></video><button class="video-play-overlay" id="video-play-overlay" type="button" aria-label="Воспроизвести">${playerIcon("play")}</button><div class="video-loading" id="video-loading" role="status" aria-live="polite">Подключаю видеопоток…</div><div class="video-error" id="video-error" role="alert" hidden></div></div>${playerToolbarMarkup("video", videoSettings)}<div class="provider-progress"><div class="player-range-wrap" id="video-range-wrap"><span class="player-range-buffer" aria-hidden="true"></span><input id="video-range" type="range" min="0" max="${duration || 1}" value="${position}" aria-label="Позиция просмотра"><output class="player-seek-time" aria-hidden="true">${formatTime(position)}</output></div><div class="player-progress-info"><span><span id="video-position">${formatTime(position)}</span> / <span id="video-duration">${formatDuration(duration)}</span></span><span class="player-buffer-status" id="video-buffer-status" role="status">Буфер: загружается…</span></div></div><div id="video-room-status" class="watch-room-status" role="status" aria-live="polite"${roomId ? "" : " hidden"}></div><p id="video-status" class="notice" aria-live="polite">${escapeHtml(item.playbackRefreshWarning || "Позиция сохраняется автоматически.")}</p><p class="attribution">${escapeHtml(item.providerNote || "Подключённый источник")} · <a href="${escapeHtml(item.licenseUrl || item.providerUrl || activeVariant.url)}" target="_blank" rel="noopener noreferrer">Источник и лицензия ↗</a></p></section></div>`;
     const fullscreenPlayer = $(".player-modal");
     installPlayerFullscreenControls(fullscreenPlayer);
@@ -4847,6 +4890,14 @@
       }
       status.innerHTML = initial ? "<strong>Подключаю видеопоток…</strong> Позиция восстановится автоматически." : `<strong>${escapeHtml(variant.quality)} · ${escapeHtml(variant.voice)}.</strong> Источник переключён без сброса позиции.`;
     };
+    $("#video-variant")?.addEventListener("change", (event) => {
+      const next = variants.find((variant) => variant.id === event.currentTarget.value);
+      if (!next || next.id === activeVariant.id) return;
+      state.playbackSelections[item.id] = { ...titlePlaybackSelection(item), source: next.quality, voice: next.voice };
+      saveState();
+      setVariant(next, !video.paused);
+      updatePlayerSettingsState("video");
+    });
     const onLoadedMetadata = () => { videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); durationLabel.textContent = formatDuration(duration); updateBuffer(); if (position > 0 && position < duration) { video.currentTime = position; status.innerHTML = `<strong>Продолжение восстановлено.</strong> Вы остановились на ${formatTime(position)}.`; } else { status.innerHTML = `<strong>Поток подключён.</strong> Жду первый фрагмент видео…`; } if (pendingPlay) { video.play().catch(() => { status.innerHTML = `<strong>Нажмите «Воспроизвести».</strong> Браузер заблокировал автозапуск.`; }); pendingPlay = false; } };
     const onTimeUpdate = () => { position = Number(video.currentTime || 0); duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); positionLabel.textContent = formatTime(position); updateBuffer(); if (Date.now() - lastSavedAt > 3000) { saveProgress(false); lastSavedAt = Date.now(); } };
     const onEnded = () => { position = duration || Number(video.currentTime || 0); saveProgress(true); roomSync?.publish({ position, playing: false }); status.innerHTML = `<strong>Просмотр завершён.</strong> Прогресс сохранён.`; };
@@ -5466,10 +5517,20 @@
   startPetStates();
   renderRoute(initialRoute, { replaceHistory: true });
   const hydrateCatalog = () => {
+    // Show the lightweight seed catalog immediately. The larger imported
+    // catalog is merged in the background so the first page is interactive
+    // without waiting for all metadata and video sources to parse.
+    catalogHydrating = false;
+    initialCatalogReady = true;
+    const startupRoute = readRouteFromLocation();
+    if (startupRoute.type === "title") {
+      state.view = "catalog";
+      render();
+    } else {
+      renderRoute(startupRoute, { replaceHistory: true });
+    }
     const importedCatalog = loadImportedCatalog()
     .then(() => {
-      catalogHydrating = false;
-      initialCatalogReady = true;
       renderRoute(readRouteFromLocation(), { replaceHistory: true });
       return loadEpisodeAssets();
     })

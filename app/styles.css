@@ -127,6 +127,7 @@ h3 { margin-bottom: 7px; font-size: 15px; }
 .poster-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
 .poster-card { min-width: 0; border: 0; padding: 0; background: transparent; color: var(--text); text-align: left; text-decoration: none; cursor: pointer; }
 .poster-art { aspect-ratio: 4 / 5; overflow: hidden; position: relative; display: flex; align-items: end; border-radius: 17px; padding: 14px; background: var(--poster, linear-gradient(145deg, #5c3b63, #221b31)); background-size: cover; background-position: center; box-shadow: 0 12px 22px rgba(0,0,0,.15); transition: transform .23s ease, box-shadow .23s ease; }
+.poster-art-image { position: absolute; z-index: 0; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center; background: var(--poster, linear-gradient(145deg, #5c3b63, #221b31)); }
 .poster-art::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, transparent 40%, rgba(0,0,0,.48)); }
 .poster-card:hover .poster-art { transform: translateY(-4px); box-shadow: 0 16px 28px rgba(0,0,0,.25); }
 .poster-title-art { position: relative; z-index: 1; font-size: 19px; line-height: 1; letter-spacing: -.05em; text-shadow: 0 2px 9px rgba(0,0,0,.32); }
