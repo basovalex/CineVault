@@ -4399,7 +4399,7 @@
     return text ? `<div class="detail-fact"><dt>${label}</dt><dd>${escapeHtml(text)}</dd></div>` : "";
   }
 
-  function renderDetails(id) {
+  function renderDetails(id, { skipPlaybackRefresh = false } = {}) {
     const item = getTitle(id);
     if (!item) return;
     stopDetailPrebuffer();
@@ -4407,6 +4407,7 @@
     activeTitleId = id;
     loadOnlineEpisodeAssets(item);
     const progress = progressForTitle(item);
+    const shouldRefreshDetailPlayback = !skipPlaybackRefresh && shouldRefreshKinopoiskPlayback(item);
     const favorite = state.favorites.includes(item.id);
     const watchlist = state.watchlist.includes(item.id);
     const resumeEpisode = progress?.episodeNumber || null;
@@ -4447,6 +4448,14 @@
     page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}<span class="detail-poster-kind">${item.kind === "series" ? "SERIES" : "MOVIE"}</span></div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"} · CineVault</div><h1>${escapeHtml(item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">★</span><strong>${ratingKinopoisk}</strong><small>КиноПоиск</small></div><div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div><div class="detail-status-card"><span class="detail-status-dot ${hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${hasPlayableSource(item) ? "Можно смотреть" : "Источник не подключён"}</strong><small>${item.kind === "series" ? `${item.seasons?.length || 0} сезонов` : formatRuntime(item.runtime)}</small></div></div><div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${detailWatch}${item.trailerUrl ? `<a class="secondary-button" href="${escapeHtml(item.trailerUrl)}" target="_blank" rel="noopener noreferrer">Трейлер ↗</a>` : ""}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? "♥ В избранном" : "♡ В избранное"}</button><button class="secondary-button" data-watchlist="${item.id}" type="button">${watchlist ? "✓ В нашем вечере" : "Добавить в наш вечер"}</button></div></div></div>${playbackPreferencesMarkup(item)}<div class="detail-facts"><dl>${factMarkup}</dl></div><div class="detail-description"><div class="section-kicker">О фильме</div><h2>${item.tagline ? escapeHtml(item.tagline) : "История, к которой хочется возвращаться"}</h2><p>${escapeHtml(item.description || "Описание пока не загружено.")}</p></div>${actors.length ? `<section class="detail-cast"><div class="section-kicker">В ролях</div><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}${providerPanel}</section>${item.kind === "series" ? renderSeasons(item) : ""}</div>`;
     $(".detail-content .hero-actions")?.insertAdjacentHTML("afterend", `<p class="detail-prebuffer-status" id="detail-prebuffer-status" role="status" aria-live="polite">Подготавливаю начало видеопотока…</p>`);
     bindPageActions();
+    if (shouldRefreshDetailPlayback) {
+      const refreshStatus = $("#detail-prebuffer-status");
+      if (refreshStatus) refreshStatus.textContent = "Обновляю видеопоток…";
+      refreshKinopoiskPlayback(item, { force: true }).then(() => {
+        if (activeTitleId === item.id) renderDetails(item.id, { skipPlaybackRefresh: true });
+      });
+      return;
+    }
     startDetailPrebuffer(item);
   }
 
@@ -4738,6 +4747,8 @@
     let pendingPlay = false;
     let hls = null;
     let roomSync = null;
+    let retryingExpiredSource = false;
+    let playerClosed = false;
     const updateBuffer = () => updatePlayerBuffer(video, duration, rangeWrap, bufferStatus);
     const setVariant = (variant, autoplay = false, initial = false) => {
       activeVariant = variant;
@@ -4769,7 +4780,42 @@
     const onLoadedMetadata = () => { videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); durationLabel.textContent = formatDuration(duration); updateBuffer(); if (position > 0 && position < duration) { video.currentTime = position; status.innerHTML = `<strong>Продолжение восстановлено.</strong> Вы остановились на ${formatTime(position)}.`; } else { status.innerHTML = `<strong>Поток подключён.</strong> Жду первый фрагмент видео…`; } if (pendingPlay) { video.play().catch(() => { status.innerHTML = `<strong>Нажмите «Воспроизвести».</strong> Браузер заблокировал автозапуск.`; }); pendingPlay = false; } };
     const onTimeUpdate = () => { position = Number(video.currentTime || 0); duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); positionLabel.textContent = formatTime(position); updateBuffer(); if (Date.now() - lastSavedAt > 3000) { saveProgress(false); lastSavedAt = Date.now(); } };
     const onEnded = () => { position = duration || Number(video.currentTime || 0); saveProgress(true); roomSync?.publish({ position, playing: false }); status.innerHTML = `<strong>Просмотр завершён.</strong> Прогресс сохранён.`; };
-    const onError = (statusCode = null) => { loading.hidden = true; showSourceErrorCard(videoError, statusCode, "Проверьте срок действия ссылки или выберите другой подключённый источник."); status.innerHTML = sourceErrorMarkup(statusCode, "<strong>Поток не открылся.</strong> Проверьте источник или выберите другой вариант."); };
+    const retryExpiredSource = async () => {
+      if (retryingExpiredSource) return;
+      retryingExpiredSource = true;
+      loading.hidden = false;
+      videoError.hidden = true;
+      status.innerHTML = "<strong>Обновляю видеопоток…</strong> Получаю свежую ссылку и подключаю её заново.";
+      try {
+        const refreshedItem = await refreshKinopoiskPlayback(item, { force: true });
+        if (playerClosed) return;
+        const refreshedVariants = getVideoVariants(refreshedItem);
+        const refreshedVariant = selectedVideoVariant(refreshedItem, refreshedVariants);
+        if (!refreshedVariant?.url || refreshedVariant.url === activeVariant.url) throw new Error("источник не отдал новую ссылку");
+        roomSync?.dispose();
+        hls?.destroy();
+        fullscreenPlayer._removeFullscreenControls?.();
+        fullscreenPlayer._exitFullscreen?.();
+        modalRoot.innerHTML = "";
+        openItemPlayer(refreshedItem, episodeNumber, selectedSeason, roomId, false);
+      } catch (error) {
+        if (playerClosed) return;
+        retryingExpiredSource = false;
+        loading.hidden = true;
+        videoError.innerHTML = `<div class="video-error-icon" aria-hidden="true">!</div><div class="video-error-copy"><strong>Не удалось обновить видеопоток</strong><p>Источник временно не выдал новую ссылку. Попробуйте открыть карточку ещё раз позже.</p></div>`;
+        videoError.hidden = false;
+        status.innerHTML = `<strong>Обновление не завершилось.</strong> ${escapeHtml(error.message || "Попробуйте ещё раз позже.")}`;
+      }
+    };
+    const onError = (statusCode = null) => {
+      if ((Number(statusCode) === 410 || statusCode == null) && shouldRefreshKinopoiskPlayback(item)) {
+        retryExpiredSource();
+        return;
+      }
+      loading.hidden = true;
+      showSourceErrorCard(videoError, statusCode, "Проверьте срок действия ссылки или выберите другой подключённый источник.");
+      status.innerHTML = sourceErrorMarkup(statusCode, "<strong>Поток не открылся.</strong> Проверьте источник или выберите другой вариант.");
+    };
     const onPlay = () => { setPlayerPlayButton(playButton, true, false); if (!roomSync?.isApplying()) roomSync?.publish({ playing: true }); };
     const onPause = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; setPlayerPlayButton(playButton, false, false); saveProgress(false); if (!roomSync?.isApplying()) roomSync?.publish({ position, playing: false }); };
     const seekBy = (seconds) => { const currentPosition = Number.isFinite(video.currentTime) ? Number(video.currentTime) : Number(position || 0); const nextPosition = Math.max(0, Math.min(video.duration || duration || Number.MAX_SAFE_INTEGER, currentPosition + seconds)); position = nextPosition; video.currentTime = nextPosition; range.value = nextPosition; positionLabel.textContent = formatTime(nextPosition); saveProgress(false); roomSync?.publish({ position: nextPosition }); };
@@ -4800,7 +4846,7 @@
         if (nextRoomStatus) { nextRoomStatus.hidden = false; nextRoomStatus.textContent = copied ? "Комната создана. Ссылка скопирована." : "Комната создана. Ссылка находится в адресной строке."; }
       } catch (error) { roomStatus.hidden = false; roomStatus.textContent = `Комнату создать не удалось: ${error.message}`; roomStatus.classList.add("is-error"); }
     });
-    const close = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; saveProgress(false); roomSync?.publish({ position, playing: false }); roomSync?.dispose(); fullscreenPlayer._exitFullscreen?.(); video.pause(); hls?.destroy(); removeLoadingState(); removeVolumeControl(); removeSettingsControl(); video.removeEventListener("loadedmetadata", onLoadedMetadata); video.removeEventListener("timeupdate", onTimeUpdate); video.removeEventListener("progress", updateBuffer); video.removeEventListener("canplay", updateBuffer); video.removeEventListener("ended", onEnded); video.removeEventListener("error", onError); video.removeEventListener("play", onPlay); video.removeEventListener("pause", onPause); fullscreenPlayer._removeFullscreenControls?.(); returnFromPlayer(); };
+    const close = () => { if (playerClosed) return; playerClosed = true; position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; saveProgress(false); roomSync?.publish({ position, playing: false }); roomSync?.dispose(); fullscreenPlayer._exitFullscreen?.(); video.pause(); hls?.destroy(); removeLoadingState(); removeVolumeControl(); removeSettingsControl(); video.removeEventListener("loadedmetadata", onLoadedMetadata); video.removeEventListener("timeupdate", onTimeUpdate); video.removeEventListener("progress", updateBuffer); video.removeEventListener("canplay", updateBuffer); video.removeEventListener("ended", onEnded); video.removeEventListener("error", onError); video.removeEventListener("play", onPlay); video.removeEventListener("pause", onPause); fullscreenPlayer._removeFullscreenControls?.(); returnFromPlayer(); };
     $("#video-close").addEventListener("click", close);
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
     setVariant(activeVariant, false, true);
