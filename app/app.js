@@ -2566,7 +2566,14 @@
   }
 
   function loadState() {
-    try { return { ...defaultState, ...JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}") }; } catch { return { ...defaultState }; }
+    try {
+      const loaded = { ...defaultState, ...JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}") };
+      // These legacy filters are intentionally no longer part of the catalog UI.
+      loaded.catalogMoodOnly = false;
+      loaded.catalogPlayableOnly = false;
+      if (loaded.catalogCollection === "mood") loaded.catalogCollection = "";
+      return loaded;
+    } catch { return { ...defaultState, catalogMoodOnly: false, catalogPlayableOnly: false }; }
   }
 
   function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
@@ -3813,23 +3820,7 @@
     return "";
   }
   function playbackPreferencesMarkup(item) {
-    if (!hasPlayableSource(item)) return "";
-    const choice = titlePlaybackSelection(item);
-    const variants = getVideoVariants(item);
-    const sourceOptions = [...new Set(variants.map((variant) => variant.quality).filter(Boolean))];
-    const voiceOptions = titleVoiceOptions(item);
-    const hlsTracks = Array.isArray(item.availableHlsAudioTracks) ? item.availableHlsAudioTracks : [];
-    const selectedVariant = selectedVideoVariant(item, variants);
-    const sourceControl = item.kind !== "series" && sourceOptions.length > 1
-      ? playerSelectMarkup("detail-playback-source", "Источник", sourceOptions.map((source) => ({ value: source, label: source, selected: source === (choice.source || selectedVariant?.quality) })))
-      : `<div class="playback-preference-static"><span>Источник</span><strong>${escapeHtml(selectedVariant?.sourceName || item.providerName || "Подключённый поток")}</strong></div>`;
-    const voiceControl = voiceOptions.length > 1
-      ? playerSelectMarkup("detail-playback-voice", "Озвучка", voiceOptions.map((voice) => ({ value: voice, label: voice, selected: voice === (choice.voice || selectedVariant?.voice) })))
-      : `<div class="playback-preference-static"><span>Озвучка</span><strong>${escapeHtml(voiceOptions[0] || selectedVariant?.voice || "По умолчанию")}</strong></div>`;
-    const hlsAudioControl = hlsTracks.length > 1
-      ? playerSelectMarkup("detail-hls-audio", "Дорожка HLS", hlsTracks.map((track) => ({ value: track.key, label: track.label, selected: track.key === (choice.hlsAudio || hlsTracks[0]?.key) })))
-      : `<select id="detail-hls-audio" hidden aria-hidden="true"></select>`;
-    return `<section class="playback-preferences" aria-label="Параметры просмотра"><div><div class="section-kicker">Перед просмотром</div><h2>Настрой один раз</h2><p>Источник и озвучка будут применяться ко всем сериям, где они доступны.</p></div><div class="playback-preferences-controls">${sourceControl}${voiceControl}${hlsAudioControl}</div></section>`;
+    return "";
   }
   function getTitle(id) { return catalog.find((item) => item.id === id); }
   function getTitleForProgress(id, progress) { return getTitle(progress?.titleId || id) || getTitle(String(id).split("-s")[0]); }
@@ -3971,7 +3962,6 @@
   });
   const catalogCollections = Object.freeze([
     { id: "popular", title: "Популярное", description: "Рейтинг и интерес в библиотеке" },
-    { id: "mood", title: "Под настроение", description: "Выбранное настроение" },
     { id: "evening", title: "На вечер", description: "Фильмы на один вечер" },
     { id: "romance", title: "Для двоих", description: "Романтика и лёгкие истории" },
     { id: "thrill", title: "Напряжённое", description: "Триллеры, детективы, ужасы" },
@@ -4215,9 +4205,7 @@
       const genres = genresForItem(item);
       const queryOkay = !query || catalogSearchText(item).includes(query);
       const genreOkay = !selectedGenre || genres.includes(selectedGenre);
-      const moodOkay = !state.catalogMoodOnly || (catalogMoodTags[state.mood] || [state.mood]).some((tag) => tags.has(normalizeCatalogGenre(tag)));
-      const playableOkay = !state.catalogPlayableOnly || hasPlayableSource(item);
-      return catalogViewMatches(item) && matchesCollection(item) && queryOkay && genreOkay && moodOkay && playableOkay;
+      return catalogViewMatches(item) && matchesCollection(item) && queryOkay && genreOkay;
     });
     // Catalog sorting is a user choice. Discovery ranking is still used for
     // recommendation shelves, but must not silently override this control in
@@ -4284,16 +4272,16 @@
     const selectedGenre = normalizeCatalogGenre(state.catalogGenre);
     const collection = catalogCollectionDefinition();
     const availableCount = catalog.filter((item) => catalogViewMatches(item) && matchesCollection(item)).length;
-    const hasFilters = Boolean(state.query || selectedGenre || collection || state.catalogMoodOnly || state.catalogPlayableOnly || state.view !== "catalog");
+    const hasFilters = Boolean(state.query || selectedGenre || collection || state.view !== "catalog");
     const title = state.view === "favorites" ? "Избранное" : state.view === "evening" ? "Наш вечер" : state.view === "history" ? "История просмотра" : state.view === "movies" ? "Фильмы" : state.view === "series" ? "Сериалы" : state.query ? `Результаты для «${escapeHtml(state.query)}»` : collection ? collection.title : "Каталог";
     const subtitle = state.view === "evening" ? "То, что хочется посмотреть вместе." : state.view === "history" ? "То, к чему можно вернуться в любой момент." : collection?.id === "mood" ? moodDefinition().description : collection ? collection.description : "Ищи по названию, актёрам и жанрам или выбери готовую подборку.";
     const genreButtons = [`<button class="genre-chip ${selectedGenre ? "" : "is-active"}" data-catalog-genre="" type="button" aria-pressed="${selectedGenre ? "false" : "true"}"><span>Все жанры</span><small>${availableCount}</small></button>`, ...genreOptions.map(({ genre, count }) => `<button class="genre-chip ${selectedGenre === genre ? "is-active" : ""}" data-catalog-genre="${escapeHtml(genre)}" type="button" aria-pressed="${selectedGenre === genre ? "true" : "false"}"><span>${escapeHtml(genre.charAt(0).toLocaleUpperCase("ru-RU") + genre.slice(1))}</span><small>${count}</small></button>`)].join("");
     const collectionButtons = [`<button class="collection-chip ${collection ? "" : "is-active"}" data-catalog-collection="" type="button" aria-pressed="${collection ? "false" : "true"}"><strong>Весь каталог</strong><small>Все фильмы и сериалы</small></button>`, ...catalogCollections.map((entry) => `<button class="collection-chip ${collection?.id === entry.id ? "is-active" : ""}" data-catalog-collection="${escapeHtml(entry.id)}" type="button" aria-pressed="${collection?.id === entry.id ? "true" : "false"}"><strong>${escapeHtml(entry.title)}</strong><small>${escapeHtml(entry.id === "mood" ? moodDefinition().description : entry.description)}</small></button>`)].join("");
-    const activeFilters = [collection ? `Подборка: ${collection.title}` : "", selectedGenre ? `Жанр: ${selectedGenre}` : "", state.catalogMoodOnly ? `Настроение: ${state.mood}` : "", state.catalogPlayableOnly ? "Только доступные" : ""].filter(Boolean).join(" · ");
+    const activeFilters = [collection ? `Подборка: ${collection.title}` : "", selectedGenre ? `Жанр: ${selectedGenre}` : ""].filter(Boolean).join(" · ");
     const emptyCopy = state.query ? `По запросу «${escapeHtml(state.query)}» ничего не найдено. Измени запрос или сбрось фильтры.` : "Попробуй другой жанр или сбрось фильтры, чтобы снова увидеть весь каталог.";
     const paginationMarkup = pagination.totalPages > 1 ? `<nav class="catalog-pagination" aria-label="Страницы каталога"><button class="secondary-button catalog-page-arrow" data-catalog-page="${pagination.currentPage - 1}" type="button" aria-label="Предыдущая страница" title="Предыдущая страница"${pagination.currentPage === 1 ? " disabled" : ""}>←</button><p aria-live="polite">Страница <strong>${pagination.currentPage}</strong> из ${pagination.totalPages}<span> · показано ${pagination.start + 1}–${pagination.end}</span></p><button class="secondary-button catalog-page-arrow" data-catalog-page="${pagination.currentPage + 1}" type="button" aria-label="Следующая страница" title="Следующая страница"${pagination.currentPage === pagination.totalPages ? " disabled" : ""}>→</button></nav>` : "";
     const genreFilterMarkup = state.view === "favorites" ? "" : `<div class="catalog-genre-heading"><h3>Жанры</h3><span>Количество карточек указано справа</span></div><div class="genre-list" role="group" aria-label="Фильтр по жанру">${genreButtons}</div>`;
-    page.innerHTML = `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls" aria-labelledby="catalog-filters-title"><div class="catalog-control-top"><div><h2 id="catalog-filters-title">Подобрать фильм</h2><p>Начни с готовой подборки или уточни тип, жанр и доступность.</p></div><div class="catalog-control-actions"><label class="catalog-sort"><span>Сортировка</span><select data-catalog-sort><option value="rating"${state.catalogSort === "rating" ? " selected" : ""}>С высоким рейтингом</option><option value="year"${state.catalogSort === "year" ? " selected" : ""}>Сначала новые</option><option value="title"${state.catalogSort === "title" ? " selected" : ""}>По алфавиту</option></select></label><button class="secondary-button catalog-random-button" data-catalog-random type="button"${items.length ? "" : " disabled"}>Выбрать случайно</button></div></div><div class="catalog-collection-heading"><h3>Подборки</h3><span>Автоматически по жанрам, рейтингу и вашей истории</span></div><div class="collection-list" role="group" aria-label="Подборки каталога">${collectionButtons}</div><div class="catalog-toolbar" role="group" aria-label="Тип и быстрые фильтры"><button class="filter-button ${state.view === "catalog" ? "is-active" : ""}" data-view="catalog" type="button" aria-pressed="${state.view === "catalog"}">Все</button><button class="filter-button ${state.view === "movies" ? "is-active" : ""}" data-view="movies" type="button" aria-pressed="${state.view === "movies"}">Фильмы</button><button class="filter-button ${state.view === "series" ? "is-active" : ""}" data-view="series" type="button" aria-pressed="${state.view === "series"}">Сериалы</button><button class="filter-button ${state.catalogPlayableOnly ? "is-active" : ""}" data-catalog-playable type="button" aria-pressed="${Boolean(state.catalogPlayableOnly)}">Можно смотреть</button><button class="filter-button ${state.catalogMoodOnly ? "is-active" : ""}" data-mood-filter="${escapeHtml(state.mood)}" type="button" aria-pressed="${Boolean(state.catalogMoodOnly)}">Под настроение: ${escapeHtml(moodDefinition().shortLabel)}</button></div>${genreFilterMarkup}<div class="catalog-result-row"><p><strong>${catalogCountLabel(items.length)}</strong>${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}</p>${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${items.length ? `<div class="poster-grid" id="catalog-results" tabindex="-1">${pageItems.map((item) => poster(item)).join("")}</div>${paginationMarkup}` : `<div class="empty-state"><div class="empty-pet">${petVisual()}</div><h2>Ничего не подошло</h2><p>${emptyCopy}</p><button class="primary-button" data-catalog-reset type="button">Сбросить фильтры</button></div>`}`;
+    page.innerHTML = `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls" aria-labelledby="catalog-filters-title"><div class="catalog-control-top"><div><h2 id="catalog-filters-title">Подобрать фильм</h2><p>Начни с готовой подборки или уточни жанр.</p></div><div class="catalog-control-actions"><label class="catalog-sort"><span>Сортировка</span><select data-catalog-sort><option value="rating"${state.catalogSort === "rating" ? " selected" : ""}>С высоким рейтингом</option><option value="year"${state.catalogSort === "year" ? " selected" : ""}>Сначала новые</option><option value="title"${state.catalogSort === "title" ? " selected" : ""}>По алфавиту</option></select></label><button class="secondary-button catalog-random-button" data-catalog-random type="button"${items.length ? "" : " disabled"}>Выбрать случайно</button></div></div><div class="catalog-collection-heading"><h3>Подборки</h3><span>Автоматически по жанрам, рейтингу и вашей истории</span></div><div class="collection-list" role="group" aria-label="Подборки каталога">${collectionButtons}</div>${genreFilterMarkup}<div class="catalog-result-row"><p><strong>${catalogCountLabel(items.length)}</strong>${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}</p>${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${items.length ? `<div class="poster-grid" id="catalog-results" tabindex="-1">${pageItems.map((item) => poster(item)).join("")}</div>${paginationMarkup}` : `<div class="empty-state"><div class="empty-pet">${petVisual()}</div><h2>Ничего не подошло</h2><p>${emptyCopy}</p><button class="primary-button" data-catalog-reset type="button">Сбросить фильтры</button></div>`}`;
     const liveStatus = $("#catalog-live-status");
     if (liveStatus) window.requestAnimationFrame(() => { liveStatus.textContent = `Каталог обновлён: ${catalogCountLabel(items.length)}.`; });
     bindPageActions();
@@ -4461,7 +4449,6 @@
     const progress = progressForTitle(item);
     const shouldRefreshDetailPlayback = !skipPlaybackRefresh && shouldRefreshKinopoiskPlayback(item);
     const favorite = state.favorites.includes(item.id);
-    const watchlist = state.watchlist.includes(item.id);
     const resumeEpisode = progress?.episodeNumber || null;
     const detailWatch = hasPlayableSource(item) ? watchButton(item, progress && !progress.completed ? "Продолжить просмотр" : "Смотреть") : item.providerUrl ? watchButton(item, "Смотреть") : "";
     const detailLocalTest = "";
@@ -4497,7 +4484,7 @@
     const actorAll = actors.length > 8 ? `<details class="detail-more"><summary>Показать всех актёров (${actors.length})</summary><div class="detail-people">${actors.map((actor) => `<span class="detail-person">${escapeHtml(actor)}</span>`).join("")}</div></details>` : "";
     const catalogReturnView = ["catalog", "movies", "series", "favorites", "evening", "history", "home"].includes(state.view) ? state.view : "catalog";
     const backLabel = catalogReturnView === "home" ? "← Назад" : "← Назад к списку";
-    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}<span class="detail-poster-kind">${item.kind === "series" ? "SERIES" : "MOVIE"}</span></div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"} · CineVault</div><h1>${escapeHtml(item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">★</span><strong>${ratingKinopoisk}</strong><small>КиноПоиск</small></div><div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div><div class="detail-status-card"><span class="detail-status-dot ${hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${hasPlayableSource(item) ? "Можно смотреть" : "Источник не подключён"}</strong><small>${item.kind === "series" ? `${item.seasons?.length || 0} сезонов` : formatRuntime(item.runtime)}</small></div></div><div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${detailWatch}${item.trailerUrl ? `<a class="secondary-button" href="${escapeHtml(item.trailerUrl)}" target="_blank" rel="noopener noreferrer">Трейлер ↗</a>` : ""}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? "♥ В избранном" : "♡ В избранное"}</button><button class="secondary-button" data-watchlist="${item.id}" type="button">${watchlist ? "✓ В нашем вечере" : "Добавить в наш вечер"}</button></div></div></div>${playbackPreferencesMarkup(item)}<div class="detail-facts"><dl>${factMarkup}</dl></div><div class="detail-description"><div class="section-kicker">О фильме</div><h2>${item.tagline ? escapeHtml(item.tagline) : "История, к которой хочется возвращаться"}</h2><p>${escapeHtml(item.description || "Описание пока не загружено.")}</p></div>${actors.length ? `<section class="detail-cast"><div class="section-kicker">В ролях</div><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}${providerPanel}</section>${item.kind === "series" ? renderSeasons(item) : ""}</div>`;
+    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}<span class="detail-poster-kind">${item.kind === "series" ? "SERIES" : "MOVIE"}</span></div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"} · CineVault</div><h1>${escapeHtml(item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">★</span><strong>${ratingKinopoisk}</strong><small>КиноПоиск</small></div><div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div><div class="detail-status-card"><span class="detail-status-dot ${hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${hasPlayableSource(item) ? "Можно смотреть" : "Источник не подключён"}</strong><small>${item.kind === "series" ? `${item.seasons?.length || 0} сезонов` : formatRuntime(item.runtime)}</small></div></div><div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${detailWatch}${item.trailerUrl ? `<a class="secondary-button" href="${escapeHtml(item.trailerUrl)}" target="_blank" rel="noopener noreferrer">Трейлер ↗</a>` : ""}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? "♥ В избранном" : "♡ В избранное"}</button></div></div></div>${playbackPreferencesMarkup(item)}<div class="detail-facts"><dl>${factMarkup}</dl></div><div class="detail-description"><div class="section-kicker">О фильме</div><h2>${item.tagline ? escapeHtml(item.tagline) : "История, к которой хочется возвращаться"}</h2><p>${escapeHtml(item.description || "Описание пока не загружено.")}</p></div>${actors.length ? `<section class="detail-cast"><div class="section-kicker">В ролях</div><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}${providerPanel}</section>${item.kind === "series" ? renderSeasons(item) : ""}</div>`;
     $(".detail-content .hero-actions")?.insertAdjacentHTML("afterend", `<p class="detail-prebuffer-status" id="detail-prebuffer-status" role="status" aria-live="polite">Подготавливаю начало видеопотока…</p>`);
     bindPageActions();
     if (shouldRefreshDetailPlayback) {
@@ -5331,18 +5318,6 @@
       renderCatalogView();
     }));
     $$('[data-open-collection]').forEach((button) => button.addEventListener("click", () => openCatalogCollection(button.dataset.openCollection)));
-    $$('[data-mood-filter]').forEach((button) => button.addEventListener("click", () => {
-      state.catalogMoodOnly = !state.catalogMoodOnly;
-      resetCatalogPage();
-      saveState();
-      renderCatalogView();
-    }));
-    $('[data-catalog-playable]')?.addEventListener("click", () => {
-      state.catalogPlayableOnly = !state.catalogPlayableOnly;
-      resetCatalogPage();
-      saveState();
-      renderCatalogView();
-    });
     $('[data-catalog-sort]')?.addEventListener("change", (event) => {
       state.catalogSort = event.currentTarget.value;
       resetCatalogPage();
