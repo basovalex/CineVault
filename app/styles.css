@@ -176,6 +176,17 @@ h3 { margin-bottom: 7px; font-size: 15px; }
 .catalog-pagination p strong { color: var(--text); }
 .catalog-pagination span { white-space: nowrap; }
 .catalog-pagination .secondary-button { min-width: 108px; }
+.catalog-loading-shell { border: 1px solid var(--line); border-radius: 22px; padding: clamp(24px, 4vw, 42px); background: var(--surface); }
+.catalog-loading-shell h1 { margin: 7px 0 8px; }
+.catalog-loading-shell > p { margin: 0; color: var(--muted); }
+.catalog-loading-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; margin-top: 28px; }
+.catalog-loading-card { min-width: 0; }
+.catalog-loading-poster, .catalog-loading-line { display: block; background: linear-gradient(110deg, color-mix(in srgb, var(--surface-2) 86%, transparent) 8%, color-mix(in srgb, var(--surface-3) 82%, transparent) 18%, color-mix(in srgb, var(--surface-2) 86%, transparent) 33%); background-size: 220% 100%; animation: catalog-loading-shimmer 1.25s linear infinite; }
+.catalog-loading-poster { aspect-ratio: 2 / 3; border-radius: 14px; }
+.catalog-loading-line { width: 58%; height: 12px; margin-top: 11px; border-radius: 6px; }
+.catalog-loading-line-wide { width: 84%; height: 15px; margin-top: 14px; }
+@keyframes catalog-loading-shimmer { to { background-position: -220% 0; } }
+@media (max-width: 720px) { .catalog-loading-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; } .catalog-loading-shell { padding: 20px 16px; } }
 @media (hover: hover) {
   .filter-button:hover, .genre-chip:hover { border-color: var(--accent); color: var(--text); }
   .catalog-random-button:hover { border-color: var(--accent); }

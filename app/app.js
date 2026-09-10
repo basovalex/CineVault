@@ -2329,6 +2329,7 @@
   let tmdbStatus = tmdbCredential ? "Загружаю постеры и данные TMDB…" : "TMDB-ключ не найден";
   let tmdbSyncStarted = false;
   let initialCatalogReady = false;
+  let catalogHydrating = true;
   let selectedSeason = 1;
   let seasonTransitionTimer = null;
   let activeTitleId = null;
@@ -2402,6 +2403,12 @@
   }
 
   function renderRoute(route, { restoreScroll = false, replaceHistory = false } = {}) {
+    if (catalogHydrating && route.type === "title") {
+      state.view = "catalog";
+      renderCatalogLoading();
+      updateDocumentRoute({ type: "view", view: "catalog" });
+      return;
+    }
     if (route.type === "title") {
       const item = getTitle(route.id);
       if (!item) {
@@ -3810,6 +3817,12 @@
   function setPetState(mode = "idle") { const rail = $("#assistant-rail"); const pet = $("#assistant-pet"); if (!rail || !pet) return; rail.classList.remove("is-sleeping", "is-snacking"); pet.classList.remove("is-sleeping", "is-eating", "is-falling", "is-happy"); if (mode === "sleep") { rail.classList.add("is-sleeping"); pet.classList.add("is-sleeping"); } if (mode === "snack") { rail.classList.add("is-snacking"); pet.classList.add("is-eating"); } if (mode === "fall") pet.classList.add("is-falling"); if (mode === "happy") pet.classList.add("is-happy"); }
   function startPetStates() { const modes = ["idle", "snack", "idle", "sleep", "idle", "fall", "happy"]; let index = 0; setPetState(modes[index]); window.setInterval(() => { index = (index + 1) % modes.length; setPetState(modes[index]); }, 5200); }
   function persistAndRender() { saveState(); render(); }
+  function renderCatalogLoading() {
+    const viewLabels = { home: "Для вас", catalog: "Каталог", movies: "Фильмы", series: "Сериалы", favorites: "Избранное", evening: "Наш вечер", history: "История просмотра" };
+    const label = viewLabels[state.view] || "Каталог";
+    const skeletons = Array.from({ length: 8 }, (_, index) => `<div class="catalog-loading-card" aria-hidden="true"><div class="catalog-loading-poster"></div><span class="catalog-loading-line catalog-loading-line-wide"></span><span class="catalog-loading-line"></span></div>`).join("");
+    page.innerHTML = `<section class="catalog-loading-shell" role="status" aria-live="polite"><div class="eyebrow">CineVault</div><h1>${label}</h1><p>Подготавливаю страницу и загружаю карточки…</p><div class="catalog-loading-grid">${skeletons}</div></section>`;
+  }
   function switchSeason(nextSeason) {
     const next = Math.max(1, Number(nextSeason) || 1);
     if (next === selectedSeason && !seasonTransitionTimer) return;
@@ -3854,6 +3867,10 @@
     syncAssistant();
     $("#search").value = state.query;
     $$(".nav-item[data-view]").forEach((button) => button.classList.toggle("is-active", button.dataset.view === state.view));
+    if (catalogHydrating && ["home", "catalog", "movies", "series", "favorites", "evening", "history"].includes(state.view)) {
+      renderCatalogLoading();
+      return;
+    }
     if (state.view === "home") renderHome();
     else if (["catalog", "movies", "series", "favorites", "evening", "history"].includes(state.view)) renderCatalogView();
     else if (state.view === "library") renderLibraryView();
@@ -5225,12 +5242,16 @@
   $("#assistant-recommend")?.addEventListener("click", () => { const pick = recommendation(); if (!pick) return; setPetState("happy"); openTitleRoute(pick.id); });
 
   startPetStates();
-  page.innerHTML = `<section class="empty-state" role="status"><div class="empty-pet">◌</div><h2>Загружаю каталог…</h2><p>Подготавливаю сериалы, названия серий и превью.</p></section>`;
+  renderRoute(initialRoute, { replaceHistory: true });
   Promise.all([loadImportedCatalog(), loadLibraryData(false)])
-    .then(() => loadEpisodeAssets())
     .then(() => {
+      catalogHydrating = false;
       initialCatalogReady = true;
       renderRoute(readRouteFromLocation(), { replaceHistory: true });
+      return loadEpisodeAssets();
+    })
+    .then(() => {
+      render();
       return openWatchRoomFromUrl();
     });
   syncCatalogFromTmdb();
