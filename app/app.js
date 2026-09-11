@@ -4645,8 +4645,10 @@
     activeTitleId = id;
     loadOnlineEpisodeAssets(item);
     const progress = progressForTitle(item);
-    // Series streams refresh only when the user opens a specific episode.
-    const shouldRefreshDetailPlayback = item.kind !== "series" && !skipPlaybackRefresh && shouldRefreshKinopoiskPlayback(item);
+    // Refresh the current Kinopoisk card as soon as its detail page opens.
+    // This covers series as well as films, so an episode opened immediately
+    // afterwards receives the fresh per-episode source map.
+    const shouldRefreshDetailPlayback = !skipPlaybackRefresh && shouldRefreshKinopoiskPlayback(item);
     const favorite = state.favorites.includes(item.id);
     const resumeEpisode = progress?.episodeNumber || null;
     const detailWatch = hasPlayableSource(item) ? watchButton(item, progress && !progress.completed ? "Продолжить просмотр" : "Смотреть") : item.providerUrl ? watchButton(item, "Смотреть") : "";

@@ -1,4 +1,4 @@
-const SHELL_CACHE = "cinevault-shell-v18";
+const SHELL_CACHE = "cinevault-shell-v19";
 const MEDIA_CACHE = "cinevault-media-v1";
 const SHELL = ["/", "/index.html", "/styles.css", "/app.js", "/manifest.json", "/favicon.svg"];
 const SHELL_PATHS = new Set(["/", "/index.html", "/styles.css", "/app.js", "/manifest.json", "/favicon.svg"]);
