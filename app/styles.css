@@ -125,6 +125,7 @@ h3 { margin-bottom: 7px; font-size: 15px; }
 .section-header h2 { margin: 0; }
 .section-header a, .text-button { border: 0; background: transparent; color: var(--accent); cursor: pointer; font-size: 12px; }
 .poster-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.catalog-lazy-sentinel { grid-column: 1 / -1; min-height: 1px; pointer-events: none; }
 .poster-card { min-width: 0; border: 0; padding: 0; background: transparent; color: var(--text); text-align: left; text-decoration: none; cursor: pointer; }
 .poster-art { aspect-ratio: 4 / 5; overflow: hidden; position: relative; display: flex; align-items: end; border-radius: 17px; padding: 14px; background: var(--poster, linear-gradient(145deg, #5c3b63, #221b31)); background-size: cover; background-position: center; box-shadow: 0 12px 22px rgba(0,0,0,.15); transition: transform .23s ease, box-shadow .23s ease; }
 .poster-art-image { position: absolute; z-index: 0; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center; background: var(--poster, linear-gradient(145deg, #5c3b63, #221b31)); }
@@ -171,6 +172,7 @@ h3 { margin-bottom: 7px; font-size: 15px; }
 .catalog-result-row p { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px 12px; margin: 0; }
 .catalog-result-row strong { font-size: 14px; font-variant-numeric: tabular-nums; }
 .catalog-result-row span { color: var(--muted); font-size: 12px; }
+.catalog-loading-status { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .catalog-result-row .text-button { min-height: 40px; padding: 8px; white-space: nowrap; }
 .catalog-pagination { display: flex; align-items: center; justify-content: center; gap: clamp(18px, 4vw, 44px); margin-top: 26px; padding: 14px 0; border-top: 1px solid var(--line); }
 .catalog-pagination p { margin: 0; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; text-align: center; }
@@ -315,7 +317,7 @@ button.episode-card-art:hover { border-color: var(--accent); transform: translat
 .typing-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--steel); animation: typing 1.1s ease-in-out infinite; }
 .typing-dots i:nth-child(2) { animation-delay: .14s; }
 .typing-dots i:nth-child(3) { animation-delay: .28s; }
-.assistant-pet { position: relative; width: 151px; height: 151px; border: 0; padding: 0; background: transparent; cursor: pointer; pointer-events: auto; filter: drop-shadow(0 14px 18px rgba(0,0,0,.28)); }
+.assistant-pet { position: relative; width: 151px; height: 151px; border: 0; padding: 0; background: transparent; cursor: pointer; pointer-events: auto; filter: drop-shadow(0 14px 18px rgba(0,0,0,.28)); transition: width .25s ease, height .25s ease, filter .25s ease; }
 .assistant-pet img { display: block; width: 100%; height: 100%; object-fit: contain; animation: pet-float 4.2s ease-in-out infinite; transform-origin: 50% 92%; }
 .assistant-pet:hover { filter: drop-shadow(0 15px 20px rgba(0,0,0,.34)) saturate(1.08); }
 .assistant-pet.is-sleeping img { animation: pet-sleep 3.6s ease-in-out infinite; }
@@ -327,6 +329,11 @@ button.episode-card-art:hover { border-color: var(--accent); transform: translat
 .assistant-rail.is-snacking .pet-state-snack::after { content: " 🍪"; }
 .assistant-rail.is-collapsed .assistant-bubble { display: none; }
 .assistant-rail.is-collapsed .assistant-pet img { animation-duration: 3.2s; }
+.assistant-rail.is-pagination-collapsed { width: 82px; }
+.assistant-rail.is-pagination-collapsed .assistant-bubble { display: none; }
+.assistant-rail.is-pagination-collapsed .assistant-pet { width: 76px; height: 76px; border: 1px solid color-mix(in srgb, var(--steel) 48%, var(--line)); border-radius: 50%; background: color-mix(in srgb, var(--surface-2) 88%, transparent); }
+.assistant-rail.is-pagination-collapsed .pet-state { display: none; }
+.assistant-rail.is-pagination-collapsed .assistant-pet img { animation-duration: 3.2s; }
 
 @keyframes bubble-in { from { opacity: 0; transform: translateY(10px) scale(.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes typing { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
@@ -523,6 +530,8 @@ button.episode-card-art:hover { border-color: var(--accent); transform: translat
   .sidebar-bottom .nav-item { width: 42px; flex: 0 0 42px; }
   .main-area { padding-bottom: 96px; }
   .assistant-rail { bottom: 76px; }
+  .assistant-rail.is-pagination-collapsed { width: 92px; }
+  .assistant-rail.is-pagination-collapsed .assistant-pet { width: 82px; height: 82px; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

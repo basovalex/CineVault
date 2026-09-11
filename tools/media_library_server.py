@@ -19,6 +19,7 @@ import mimetypes
 import os
 import re
 import shutil
+import threading
 import shlex
 import sqlite3
 import ssl
@@ -47,6 +48,14 @@ ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT / "app"
 DEFAULT_DATA_DIR = ROOT / "data" / "media-library"
 CATALOG_IMPORTS_PATH = APP_DIR / "data" / "catalog_imports.json"
+CATALOG_INDEX_FIELDS = (
+    "id", "kind", "title", "originalTitle", "year", "description", "tags", "genres",
+    "rating", "ratingKinopoisk", "imdbRating", "seasons", "runtime", "kinopoiskId",
+    "catalogId", "poster", "posterImage", "providerUrl", "providerName", "providerNote", "tagline",
+)
+
+_catalog_cache_lock = threading.Lock()
+_catalog_cache: Dict[str, Any] = {"mtime_ns": None, "items": []}
 SITEMAP_VIEW_PATHS = ("/", "/catalog/", "/movies/", "/series/")
 SITEMAP_SEED_TITLE_IDS = {
     "sintel-open",
@@ -702,6 +711,121 @@ def update_catalog_from_source_json(
     temporary_path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary_path, catalog_path)
     return {"entry": entry, "accepted": len(normalized["variants"]), "skipped": normalized["skipped"], "created": existing_index is None}
+
+
+def imported_catalog_entries(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[Dict[str, Any]]:
+    try:
+        mtime_ns = catalog_path.stat().st_mtime_ns
+    except OSError as exc:
+        raise RuntimeError("Каталог CineVault временно недоступен") from exc
+    cache_key = str(catalog_path.resolve())
+    with _catalog_cache_lock:
+        if _catalog_cache.get("path") == cache_key and _catalog_cache.get("mtime_ns") == mtime_ns:
+            return _catalog_cache["items"]
+    try:
+        payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Каталог CineVault временно недоступен") from exc
+    items = [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+    with _catalog_cache_lock:
+        _catalog_cache.update({"path": cache_key, "mtime_ns": mtime_ns, "items": items})
+    return items
+
+
+def imported_catalog_index(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[Dict[str, Any]]:
+    return [{key: item[key] for key in CATALOG_INDEX_FIELDS if key in item} for item in imported_catalog_entries(catalog_path)]
+
+
+def imported_catalog_item(identifier: str, catalog_path: Path = CATALOG_IMPORTS_PATH) -> Dict[str, Any]:
+    needle = str(identifier).strip()
+    for item in imported_catalog_entries(catalog_path):
+        if str(item.get("id", "")) == needle or str(item.get("kinopoiskId", "")) == needle:
+            return dict(item)
+    raise KeyError("Карточка каталога не найдена")
+
+
+def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
+    """Return a small, server-filtered page of catalog cards."""
+    items = imported_catalog_entries()
+    query = str(params.get("search", [""])[0]).strip().casefold()
+    genre = str(params.get("genre", [""])[0]).strip().casefold()
+    kind = str(params.get("type", params.get("kind", [""]))[0]).strip().casefold()
+    collection = str(params.get("collection", [""])[0]).strip().casefold()
+    collection = {"romance": "together", "thrill": "tense"}.get(collection, collection)
+    sort = str(params.get("sort", ["rating"])[0]).strip().casefold()
+    if kind in {"movies", "film", "films"}:
+        kind = "movie"
+    if kind in {"serial", "serials", "tv"}:
+        kind = "series"
+
+    def text(item: Dict[str, Any]) -> str:
+        fields = [item.get("title"), item.get("originalTitle"), item.get("description"), item.get("tagline")]
+        fields += item.get("tags", []) if isinstance(item.get("tags"), list) else []
+        fields += item.get("genres", []) if isinstance(item.get("genres"), list) else []
+        return " ".join(str(value or "") for value in fields).casefold()
+
+    def genres(item: Dict[str, Any]) -> set[str]:
+        values = item.get("genres") if isinstance(item.get("genres"), list) else item.get("tags", [])
+        return {str(value).strip().casefold() for value in values if str(value).strip()}
+
+    def matches(item: Dict[str, Any]) -> bool:
+        if kind and str(item.get("kind", "")).casefold() != kind:
+            return False
+        if query and query not in text(item):
+            return False
+        if genre and genre not in genres(item):
+            return False
+        if collection == "popular" and float(item.get("ratingKinopoisk") or item.get("rating") or 0) < 7:
+            return False
+        if collection in {"evening", "mood"}:
+            if not (genres(item) & {"уютно", "на вечер", "комедия", "драма", "мелодрама", "приключения", "семейный"}):
+                return False
+        if collection == "anime" and "аниме" not in genres(item):
+            return False
+        if collection == "tense" and not (genres(item) & {"триллер", "детектив", "ужасы", "криминал"}):
+            return False
+        if collection == "together" and not (genres(item) & {"романтика", "мелодрама", "комедия"}):
+            return False
+        return True
+
+    filtered = [item for item in items if matches(item)]
+    def rating(item: Dict[str, Any]) -> float:
+        try:
+            return float(item.get("ratingKinopoisk") or item.get("rating") or item.get("imdbRating") or 0)
+        except (TypeError, ValueError):
+            return 0
+    if sort in {"year", "year_desc", "new"}:
+        filtered.sort(key=lambda item: (int(item.get("year") or 0), rating(item)), reverse=True)
+    elif sort in {"title", "alphabetical"}:
+        filtered.sort(key=lambda item: str(item.get("title") or "").casefold())
+    else:
+        filtered.sort(key=lambda item: (rating(item), int(item.get("year") or 0)), reverse=True)
+
+    try:
+        page = max(1, int(params.get("page", ["1"])[0]))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        limit = min(50, max(1, int(params.get("limit", ["50"])[0])))
+    except (TypeError, ValueError):
+        limit = 50
+    total = len(filtered)
+    pages = max(1, (total + limit - 1) // limit)
+    page = min(page, pages)
+    start = (page - 1) * limit
+    return {"items": [{key: item[key] for key in CATALOG_INDEX_FIELDS if key in item} for item in filtered[start:start + limit]], "page": page, "limit": limit, "total": total, "pages": pages}
+
+
+def catalog_facets(params: Dict[str, list[str]]) -> Dict[str, Any]:
+    items = imported_catalog_entries()
+    counts: Dict[str, int] = {}
+    for item in items:
+        values = item.get("genres") if isinstance(item.get("genres"), list) else item.get("tags", [])
+        for value in values:
+            name = str(value).strip().casefold()
+            if name and name not in {"уютно", "для нас", "на вечер", "напряжённо", "атмосферно", "классика"}:
+                counts[name] = counts.get(name, 0) + 1
+    return {"total": len(items), "movies": sum(item.get("kind") == "movie" for item in items), "series": sum(item.get("kind") == "series" for item in items), "genres": counts}
 
 
 class MediaLibrary:
@@ -1727,6 +1851,28 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
             self.send_text(200, "User-agent: *\nAllow: /\nSitemap: /sitemap.xml\n", "text/plain; charset=utf-8", cache_control="no-cache")
         elif parsed.path == "/api/health":
             self.send_json(200, {"ok": True, "service": "cinevault-media-library"})
+        elif parsed.path == "/api/catalog/index":
+            try:
+                items = imported_catalog_index()
+                self.send_json(200, {"items": items, "total": len(items)})
+            except RuntimeError as exc:
+                self.send_json(503, {"error": str(exc)})
+        elif parsed.path.startswith("/api/catalog/imported/"):
+            try:
+                item = imported_catalog_item(unquote(parsed.path.rsplit("/", 1)[-1]))
+                self.send_json(200, item)
+            except (KeyError, RuntimeError) as exc:
+                self.send_json(404 if isinstance(exc, KeyError) else 503, {"error": str(exc)})
+        elif parsed.path == "/api/catalog":
+            try:
+                self.send_json(200, catalog_page(urllib.parse.parse_qs(parsed.query)))
+            except (RuntimeError, ValueError) as exc:
+                self.send_json(503, {"error": str(exc)})
+        elif parsed.path == "/api/catalog/facets":
+            try:
+                self.send_json(200, catalog_facets(urllib.parse.parse_qs(parsed.query)))
+            except (RuntimeError, ValueError) as exc:
+                self.send_json(503, {"error": str(exc)})
         elif parsed.path == "/api/catalog/search":
             params = urllib.parse.parse_qs(parsed.query)
             try:

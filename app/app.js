@@ -2327,7 +2327,16 @@
   if (state.theme !== "graphite") { state.theme = "graphite"; saveState(); }
   const initialRoute = readRouteFromLocation();
   if (initialRoute.type === "view") state.view = initialRoute.view;
-  let catalog = [...seedCatalog, ...openMediaCatalog].map((item) => ({ ...item }));
+  // The catalog is populated only from the current imported/backend data.
+  // Keeping demo seed cards out prevents stale local entries from flashing
+  // while the real catalog is being loaded.
+  let catalog = [];
+  const importedDetailsLoading = new Set();
+  const importedDetailsLoaded = new Set();
+  let remoteCatalog = { page: 1, pages: 1, total: 0, facets: { genres: {} } };
+  let remoteCatalogRequest = 0;
+  let remoteCatalogLoading = false;
+  let catalogSearchTimer = null;
   const posterOverrides = Object.freeze({
     "kinopoisk-5304403": "https://old.mvapspdmpg.com/movies/files/posters/147213.jpeg",
   });
@@ -2335,7 +2344,6 @@
     catalog = catalog.map((item) => posterOverrides[item.id] ? { ...item, posterImage: posterOverrides[item.id] } : item);
   }
   applyPosterOverrides();
-  Object.assign(catalog.find((item) => item.id === "desperate-housewives"), importedDesperateHousewives);
   let tmdbStatus = tmdbCredential ? "Загружаю постеры и данные TMDB…" : "TMDB-ключ не найден";
   let tmdbSyncStarted = false;
   let initialCatalogReady = false;
@@ -2343,6 +2351,11 @@
   // the imported catalog is ready instead of exposing the seed catalog.
   let catalogHydrating = initialRoute.type === "title" || (initialRoute.type === "view" && ["home", "catalog", "movies", "series", "favorites", "evening", "history"].includes(initialRoute.view));
   let lazyPosterObserver = null;
+  let progressiveCatalogObserver = null;
+  let assistantPaginationObserver = null;
+  let assistantPaginationDismissed = false;
+  let progressiveCatalogItems = [];
+  let progressiveCatalogNext = 0;
   let selectedSeason = 1;
   let seasonTransitionTimer = null;
   let activeTitleId = null;
@@ -2445,11 +2458,20 @@
     }
 
     state.view = route.view;
+    const catalogViews = ["catalog", "movies", "series", "favorites", "evening", "history"];
+    const shouldReloadCatalog = catalogViews.includes(route.view) && !catalogHydrating;
+    if (shouldReloadCatalog) {
+      catalog = [];
+      remoteCatalog = { page: 1, pages: 1, total: 0, facets: remoteCatalog.facets };
+      remoteCatalogLoading = true;
+      resetCatalogPage();
+    }
     saveState();
     if (replaceHistory) window.history.replaceState(routeHistoryState(route), "", window.location.href);
     render();
     updateDocumentRoute(route);
     scheduleScroll(restoreScroll ? window.history.state?.scrollY : 0);
+    if (shouldReloadCatalog && !catalogHydrating) loadRemoteCatalogPage(1);
     if (state.view === "history") loadLibraryData(true);
   }
 
@@ -2537,35 +2559,63 @@
   window.addEventListener("popstate", () => renderRoute(readRouteFromLocation(), { restoreScroll: true }));
 
   async function loadImportedCatalog() {
+    await loadRemoteCatalogFacets();
+    await loadRemoteCatalogPage(Number(state.catalogPage) || 1, { initial: true });
+  }
+
+  async function loadRemoteCatalogPage(pageNumber = 1, { initial = false } = {}) {
+    const requestId = ++remoteCatalogRequest;
     try {
-      const response = await fetch("./data/catalog_imports.json", { cache: "no-store", headers: { accept: "application/json" } });
+      const params = new URLSearchParams({ page: String(pageNumber), limit: "50", sort: state.catalogSort || "rating" });
+      if (state.query) params.set("search", state.query);
+      if (state.catalogGenre) params.set("genre", state.catalogGenre);
+      if (state.view === "movies" || state.view === "series") params.set("type", state.view === "movies" ? "movie" : "series");
+      if (state.catalogCollection) params.set("collection", state.catalogCollection);
+      remoteCatalogLoading = true;
+      if (!initial && catalog.length) renderCatalogView();
+      const response = await apiFetch(`/api/catalog?${params}`, { cache: "no-store", headers: { accept: "application/json" } });
       if (!response.ok) return;
-      const imported = await response.json();
+      const payload = await response.json();
+      if (requestId !== remoteCatalogRequest) return;
+      const imported = payload.items;
       if (!Array.isArray(imported)) return;
-      imported.forEach((entry) => {
-        if (!entry || !entry.kinopoiskId) return;
-        const existing = catalog.find((item) =>
-          item.id === entry.id ||
-          Number(item.kinopoiskId || item.kinopoisk_id || 0) === Number(entry.kinopoiskId)
-        );
-        if (!existing) {
-          catalog.push({ ...entry });
-          return;
-        }
+      catalog = imported.map((entry) => {
         const isImportedDesperateHousewives = Number(entry.catalogId || 0) === 2205 || Number(entry.kinopoiskId || 0) === 160958;
-        const merged = { ...existing, ...entry, id: existing.id || entry.id };
-        if (isImportedDesperateHousewives) {
-          merged.posterImage = importedDesperateHousewives.posterImage;
-          merged.episodePosterUrls = importedDesperateHousewives.episodePosterUrls;
-        }
-        if (Array.isArray(existing.seasons) && existing.seasons.length) merged.seasons = existing.seasons;
-        merged.tags = [...new Set([...(existing.tags || []), ...(entry.tags || [])])];
-        catalog = catalog.map((item) => item === existing ? merged : item);
+        return isImportedDesperateHousewives ? { ...entry, posterImage: importedDesperateHousewives.posterImage, episodePosterUrls: importedDesperateHousewives.episodePosterUrls } : entry;
       });
+      remoteCatalog = { page: payload.page, pages: payload.pages, total: payload.total, facets: remoteCatalog.facets };
+      state.catalogPage = payload.page;
+      remoteCatalogLoading = false;
       applyPosterOverrides();
-      if (activeTitleId) renderDetails(activeTitleId);
+      if (initial || state.view !== "home") render();
     } catch (error) {
-      // Static catalog remains available when no generated import file exists.
+      // The loading shell remains visible when the backend is unavailable.
+      remoteCatalogLoading = false;
+    }
+  }
+
+  async function loadRemoteCatalogFacets() {
+    try {
+      const response = await apiFetch("/api/catalog/facets", { cache: "no-store", headers: { accept: "application/json" } });
+      if (response.ok) remoteCatalog.facets = await response.json();
+    } catch {}
+  }
+
+  async function loadImportedTitleDetails(item) {
+    const kinopoiskId = String(item?.kinopoiskId || "").trim();
+    if (!kinopoiskId || importedDetailsLoaded.has(kinopoiskId) || importedDetailsLoading.has(kinopoiskId)) return;
+    importedDetailsLoading.add(kinopoiskId);
+    try {
+      const response = await apiFetch(`/api/catalog/imported/${encodeURIComponent(kinopoiskId)}`, { cache: "no-store", headers: { accept: "application/json" } });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const details = await response.json();
+      catalog = catalog.map((entry) => entry.id === item.id ? { ...entry, ...details } : entry);
+      importedDetailsLoaded.add(kinopoiskId);
+      if (activeTitleId === item.id) renderDetails(item.id, { skipPlaybackRefresh: true });
+    } catch {
+      // Keep the lightweight card usable if the full source payload is unavailable.
+    } finally {
+      importedDetailsLoading.delete(kinopoiskId);
     }
   }
 
@@ -3898,6 +3948,13 @@
     }), { rootMargin: "300px 0px" });
     nodes.forEach((node) => lazyPosterObserver.observe(node));
   }
+  function scrollToCatalogResults() {
+    const results = $("#catalog-results");
+    if (!results) return;
+    const top = Math.max(0, results.getBoundingClientRect().top + window.scrollY - 24);
+    window.scrollTo({ top, behavior: "smooth" });
+    results.focus({ preventScroll: true });
+  }
   function scheduleCatalogRefresh() {
     if (scheduleCatalogRefresh.pending) return;
     scheduleCatalogRefresh.pending = true;
@@ -3905,6 +3962,36 @@
       scheduleCatalogRefresh.pending = false;
       if (initialCatalogReady) render();
     });
+  }
+  function appendCatalogBatch() {
+    const grid = $("#catalog-results");
+    if (!grid || progressiveCatalogNext >= progressiveCatalogItems.length) return;
+    const next = Math.min(progressiveCatalogNext + 12, progressiveCatalogItems.length);
+    const markup = progressiveCatalogItems.slice(progressiveCatalogNext, next).map((item) => poster(item)).join("");
+    grid.insertAdjacentHTML("beforeend", markup);
+    progressiveCatalogNext = next;
+    hydrateLazyPosters();
+    if (progressiveCatalogNext >= progressiveCatalogItems.length) {
+      progressiveCatalogObserver?.disconnect();
+      progressiveCatalogObserver = null;
+      $("#catalog-lazy-sentinel")?.remove();
+    }
+  }
+  function hydrateProgressiveCatalog() {
+    progressiveCatalogObserver?.disconnect();
+    progressiveCatalogObserver = null;
+    const sentinel = $("#catalog-lazy-sentinel");
+    if (!sentinel || progressiveCatalogNext >= progressiveCatalogItems.length) return;
+    if (!("IntersectionObserver" in window)) {
+      appendCatalogBatch();
+      return;
+    }
+    progressiveCatalogObserver = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      appendCatalogBatch();
+      if (progressiveCatalogNext < progressiveCatalogItems.length) progressiveCatalogObserver.observe(sentinel);
+    }, { rootMargin: "700px 0px" });
+    progressiveCatalogObserver.observe(sentinel);
   }
   function switchSeason(nextSeason) {
     const next = Math.max(1, Number(nextSeason) || 1);
@@ -4240,6 +4327,11 @@
   }
 
   function catalogGenreOptions() {
+    if (remoteCatalog.facets?.genres) {
+      return Object.entries(remoteCatalog.facets.genres)
+        .map(([genre, count]) => ({ genre, count }))
+        .sort((left, right) => right.count - left.count || left.genre.localeCompare(right.genre, "ru"));
+    }
     const counts = new Map();
     catalog.filter((item) => catalogViewMatches(item) && matchesCollection(item)).forEach((item) => genresForItem(item).forEach((genre) => counts.set(genre, (counts.get(genre) || 0) + 1)));
     const selectedGenre = normalizeCatalogGenre(state.catalogGenre);
@@ -4264,6 +4356,7 @@
   }
 
   function filteredCatalog() {
+    if (remoteCatalog.total) return catalog;
     const query = String(state.query || "").trim().toLocaleLowerCase("ru-RU");
     const selectedGenre = normalizeCatalogGenre(state.catalogGenre);
     const items = catalog.filter((item) => {
@@ -4288,6 +4381,10 @@
 
   const catalogPageSize = 50;
   function catalogPagination(items) {
+    if (remoteCatalog.total) {
+      const currentPage = Math.min(Math.max(Number(remoteCatalog.page) || 1, 1), Math.max(1, remoteCatalog.pages));
+      return { currentPage, totalPages: Math.max(1, remoteCatalog.pages), start: (currentPage - 1) * 50, end: Math.min(currentPage * 50, remoteCatalog.total), items };
+    }
     const totalPages = Math.max(1, Math.ceil(items.length / catalogPageSize));
     const currentPage = Math.min(Math.max(Number(state.catalogPage) || 1, 1), totalPages);
     const start = (currentPage - 1) * catalogPageSize;
@@ -4330,14 +4427,22 @@
   }
 
   function renderCatalogView() {
+    if (remoteCatalogLoading && !catalog.length) {
+      renderCatalogLoading();
+      return;
+    }
     const items = filteredCatalog();
     const pagination = catalogPagination(items);
     if (state.catalogPage !== pagination.currentPage) state.catalogPage = pagination.currentPage;
     const pageItems = pagination.items;
+    progressiveCatalogObserver?.disconnect();
+    progressiveCatalogObserver = null;
+    progressiveCatalogItems = pageItems;
+    progressiveCatalogNext = Math.min(16, pageItems.length);
     const genreOptions = catalogGenreOptions();
     const selectedGenre = normalizeCatalogGenre(state.catalogGenre);
     const collection = catalogCollectionDefinition();
-    const availableCount = catalog.filter((item) => catalogViewMatches(item) && matchesCollection(item)).length;
+    const availableCount = remoteCatalog.total || catalog.filter((item) => catalogViewMatches(item) && matchesCollection(item)).length;
     const hasFilters = Boolean(state.query || selectedGenre || collection || state.view !== "catalog");
     const title = state.view === "favorites" ? "Избранное" : state.view === "evening" ? "Наш вечер" : state.view === "history" ? "История просмотра" : state.view === "movies" ? "Фильмы" : state.view === "series" ? "Сериалы" : state.query ? `Результаты для «${escapeHtml(state.query)}»` : collection ? collection.title : "Каталог";
     const subtitle = state.view === "evening" ? "То, что хочется посмотреть вместе." : state.view === "history" ? "То, к чему можно вернуться в любой момент." : collection?.id === "mood" ? moodDefinition().description : collection ? collection.description : "Ищи по названию, актёрам и жанрам или выбери готовую подборку.";
@@ -4347,10 +4452,34 @@
     const emptyCopy = state.query ? `По запросу «${escapeHtml(state.query)}» ничего не найдено. Измени запрос или сбрось фильтры.` : "Попробуй другой жанр или сбрось фильтры, чтобы снова увидеть весь каталог.";
     const paginationMarkup = pagination.totalPages > 1 ? `<nav class="catalog-pagination" aria-label="Страницы каталога"><button class="secondary-button catalog-page-arrow" data-catalog-page="${pagination.currentPage - 1}" type="button" aria-label="Предыдущая страница" title="Предыдущая страница"${pagination.currentPage === 1 ? " disabled" : ""}>←</button><p aria-live="polite">Страница <strong>${pagination.currentPage}</strong> из ${pagination.totalPages}<span> · показано ${pagination.start + 1}–${pagination.end}</span></p><button class="secondary-button catalog-page-arrow" data-catalog-page="${pagination.currentPage + 1}" type="button" aria-label="Следующая страница" title="Следующая страница"${pagination.currentPage === pagination.totalPages ? " disabled" : ""}>→</button></nav>` : "";
     const genreFilterMarkup = state.view === "favorites" ? "" : `<div class="catalog-genre-heading"><h3>Жанры</h3><span>Количество карточек указано справа</span></div><div class="genre-list" role="group" aria-label="Фильтр по жанру">${genreButtons}</div>`;
-    page.innerHTML = `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls" aria-labelledby="catalog-filters-title"><div class="catalog-control-top"><div><h2 id="catalog-filters-title">Подобрать фильм</h2><p>Начни с готовой подборки или уточни жанр.</p></div><div class="catalog-control-actions"><label class="catalog-sort"><span>Сортировка</span><select data-catalog-sort><option value="rating"${state.catalogSort === "rating" ? " selected" : ""}>С высоким рейтингом</option><option value="year"${state.catalogSort === "year" ? " selected" : ""}>Сначала новые</option><option value="title"${state.catalogSort === "title" ? " selected" : ""}>По алфавиту</option></select></label><button class="secondary-button catalog-random-button" data-catalog-random type="button"${items.length ? "" : " disabled"}>Выбрать случайно</button></div></div><div class="catalog-collection-heading"><h3>Подборки</h3><span>Автоматически по жанрам, рейтингу и вашей истории</span></div><div class="collection-list" role="group" aria-label="Подборки каталога">${collectionButtons}</div>${genreFilterMarkup}<div class="catalog-result-row"><p><strong>${catalogCountLabel(items.length)}</strong>${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}</p>${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${items.length ? `<div class="poster-grid" id="catalog-results" tabindex="-1">${pageItems.map((item) => poster(item)).join("")}</div>${paginationMarkup}` : `<div class="empty-state"><div class="empty-pet">${petVisual()}</div><h2>Ничего не подошло</h2><p>${emptyCopy}</p><button class="primary-button" data-catalog-reset type="button">Сбросить фильтры</button></div>`}`;
+    page.innerHTML = `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls" aria-labelledby="catalog-filters-title"><div class="catalog-control-top"><div><h2 id="catalog-filters-title">Подобрать фильм</h2><p>Начни с готовой подборки или уточни жанр.</p></div><div class="catalog-control-actions"><label class="catalog-sort"><span>Сортировка</span><select data-catalog-sort><option value="rating"${state.catalogSort === "rating" ? " selected" : ""}>С высоким рейтингом</option><option value="year"${state.catalogSort === "year" ? " selected" : ""}>Сначала новые</option><option value="title"${state.catalogSort === "title" ? " selected" : ""}>По алфавиту</option></select></label><button class="secondary-button catalog-random-button" data-catalog-random type="button"${items.length ? "" : " disabled"}>Выбрать случайно</button></div></div><div class="catalog-collection-heading"><h3>Подборки</h3><span>Автоматически по жанрам, рейтингу и вашей истории</span></div><div class="collection-list" role="group" aria-label="Подборки каталога">${collectionButtons}</div>${genreFilterMarkup}<div class="catalog-result-row"><p><strong>${catalogCountLabel(remoteCatalog.total || items.length)}</strong>${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}</p>${remoteCatalogLoading ? `<span class="catalog-loading-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span> Обновляю карточки…</span>` : ""}${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${items.length ? `<div class="poster-grid" id="catalog-results" tabindex="-1">${pageItems.slice(0, 16).map((item) => poster(item)).join("")}${pageItems.length > 16 ? `<div id="catalog-lazy-sentinel" class="catalog-lazy-sentinel" aria-hidden="true"></div>` : ""}</div>${paginationMarkup}` : `<div class="empty-state"><div class="empty-pet">${petVisual()}</div><h2>Ничего не подошло</h2><p>${emptyCopy}</p><button class="primary-button" data-catalog-reset type="button">Сбросить фильтры</button></div>`}`;
     const liveStatus = $("#catalog-live-status");
     if (liveStatus) window.requestAnimationFrame(() => { liveStatus.textContent = `Каталог обновлён: ${catalogCountLabel(items.length)}.`; });
     bindPageActions();
+    hydrateProgressiveCatalog();
+    syncAssistantPaginationVisibility();
+  }
+
+  function syncAssistantPaginationVisibility() {
+    assistantPaginationObserver?.disconnect();
+    assistantPaginationObserver = null;
+    const rail = $("#assistant-rail");
+    const pagination = $(".catalog-pagination");
+    if (!rail || !pagination) {
+      assistantPaginationDismissed = false;
+      rail?.classList.remove("is-pagination-collapsed");
+      return;
+    }
+    assistantPaginationDismissed = false;
+    assistantPaginationObserver = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        if (!assistantPaginationDismissed) rail.classList.add("is-pagination-collapsed");
+      } else {
+        assistantPaginationDismissed = false;
+        rail.classList.remove("is-pagination-collapsed");
+      }
+    }, { threshold: 0.1, rootMargin: "0px 0px 120px 0px" });
+    assistantPaginationObserver.observe(pagination);
   }
 
   function libraryStatusLabel(item) {
@@ -4508,6 +4637,9 @@
   function renderDetails(id, { skipPlaybackRefresh = false } = {}) {
     const item = getTitle(id);
     if (!item) return;
+    if (item.kinopoiskId && !Array.isArray(item.videoSources) && !importedDetailsLoaded.has(String(item.kinopoiskId))) {
+      loadImportedTitleDetails(item);
+    }
     stopDetailPrebuffer();
     if (activeTitleId !== id) selectedSeason = 1;
     activeTitleId = id;
@@ -5384,7 +5516,7 @@
       state.catalogGenre = normalizeCatalogGenre(state.catalogGenre) === genre ? "" : genre;
       resetCatalogPage();
       saveState();
-      renderCatalogView();
+      loadRemoteCatalogPage(1);
     }));
     $$('[data-catalog-collection]').forEach((button) => button.addEventListener("click", () => {
       const collectionId = String(button.dataset.catalogCollection || "");
@@ -5397,25 +5529,27 @@
       state.catalogMoodOnly = false;
       resetCatalogPage();
       saveState();
-      renderCatalogView();
+      loadRemoteCatalogPage(1);
     }));
     $$('[data-open-collection]').forEach((button) => button.addEventListener("click", () => openCatalogCollection(button.dataset.openCollection)));
     $('[data-catalog-sort]')?.addEventListener("change", (event) => {
       state.catalogSort = event.currentTarget.value;
       resetCatalogPage();
       saveState();
-      renderCatalogView();
+      loadRemoteCatalogPage(1);
     });
     $$('[data-catalog-page]').forEach((button) => button.addEventListener("click", () => {
       const nextPage = Number(button.dataset.catalogPage);
       const pagination = catalogPagination(filteredCatalog());
       if (!Number.isInteger(nextPage) || nextPage < 1 || nextPage > pagination.totalPages) return;
+      scrollToCatalogResults();
       state.catalogPage = nextPage;
       saveState();
-      renderCatalogView();
-      const results = $("#catalog-results");
-      results?.scrollIntoView({ behavior: "smooth", block: "start" });
-      results?.focus({ preventScroll: true });
+      loadRemoteCatalogPage(nextPage).then(() => {
+        window.requestAnimationFrame(() => {
+          scrollToCatalogResults();
+        });
+      });
     }));
     $$('[data-catalog-reset]').forEach((button) => button.addEventListener("click", resetCatalogFilters));
     $('[data-catalog-random]')?.addEventListener("click", () => {
@@ -5461,7 +5595,8 @@
       window.requestAnimationFrame(() => { $("#search")?.focus({ preventScroll: true }); renderSearchSuggestions(); });
       return;
     }
-    renderCatalogView();
+    window.clearTimeout(catalogSearchTimer);
+    catalogSearchTimer = window.setTimeout(() => loadRemoteCatalogPage(1), 220);
   });
   $("#search").addEventListener("focus", renderSearchSuggestions);
   $("#search").addEventListener("blur", () => window.setTimeout(hideSearchSuggestions, 120));
@@ -5511,26 +5646,16 @@
   });
 
   $("#assistant-collapse")?.addEventListener("click", (event) => { const collapsed = $("#assistant-rail").classList.toggle("is-collapsed"); event.currentTarget.setAttribute("aria-expanded", String(!collapsed)); event.currentTarget.setAttribute("aria-label", collapsed ? "Развернуть помощника" : "Свернуть помощника"); });
-  $("#assistant-pet")?.addEventListener("click", () => { $("#assistant-rail").classList.remove("is-collapsed"); setPetState("happy"); setAssistantCopy("Я выберу вариант по твоему вкусу, настроению и истории просмотра."); });
+  $("#assistant-pet")?.addEventListener("click", () => { assistantPaginationDismissed = true; $("#assistant-rail").classList.remove("is-collapsed", "is-pagination-collapsed"); setPetState("happy"); setAssistantCopy("Я выберу вариант по твоему вкусу, настроению и истории просмотра."); });
   $("#assistant-recommend")?.addEventListener("click", () => { setAssistantCopy("Секунду, ищу что-нибудь подходящее…"); const pick = nextRecommendation(); if (!pick) { setAssistantCopy("Пока не нашёл подходящих вариантов."); return; } setPetState("happy"); openTitleRoute(pick.id, { recommendation: true }); });
 
   startPetStates();
   renderRoute(initialRoute, { replaceHistory: true });
   const hydrateCatalog = () => {
-    // Show the lightweight seed catalog immediately. The larger imported
-    // catalog is merged in the background so the first page is interactive
-    // without waiting for all metadata and video sources to parse.
-    catalogHydrating = false;
-    initialCatalogReady = true;
-    const startupRoute = readRouteFromLocation();
-    if (startupRoute.type === "title") {
-      state.view = "catalog";
-      render();
-    } else {
-      renderRoute(startupRoute, { replaceHistory: true });
-    }
     const importedCatalog = loadImportedCatalog()
     .then(() => {
+      catalogHydrating = false;
+      initialCatalogReady = true;
       renderRoute(readRouteFromLocation(), { replaceHistory: true });
       return loadEpisodeAssets();
     })
@@ -5545,5 +5670,4 @@
   };
   if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(hydrateCatalog, { timeout: 1200 });
   else window.setTimeout(hydrateCatalog, 0);
-  syncCatalogFromTmdb();
 })();
