@@ -2331,12 +2331,17 @@
   // Keeping demo seed cards out prevents stale local entries from flashing
   // while the real catalog is being loaded.
   let catalog = [];
+  // The catalogue page is paginated, while discovery needs the whole lightweight
+  // index. Keep them separate so a page filter can never narrow "Для вас".
+  let discoveryCatalog = [];
   const importedDetailsLoading = new Set();
   const importedDetailsLoaded = new Set();
+  const playbackRefreshAt = new Map();
+  const detailPlaybackRefresh = new Map();
   let remoteCatalog = { page: 1, pages: 1, total: 0, facets: { genres: {} } };
   let remoteCatalogRequest = 0;
   let remoteCatalogLoading = false;
-  let catalogSearchTimer = null;
+  let searchDraft = "";
   const posterOverrides = Object.freeze({
     "kinopoisk-5304403": "https://old.mvapspdmpg.com/movies/files/posters/147213.jpeg",
   });
@@ -2430,7 +2435,17 @@
     }
   }
 
-  function renderRoute(route, { restoreScroll = false, replaceHistory = false } = {}) {
+  function clearCatalogScope() {
+    state.query = "";
+    searchDraft = "";
+    state.catalogGenre = "";
+    state.catalogCollection = "";
+    state.catalogMoodOnly = false;
+    state.catalogPlayableOnly = false;
+    resetCatalogPage();
+  }
+
+  function renderRoute(route, { restoreScroll = false, replaceHistory = false, preserveCatalogFilters = false } = {}) {
     if (catalogHydrating && route.type === "title") {
       state.view = "catalog";
       renderCatalogLoading();
@@ -2457,6 +2472,12 @@
       return;
     }
 
+    const previousView = state.view;
+    // Genre, search and collection are controls of one catalogue visit, not
+    // application-wide settings. An explicit navigation always starts the
+    // destination with its complete source set. History/detail return keeps
+    // the context because the view does not change.
+    if (!preserveCatalogFilters && route.view !== previousView) clearCatalogScope();
     state.view = route.view;
     const catalogViews = ["catalog", "movies", "series", "favorites", "evening", "history"];
     const shouldReloadCatalog = catalogViews.includes(route.view) && !catalogHydrating;
@@ -2475,12 +2496,12 @@
     if (state.view === "history") loadLibraryData(true);
   }
 
-  function navigateToView(view, { replace = false } = {}) {
+  function navigateToView(view, { replace = false, preserveCatalogFilters = false } = {}) {
     const route = { type: "view", view: ROUTE_PATHS[view] ? view : "catalog" };
     updateCurrentHistoryScroll();
     const method = replace ? "replaceState" : "pushState";
     window.history[method](routeHistoryState(route), "", routeForView(route.view));
-    renderRoute(route);
+    renderRoute(route, { preserveCatalogFilters });
   }
 
   function setAssistantCopy(text) {
@@ -2559,15 +2580,60 @@
   window.addEventListener("popstate", () => renderRoute(readRouteFromLocation(), { restoreScroll: true }));
 
   async function loadImportedCatalog() {
-    await loadRemoteCatalogFacets();
+    await Promise.all([loadRemoteCatalogFacets(), loadRemoteDiscoveryCatalog()]);
     await loadRemoteCatalogPage(Number(state.catalogPage) || 1, { initial: true });
+  }
+
+  async function loadRemoteDiscoveryCatalog() {
+    try {
+      const response = await apiFetch("/api/catalog/index", { cache: "no-store", headers: { accept: "application/json" } });
+      if (!response.ok) return;
+      const payload = await response.json();
+      if (!Array.isArray(payload.items)) return;
+      discoveryCatalog = payload.items.map((entry) => posterOverrides[entry.id] ? { ...entry, posterImage: posterOverrides[entry.id] } : entry);
+    } catch {
+      // The current catalogue page remains a useful fallback when the index is unavailable.
+    }
+  }
+
+  async function ensureCatalogTitle(titleId) {
+    const id = String(titleId || "").trim();
+    if (!id) return null;
+    let item = getTitle(id);
+    if (!item) {
+      try {
+        const params = new URLSearchParams({ ids: id, limit: "1" });
+        const response = await apiFetch(`/api/catalog?${params}`, { cache: "no-store", headers: { accept: "application/json" } });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        const loaded = Array.isArray(payload.items) ? payload.items[0] : null;
+        if (loaded) {
+          catalog = [...catalog.filter((entry) => entry.id !== loaded.id), loaded];
+          item = loaded;
+        }
+      } catch {}
+    }
+    if (item?.kinopoiskId) {
+      await loadImportedTitleDetails(item);
+      item = getTitle(id) || item;
+    }
+    return item || null;
   }
 
   async function loadRemoteCatalogPage(pageNumber = 1, { initial = false } = {}) {
     const requestId = ++remoteCatalogRequest;
     try {
+      const savedIds = state.view === "favorites" ? state.favorites : state.view === "history" ? state.history : null;
+      if (savedIds && !savedIds.length) {
+        catalog = [];
+        remoteCatalog = { page: 1, pages: 1, total: 0, facets: remoteCatalog.facets };
+        remoteCatalogLoading = false;
+        if (initial || state.view !== "home") render();
+        return;
+      }
       const params = new URLSearchParams({ page: String(pageNumber), limit: "50", sort: state.catalogSort || "rating" });
       if (state.query) params.set("search", state.query);
+      if (savedIds) params.set("ids", savedIds.join(","));
       if (state.catalogGenre) params.set("genre", state.catalogGenre);
       if (state.view === "movies" || state.view === "series") params.set("type", state.view === "movies" ? "movie" : "series");
       if (state.catalogCollection) params.set("collection", state.catalogCollection);
@@ -2622,6 +2688,12 @@
   function loadState() {
     try {
       const loaded = { ...defaultState, ...JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}") };
+      // Filters describe a temporary catalogue visit. Never restore an old
+      // genre/search into a new session or into unrelated routes such as Home.
+      loaded.query = "";
+      loaded.catalogGenre = "";
+      loaded.catalogCollection = "";
+      loaded.catalogPage = 1;
       // These legacy filters are intentionally no longer part of the catalog UI.
       loaded.catalogMoodOnly = false;
       loaded.catalogPlayableOnly = false;
@@ -2817,8 +2889,13 @@
       const response = await apiFetch("/api/library", { headers: { accept: "application/json" } });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
-      libraryEpisodes = (Array.isArray(payload.items) ? payload.items : []).map((item) => ({ ...item, offlineUrl: state.offline?.[item.id] || "" }));
+      libraryEpisodes = Array.isArray(payload.items) ? payload.items : [];
       libraryHistory = (Array.isArray(payload.history) ? payload.history : libraryEpisodes.filter((item) => item.progress)).map((item) => ({ ...item }));
+      const serverHistoryIds = libraryHistory.map((item) => String(item.title_id || "").trim()).filter(Boolean);
+      if (serverHistoryIds.length) {
+        state.history = [...new Set([...serverHistoryIds, ...state.history])].slice(0, 100);
+        saveState();
+      }
       mergeLibraryIntoCatalog();
       libraryStatus = `Общий backend-каталог: ${libraryEpisodes.length} ${libraryEpisodes.length === 1 ? "серия" : "серий"}.`;
     } catch (error) {
@@ -2981,8 +3058,41 @@
       input.closest("label")?.remove();
     });
   }
-  function formatTime(seconds) { const total = Math.max(0, Math.floor(seconds || 0)); return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`; }
-  function formatDuration(seconds) { const minutes = Math.max(0, Math.round(Number(seconds || 0) / 60)); return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}`; }
+  function formatTime(seconds) {
+    const total = Math.max(0, Math.floor(Number(seconds) || 0));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const remainingSeconds = total % 60;
+    return hours > 0
+      ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`
+      : `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+  }
+  function formatDuration(seconds) { return formatTime(seconds); }
+  function restorePlaybackPosition(video, position, duration) {
+    const target = Number(position || 0);
+    if (!video || !Number.isFinite(target) || target <= 0) return false;
+    const apply = () => {
+      const mediaDuration = Number(video.duration || duration || 0);
+      if (video.readyState < 1 || !mediaDuration) return;
+      const safeTarget = Math.min(target, Math.max(0, mediaDuration - 0.25));
+      if (Math.abs(Number(video.currentTime || 0) - safeTarget) > 0.25) video.currentTime = safeTarget;
+    };
+    apply();
+    video.addEventListener("loadeddata", apply, { once: true });
+    video.addEventListener("canplay", apply, { once: true });
+    window.setTimeout(apply, 250);
+    return true;
+  }
+  const resumeProtectionAt = new WeakMap();
+  function protectResumePosition(video, position, duration) {
+    const saved = Number(position || 0);
+    if (!video || video.seeking || saved < 5 || Number(video.currentTime || 0) >= 1) return false;
+    const lastAttempt = Number(resumeProtectionAt.get(video) || 0);
+    if (Date.now() - lastAttempt < 500) return true;
+    resumeProtectionAt.set(video, Date.now());
+    restorePlaybackPosition(video, saved, duration);
+    return true;
+  }
   function bindSeekTimePreview(range, rangeWrap) {
     const preview = rangeWrap?.querySelector(".player-seek-time");
     if (!range || !rangeWrap || !preview) return;
@@ -3075,7 +3185,7 @@
     return `<div class="player-settings" data-player-settings><button class="player-control-button player-settings-button" id="${prefix}-settings" type="button" aria-expanded="false" aria-controls="${prefix}-settings-panel" aria-label="Настройки плеера" title="Настройки">${playerIcon("settings")}</button><div class="player-settings-panel" id="${prefix}-settings-panel" role="group" aria-label="Настройки плеера" hidden>${controls}<p class="player-settings-empty">Параметры потока появятся после загрузки.</p></div></div>`;
   }
   function playerToolbarMarkup(prefix, settingsControls) {
-    return `<div class="player-toolbar player-toolbar-compact player-toolbar-cinematic"><div class="player-actions"><button class="player-control-button player-skip-button" id="${prefix}-back" type="button" aria-label="Назад на 10 секунд" title="Назад на 10 секунд">${playerIcon("back")}<small aria-hidden="true">10</small></button><button class="player-play-button" id="${prefix}-play" type="button" aria-label="Воспроизвести" title="Воспроизвести">${playerIcon("play")}</button><button class="player-control-button player-skip-button" id="${prefix}-forward" type="button" aria-label="Вперёд на 10 секунд" title="Вперёд на 10 секунд">${playerIcon("forward")}<small aria-hidden="true">10</small></button></div><div class="player-utility-actions">${playerVolumeMarkup(prefix)}${playerSettingsMarkup(prefix, settingsControls)}</div></div>`;
+    return `<div class="player-toolbar player-toolbar-compact player-toolbar-cinematic"><div class="player-actions"><button class="player-control-button player-skip-button" id="${prefix}-back" type="button" aria-label="Назад на 10 секунд" title="Назад на 10 секунд">${playerIcon("back")}<small aria-hidden="true">10</small></button><button class="player-play-button" id="${prefix}-play" type="button" aria-label="Воспроизвести" title="Воспроизвести">${playerIcon("play")}</button><button class="player-control-button player-skip-button" id="${prefix}-forward" type="button" aria-label="Вперёд на 10 секунд" title="Вперёд на 10 секунд">${playerIcon("forward")}<small aria-hidden="true">10</small></button></div><div class="player-utility-actions"><button class="player-control-button player-room-button" id="${prefix}-room" type="button" aria-label="Совместный просмотр" title="Начать совместный просмотр">${playerIcon("together")}</button>${playerVolumeMarkup(prefix)}${playerSettingsMarkup(prefix, settingsControls)}</div></div>`;
   }
   function bindPlayerSettings(prefix) {
     const root = $(`#${prefix}-settings`)?.closest("[data-player-settings]");
@@ -3446,10 +3556,12 @@
     }
     return item;
   }
-  async function refreshKinopoiskPlayback(item, { force = true } = {}) {
+  async function refreshKinopoiskPlayback(item, { force = false } = {}) {
     if (!shouldRefreshKinopoiskPlayback(item)) return item;
     const kinopoiskId = Number(item.kinopoiskId || item.kinopoisk_id);
     if (playbackRefreshes.has(kinopoiskId)) return playbackRefreshes.get(kinopoiskId);
+    const refreshedAt = Number(playbackRefreshAt.get(kinopoiskId) || 0);
+    if (!force && refreshedAt && Date.now() - refreshedAt < 60_000) return item;
     const refresh = (async () => {
       setPlaybackButtonsBusy(item, true);
       item.playbackRefreshWarning = "";
@@ -3461,14 +3573,16 @@
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-        await applyRefreshedCatalogEntry(item, payload.entry);
-        item.playbackRefreshWarning = payload.warning || "";
+        if (!payload.refreshed && !payload.cached) throw new Error(payload.warning || "Источник не отдал новый поток");
+        await applyRefreshedCatalogEntry(getTitle(item.id) || item, payload.entry);
+        playbackRefreshAt.set(kinopoiskId, Date.now());
+        item.playbackRefreshWarning = "";
       } catch (error) {
         item.playbackRefreshWarning = `Свежую ссылку получить не удалось (${error.message}). Пробую предыдущую.`;
       } finally {
         setPlaybackButtonsBusy(item, false);
       }
-      return item;
+      return getTitle(item.id) || item;
     })();
     playbackRefreshes.set(kinopoiskId, refresh);
     try {
@@ -3476,6 +3590,20 @@
     } finally {
       playbackRefreshes.delete(kinopoiskId);
     }
+  }
+  async function refreshDetailPlayback(item, { force = false } = {}) {
+    if (!shouldRefreshKinopoiskPlayback(item)) return;
+    const kinopoiskId = Number(item.kinopoiskId || item.kinopoisk_id);
+    detailPlaybackRefresh.set(kinopoiskId, { status: "loading" });
+    if (activeTitleId === item.id) renderDetails(item.id, { skipPlaybackRefresh: true });
+    const refreshedItem = await refreshKinopoiskPlayback(item, { force });
+    const warning = String(refreshedItem.playbackRefreshWarning || item.playbackRefreshWarning || "")
+      .replace(/\. Пробую предыдущую\.$/, ".").trim();
+    const ready = !warning && hasPlayableSource(refreshedItem);
+    detailPlaybackRefresh.set(kinopoiskId, ready
+      ? { status: "ready", completedAt: Date.now() }
+      : { status: "error", message: warning || "Свежий видеопоток пока недоступен." });
+    if (activeTitleId === item.id) renderDetails(item.id, { skipPlaybackRefresh: true });
   }
   function detailPrebufferUrl(item) {
     if (!item || item.rutubeId) return "";
@@ -3486,10 +3614,10 @@
       const direct = directEpisodeUrl(item, season, episode);
       if (direct) return direct;
       const local = libraryEpisodeFor(item, season, episode);
-      return String(local?.offlineUrl || local?.hls_url || local?.source_url || "");
+      return String(local?.hls_url || local?.source_url || "");
     }
     const local = libraryEpisodeFor(item);
-    return String(local?.offlineUrl || local?.hls_url || local?.source_url || selectedVideoVariant(item)?.url || "");
+    return String(local?.hls_url || local?.source_url || selectedVideoVariant(item)?.url || "");
   }
   function stopDetailPrebuffer() {
     if (!detailPrebuffer) return;
@@ -3604,7 +3732,7 @@
     try { await navigator.clipboard.writeText(link); return true; }
     catch { return false; }
   }
-  async function createWatchRoom(item, season, episode) {
+  async function createWatchRoom(item, season, episode, playback = {}) {
     const isLocalEpisode = Boolean(item?.source_type && item?.id);
     const payload = {
       episode_id: isLocalEpisode && item.source_type !== "external_embed" ? item.id : "",
@@ -3612,6 +3740,8 @@
       target_key: watchRoomTargetKey(item, season || item?.season, episode || item?.episode),
       season: Number(season || item?.season || 0),
       episode: Number(episode || item?.episode || 0),
+      position: Math.max(0, Number(playback.position || 0)),
+      playing: Boolean(playback.playing),
     };
     const response = await apiFetch("/api/watch/rooms", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
     const result = await response.json();
@@ -3638,7 +3768,14 @@
     const roomState = room.state || {};
     const targetKey = String(roomState.target_key || "");
     const titleId = String(roomState.title_id || targetKey.replace(/-s\d+e\d+$/, "") || "");
-    const item = getTitle(titleId) || catalog.find((entry) => entry.id === titleId);
+    // A room can point to a file from the shared local library. Those titles are
+    // intentionally not required to exist in the imported metadata catalog.
+    // Resolve the concrete library episode before falling back to a catalog card.
+    const season = Number(roomState.season || 1);
+    const episode = Number(roomState.episode || 1);
+    const localEpisode = libraryEpisodes.find((candidate) => candidate.id === roomState.episode_id || (candidate.title_id === titleId && Number(candidate.season) === season && Number(candidate.episode) === episode));
+    if (localEpisode) return openLibraryPlayer(localEpisode, roomId);
+    const item = getTitle(titleId) || await ensureCatalogTitle(titleId);
     if (!item) {
       roomOpenAttempted = true;
       showWatchRoomEntryError("В комнате указан тайтл, которого нет в текущем каталоге.");
@@ -3646,24 +3783,22 @@
     }
     roomOpenAttempted = true;
     if (item.kind === "movie" && getVideoVariants(item).length) return openItemPlayer(item, null, null, roomId);
-    const season = Number(roomState.season || 1);
-    const episode = Number(roomState.episode || 1);
     const sourceUrl = directEpisodeUrl(item, season, episode);
     if (sourceUrl) return openItemPlayer(item, episode, season, roomId);
-    const localEpisode = libraryEpisodes.find((candidate) => candidate.id === roomState.episode_id || (candidate.title_id === titleId && Number(candidate.season) === season && Number(candidate.episode) === episode));
-    if (localEpisode) return openLibraryPlayer(localEpisode, roomId);
     showWatchRoomEntryError("Для этого тайтла не найден подключённый видеопоток на сервере.");
   }
   function installWatchRoomSync({ roomId, video, item, season, episode, roomStatus, onEpisodeChange }) {
     if (!roomId || !video) return null;
     let disposed = false;
-    let lastSeq = 0;
+    let lastSeq = -1;
     let currentSeason = Number(season || 0);
     let currentEpisode = Number(episode || 0);
     let suppressUntil = 0;
     let localActionUntil = 0;
     let pendingPublishes = 0;
     let publishTimer = null;
+    let mediaReady = Number(video.readyState || 0) >= 1;
+    let pendingRoomState = null;
     const setRoomStatus = (message, isError = false) => { if (roomStatus) { roomStatus.textContent = message; roomStatus.classList.toggle("is-error", isError); } };
     const isApplying = () => suppressUntil > Date.now();
     const publish = async (changes = {}) => {
@@ -3686,7 +3821,15 @@
       if (pendingPublishes > 0 || Date.now() < localActionUntil) return;
       const remoteState = room?.state || {};
       const seq = Number(remoteState.seq || 0);
-      if (!seq || seq <= lastSeq) return;
+      if (!Number.isFinite(seq) || seq <= lastSeq) return;
+      // HLS replaces the media source while it is loading. Seeking before
+      // loadedmetadata is therefore discarded by some browsers and produced
+      // the visible jump back to 0:00 after joining a room.
+      if (!mediaReady) {
+        pendingRoomState = room;
+        setRoomStatus("Совместный просмотр · жду готовность видео…");
+        return;
+      }
       lastSeq = seq;
       const remoteSeason = Number(remoteState.season || currentSeason || 0);
       const remoteEpisode = Number(remoteState.episode || currentEpisode || 0);
@@ -3700,11 +3843,30 @@
       if (!remoteState.playing && !video.paused) video.pause();
       setRoomStatus(`Совместный просмотр · синхронизировано ${formatTime(targetPosition)}`);
     };
+    const onMediaReady = () => {
+      mediaReady = true;
+      if (!pendingRoomState) return;
+      const room = pendingRoomState;
+      pendingRoomState = null;
+      apply(room);
+    };
+    video.addEventListener("loadedmetadata", onMediaReady);
+    let eventSource = null;
+    let fallbackInterval = null;
     const poll = async () => { if (!disposed) { try { apply(await loadWatchRoom(roomId)); } catch (error) { setRoomStatus(`Совместный просмотр недоступен: ${error.message}`, true); } } };
-    const interval = window.setInterval(poll, 900);
+    const startFallback = () => {
+      if (fallbackInterval || disposed) return;
+      fallbackInterval = window.setInterval(poll, 2500);
+      poll();
+    };
+    if (window.EventSource) {
+      eventSource = new EventSource(`/api/watch/rooms/${encodeURIComponent(roomId)}/events`);
+      eventSource.onopen = () => { setRoomStatus("Совместный просмотр · подключено"); if (fallbackInterval) { window.clearInterval(fallbackInterval); fallbackInterval = null; } };
+      eventSource.onmessage = (event) => { try { apply(JSON.parse(event.data)); } catch {} };
+      eventSource.onerror = () => { setRoomStatus("Совместный просмотр · переподключение…", true); startFallback(); };
+    } else startFallback();
     setRoomStatus("Совместный просмотр · подключаюсь…");
-    poll();
-    return { publish, publishEpisode, isApplying, schedulePublish: () => { window.clearTimeout(publishTimer); publishTimer = window.setTimeout(() => publish(), 120); }, dispose: () => { disposed = true; window.clearInterval(interval); window.clearTimeout(publishTimer); } };
+    return { publish, publishEpisode, isApplying, schedulePublish: () => { window.clearTimeout(publishTimer); publishTimer = window.setTimeout(() => publish(), 120); }, dispose: () => { disposed = true; eventSource?.close(); if (fallbackInterval) window.clearInterval(fallbackInterval); window.clearTimeout(publishTimer); video.removeEventListener("loadedmetadata", onMediaReady); } };
   }
   function hlsResponseStatus(data) {
     return Number(data?.response?.code || data?.response?.status || data?.networkDetails?.status || 0);
@@ -3794,13 +3956,6 @@
     // iOS Safari does not support fullscreen on arbitrary containers.
     enterNativeVideoFullscreen();
   }
-  async function beginCinematicFullscreen() {
-    const mobile = window.matchMedia?.("(max-width: 720px)").matches;
-    try {
-      if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.();
-      if (mobile && screen.orientation?.lock) await screen.orientation.lock("landscape").catch(() => {});
-    } catch {}
-  }
   function installPlayerFullscreenControls(player) {
     if (!player || player.dataset.fullscreenControls === "true") return;
     player.dataset.fullscreenControls = "true";
@@ -3876,9 +4031,7 @@
     rememberTasteInteraction(item, "played");
     stopDetailPrebuffer();
     if (refreshSource) {
-      const detailStatus = $("#detail-prebuffer-status");
-      if (detailStatus) detailStatus.textContent = "Обновляю выбранный видеопоток…";
-      item = await refreshKinopoiskPlayback(item);
+      item = await refreshKinopoiskPlayback(item, { force: false });
     }
     if (roomId !== null) activeWatchRoomId = String(roomId || "");
     rememberPlayerContext();
@@ -3903,7 +4056,7 @@
   function playbackPreferencesMarkup(item) {
     return "";
   }
-  function getTitle(id) { return catalog.find((item) => item.id === id); }
+  function getTitle(id) { return catalog.find((item) => item.id === id) || discoveryCatalog.find((item) => item.id === id); }
   function getTitleForProgress(id, progress) { return getTitle(progress?.titleId || id) || getTitle(String(id).split("-s")[0]); }
   function progressForTitle(item) {
     const direct = state.progress[item.id];
@@ -3913,6 +4066,11 @@
   function hasSharedHistory(item) {
     const historyIds = new Set(libraryHistory.map((entry) => entry.id));
     return state.history.includes(item.id) || Boolean(item.libraryEpisodes?.some((episode) => historyIds.has(episode.id)));
+  }
+  function rememberHistory(id) {
+    const titleId = String(id || "").trim();
+    if (!titleId) return;
+    state.history = [titleId, ...state.history.filter((entry) => entry !== titleId)].slice(0, 100);
   }
   function getPet() { return ({ plush: ["🐶", "Мопс", "уютный помощник по выбору кино"], noir: ["🐈‍⬛", "Нуар", "спокойный советчик"], pixie: ["🐰", "Пикси", "нежный романтик"], moti: ["🐻", "Моти", "любит комедии"] })[state.companion] || ["🐶", "Мопс", "уютный помощник по выбору кино"]; }
   function petVisual(className = "") { const [emoji, name] = getPet(); return state.companion === "plush" ? `<img class="pet-avatar ${className}" src="./assets/pug-mascot.png" alt="${escapeHtml(name)}">` : `<span class="pet-emoji ${className}" aria-label="${escapeHtml(name)}">${emoji}</span>`; }
@@ -4009,17 +4167,21 @@
     seasonTransitionTimer = window.setTimeout(renderNextSeason, 150);
   }
 
+  function discoveryItems() { return discoveryCatalog.length ? discoveryCatalog : catalog; }
+
   function recommendation() {
-    const unseen = catalog.filter((item) => !hasSharedHistory(item));
-    const candidates = unseen.length ? unseen : catalog;
+    const source = discoveryItems();
+    const unseen = source.filter((item) => !hasSharedHistory(item));
+    const candidates = unseen.length ? unseen : source;
     const ranked = sortPersonalRecommendations(candidates);
     const pool = ranked.slice(0, Math.min(24, ranked.length));
-    return pool[Math.floor(Math.random() * pool.length)] || catalog[0];
+    return pool[Math.floor(Math.random() * pool.length)] || source[0];
   }
 
   function nextRecommendation() {
-    const unseen = catalog.filter((item) => !hasSharedHistory(item));
-    const candidates = sortPersonalRecommendations(unseen.length ? unseen : catalog);
+    const source = discoveryItems();
+    const unseen = source.filter((item) => !hasSharedHistory(item));
+    const candidates = sortPersonalRecommendations(unseen.length ? unseen : source);
     if (!candidates.length) return null;
     const now = Date.now();
     const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
@@ -4066,7 +4228,7 @@
     activeTitleId = null;
     app.dataset.theme = state.theme;
     syncAssistant();
-    $("#search").value = state.query;
+    $("#search").value = searchDraft;
     $$(".nav-item[data-view]").forEach((button) => button.classList.toggle("is-active", button.dataset.view === state.view));
     if (catalogHydrating && ["home", "catalog", "movies", "series", "favorites", "evening", "history"].includes(state.view)) {
       renderCatalogLoading();
@@ -4195,7 +4357,7 @@
 
   function recommendationProfile() {
     const profile = { genres: new Map(), actors: new Map(), directors: new Map(), countries: new Map(), kinds: new Map(), years: [], runtimes: [] };
-    catalog.forEach((item) => {
+    discoveryItems().forEach((item) => {
       const weight = recommendationInteractionWeight(item);
       if (!weight) return;
       addProfileValues(profile.genres, genresForItem(item), weight);
@@ -4264,12 +4426,13 @@
   }
 
   function collectionItems(collectionId, limit = 8) {
-    return sortDiscoveryItems(catalog.filter((item) => matchesCollection(item, collectionId)), collectionId).slice(0, limit);
+    return sortDiscoveryItems(discoveryItems().filter((item) => matchesCollection(item, collectionId)), collectionId).slice(0, limit);
   }
 
   function personalCollectionItems(limit = 8) {
-    const unseen = catalog.filter((item) => !hasSharedHistory(item));
-    const ranked = sortPersonalRecommendations(unseen.length ? unseen : catalog);
+    const source = discoveryItems();
+    const unseen = source.filter((item) => !hasSharedHistory(item));
+    const ranked = sortPersonalRecommendations(unseen.length ? unseen : source);
     const now = Date.now();
     const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
     const recentIds = new Set((Array.isArray(state.recommendationHistory) ? state.recommendationHistory : [])
@@ -4347,6 +4510,26 @@
   }
 
   function sortCatalogItems(items) {
+    if (state.view === "history") {
+      const historyPosition = new Map(state.history.map((id, index) => [String(id), index]));
+      const latestViewedAt = (item) => {
+        const timestamps = [];
+        Object.entries(state.progress || {}).forEach(([contentId, progress]) => {
+          if (progress?.titleId === item.id || contentId === item.id || contentId.startsWith(`${item.id}-s`)) {
+            const timestamp = Number(progress?.updatedAt || 0);
+            if (timestamp > 0) timestamps.push(timestamp);
+          }
+        });
+        (item.libraryEpisodes || []).forEach((episode) => {
+          const timestamp = Date.parse(episode.progress?.updatedAt || "");
+          if (Number.isFinite(timestamp)) timestamps.push(timestamp);
+        });
+        return timestamps.length ? Math.max(...timestamps) : 0;
+      };
+      return [...items].sort((left, right) => latestViewedAt(right) - latestViewedAt(left)
+        || (historyPosition.get(String(left.id)) ?? Number.MAX_SAFE_INTEGER) - (historyPosition.get(String(right.id)) ?? Number.MAX_SAFE_INTEGER)
+        || String(left.title || "").localeCompare(String(right.title || ""), "ru"));
+    }
     const sort = ["rating", "year", "title"].includes(state.catalogSort) ? state.catalogSort : "rating";
     return [...items].sort((left, right) => {
       if (sort === "title") return String(left.title || "").localeCompare(String(right.title || ""), "ru");
@@ -4370,13 +4553,6 @@
     // recommendation shelves, but must not silently override this control in
     // a collection such as "Под настроение".
     return sortCatalogItems(items);
-  }
-
-  function catalogCountLabel(count) {
-    const tens = count % 100;
-    const units = count % 10;
-    const noun = units === 1 && tens !== 11 ? "карточка" : units >= 2 && units <= 4 && (tens < 12 || tens > 14) ? "карточки" : "карточек";
-    return `${count} ${noun}`;
   }
 
   const catalogPageSize = 50;
@@ -4404,6 +4580,7 @@
   function resetCatalogFilters() {
     state.view = "catalog";
     state.query = "";
+    searchDraft = "";
     state.catalogGenre = "";
     state.catalogCollection = "";
     state.catalogMoodOnly = false;
@@ -4421,9 +4598,10 @@
     state.catalogMoodOnly = false;
     state.catalogGenre = "";
     state.query = "";
+    searchDraft = "";
     resetCatalogPage();
     saveState();
-    navigateToView("catalog");
+    navigateToView("catalog", { preserveCatalogFilters: true });
   }
 
   function renderCatalogView() {
@@ -4442,19 +4620,24 @@
     const genreOptions = catalogGenreOptions();
     const selectedGenre = normalizeCatalogGenre(state.catalogGenre);
     const collection = catalogCollectionDefinition();
-    const availableCount = remoteCatalog.total || catalog.filter((item) => catalogViewMatches(item) && matchesCollection(item)).length;
     const hasFilters = Boolean(state.query || selectedGenre || collection || state.view !== "catalog");
     const title = state.view === "favorites" ? "Избранное" : state.view === "evening" ? "Наш вечер" : state.view === "history" ? "История просмотра" : state.view === "movies" ? "Фильмы" : state.view === "series" ? "Сериалы" : state.query ? `Результаты для «${escapeHtml(state.query)}»` : collection ? collection.title : "Каталог";
     const subtitle = state.view === "evening" ? "То, что хочется посмотреть вместе." : state.view === "history" ? "То, к чему можно вернуться в любой момент." : collection?.id === "mood" ? moodDefinition().description : collection ? collection.description : "Ищи по названию, актёрам и жанрам или выбери готовую подборку.";
-    const genreButtons = [`<button class="genre-chip ${selectedGenre ? "" : "is-active"}" data-catalog-genre="" type="button" aria-pressed="${selectedGenre ? "false" : "true"}"><span>Все жанры</span><small>${availableCount}</small></button>`, ...genreOptions.map(({ genre, count }) => `<button class="genre-chip ${selectedGenre === genre ? "is-active" : ""}" data-catalog-genre="${escapeHtml(genre)}" type="button" aria-pressed="${selectedGenre === genre ? "true" : "false"}"><span>${escapeHtml(genre.charAt(0).toLocaleUpperCase("ru-RU") + genre.slice(1))}</span><small>${count}</small></button>`)].join("");
+    const genreButtons = [`<button class="genre-chip ${selectedGenre ? "" : "is-active"}" data-catalog-genre="" type="button" aria-pressed="${selectedGenre ? "false" : "true"}"><span>Все жанры</span></button>`, ...genreOptions.map(({ genre }) => `<button class="genre-chip ${selectedGenre === genre ? "is-active" : ""}" data-catalog-genre="${escapeHtml(genre)}" type="button" aria-pressed="${selectedGenre === genre ? "true" : "false"}"><span>${escapeHtml(genre.charAt(0).toLocaleUpperCase("ru-RU") + genre.slice(1))}</span></button>`)].join("");
     const collectionButtons = [`<button class="collection-chip ${collection ? "" : "is-active"}" data-catalog-collection="" type="button" aria-pressed="${collection ? "false" : "true"}"><strong>Весь каталог</strong><small>Все фильмы и сериалы</small></button>`, ...catalogCollections.map((entry) => `<button class="collection-chip ${collection?.id === entry.id ? "is-active" : ""}" data-catalog-collection="${escapeHtml(entry.id)}" type="button" aria-pressed="${collection?.id === entry.id ? "true" : "false"}"><strong>${escapeHtml(entry.title)}</strong><small>${escapeHtml(entry.id === "mood" ? moodDefinition().description : entry.description)}</small></button>`)].join("");
     const activeFilters = [collection ? `Подборка: ${collection.title}` : "", selectedGenre ? `Жанр: ${selectedGenre}` : ""].filter(Boolean).join(" · ");
     const emptyCopy = state.query ? `По запросу «${escapeHtml(state.query)}» ничего не найдено. Измени запрос или сбрось фильтры.` : "Попробуй другой жанр или сбрось фильтры, чтобы снова увидеть весь каталог.";
-    const paginationMarkup = pagination.totalPages > 1 ? `<nav class="catalog-pagination" aria-label="Страницы каталога"><button class="secondary-button catalog-page-arrow" data-catalog-page="${pagination.currentPage - 1}" type="button" aria-label="Предыдущая страница" title="Предыдущая страница"${pagination.currentPage === 1 ? " disabled" : ""}>←</button><p aria-live="polite">Страница <strong>${pagination.currentPage}</strong> из ${pagination.totalPages}<span> · показано ${pagination.start + 1}–${pagination.end}</span></p><button class="secondary-button catalog-page-arrow" data-catalog-page="${pagination.currentPage + 1}" type="button" aria-label="Следующая страница" title="Следующая страница"${pagination.currentPage === pagination.totalPages ? " disabled" : ""}>→</button></nav>` : "";
-    const genreFilterMarkup = state.view === "favorites" ? "" : `<div class="catalog-genre-heading"><h3>Жанры</h3><span>Количество карточек указано справа</span></div><div class="genre-list" role="group" aria-label="Фильтр по жанру">${genreButtons}</div>`;
-    page.innerHTML = `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls" aria-labelledby="catalog-filters-title"><div class="catalog-control-top"><div><h2 id="catalog-filters-title">Подобрать фильм</h2><p>Начни с готовой подборки или уточни жанр.</p></div><div class="catalog-control-actions"><label class="catalog-sort"><span>Сортировка</span><select data-catalog-sort><option value="rating"${state.catalogSort === "rating" ? " selected" : ""}>С высоким рейтингом</option><option value="year"${state.catalogSort === "year" ? " selected" : ""}>Сначала новые</option><option value="title"${state.catalogSort === "title" ? " selected" : ""}>По алфавиту</option></select></label><button class="secondary-button catalog-random-button" data-catalog-random type="button"${items.length ? "" : " disabled"}>Выбрать случайно</button></div></div><div class="catalog-collection-heading"><h3>Подборки</h3><span>Автоматически по жанрам, рейтингу и вашей истории</span></div><div class="collection-list" role="group" aria-label="Подборки каталога">${collectionButtons}</div>${genreFilterMarkup}<div class="catalog-result-row"><p><strong>${catalogCountLabel(remoteCatalog.total || items.length)}</strong>${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}</p>${remoteCatalogLoading ? `<span class="catalog-loading-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span> Обновляю карточки…</span>` : ""}${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${items.length ? `<div class="poster-grid" id="catalog-results" tabindex="-1">${pageItems.slice(0, 16).map((item) => poster(item)).join("")}${pageItems.length > 16 ? `<div id="catalog-lazy-sentinel" class="catalog-lazy-sentinel" aria-hidden="true"></div>` : ""}</div>${paginationMarkup}` : `<div class="empty-state"><div class="empty-pet">${petVisual()}</div><h2>Ничего не подошло</h2><p>${emptyCopy}</p><button class="primary-button" data-catalog-reset type="button">Сбросить фильтры</button></div>`}`;
+    const savedView = state.view === "favorites" || state.view === "history";
+    const savedViewEmpty = state.view === "favorites"
+      ? { title: "В избранном пока пусто", copy: "Открой карточку фильма или сериала и нажми «В избранное» — он появится здесь.", action: "Открыть каталог" }
+      : { title: "История просмотра пока пуста", copy: "Запусти любой фильм или сериал — здесь появится то, к чему можно вернуться.", action: "Открыть каталог" };
+    const paginationMarkup = pagination.totalPages > 1 ? `<nav class="catalog-pagination" aria-label="Листать каталог"><button class="secondary-button catalog-page-arrow" data-catalog-page="${pagination.currentPage - 1}" type="button" aria-label="Предыдущая страница" title="Предыдущая страница"${pagination.currentPage === 1 ? " disabled" : ""}>←</button><button class="secondary-button catalog-page-arrow" data-catalog-page="${pagination.currentPage + 1}" type="button" aria-label="Следующая страница" title="Следующая страница"${pagination.currentPage === pagination.totalPages ? " disabled" : ""}>→</button></nav>` : "";
+    const genreFilterMarkup = `<div class="catalog-genre-heading"><h3>Жанры</h3></div><div class="genre-list" role="group" aria-label="Фильтр по жанру">${genreButtons}</div>`;
+    const catalogMarkup = items.length ? `<div class="poster-grid" id="catalog-results" tabindex="-1">${pageItems.slice(0, 16).map((item) => poster(item)).join("")}${pageItems.length > 16 ? `<div id="catalog-lazy-sentinel" class="catalog-lazy-sentinel" aria-hidden="true"></div>` : ""}</div>${paginationMarkup}` : `<div class="empty-state"><div class="empty-pet">${petVisual()}</div><h2>${savedView ? savedViewEmpty.title : "Ничего не подошло"}</h2><p>${savedView ? savedViewEmpty.copy : emptyCopy}</p>${savedView ? `<a class="primary-button" href="${routeForView("catalog")}" data-view="catalog">${savedViewEmpty.action}</a>` : '<button class="primary-button" data-catalog-reset type="button">Сбросить фильтры</button>'}</div>`;
+    const savedViewMarkup = `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div>${catalogMarkup}`;
+    page.innerHTML = savedView ? savedViewMarkup : `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls" aria-labelledby="catalog-filters-title"><div class="catalog-control-top"><div><h2 id="catalog-filters-title">Подобрать фильм</h2><p>Начни с готовой подборки или уточни жанр.</p></div><div class="catalog-control-actions"><label class="catalog-sort"><span>Сортировка</span><select data-catalog-sort><option value="rating"${state.catalogSort === "rating" ? " selected" : ""}>С высоким рейтингом</option><option value="year"${state.catalogSort === "year" ? " selected" : ""}>Сначала новые</option><option value="title"${state.catalogSort === "title" ? " selected" : ""}>По алфавиту</option></select></label><button class="secondary-button catalog-random-button" data-catalog-random type="button"${items.length ? "" : " disabled"}>Выбрать случайно</button></div></div><div class="catalog-collection-heading"><h3>Подборки</h3><span>Автоматически по жанрам, рейтингу и вашей истории</span></div><div class="collection-list" role="group" aria-label="Подборки каталога">${collectionButtons}</div>${genreFilterMarkup}<div class="catalog-result-row">${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}${remoteCatalogLoading ? `<span class="catalog-loading-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span> Обновляю карточки…</span>` : ""}${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${catalogMarkup}`;
     const liveStatus = $("#catalog-live-status");
-    if (liveStatus) window.requestAnimationFrame(() => { liveStatus.textContent = `Каталог обновлён: ${catalogCountLabel(items.length)}.`; });
+    if (liveStatus) window.requestAnimationFrame(() => { liveStatus.textContent = "Каталог обновлён."; });
     bindPageActions();
     hydrateProgressiveCatalog();
     syncAssistantPaginationVisibility();
@@ -4495,11 +4678,10 @@
     const position = Number(progress?.position || 0);
     const progressPct = duration > 0 ? Math.min(100, Math.round(position / duration * 100)) : 0;
     const seriesLabel = item.kind === "series" ? `S${String(item.season || 1).padStart(2, "0")}E${String(item.episode || 1).padStart(2, "0")}` : "Фильм";
-    const downloadAction = item.source_type === "external_embed" ? "" : `<button class="secondary-button" data-library-offline="${item.id}" type="button">Скачать максимум</button>`;
     const sourceLabel = item.source_type === "external_embed" ? "Ссылка на просмотр" : "";
     const externalLinkAction = item.source_type === "external_embed" && item.embed_url ? `<a class="secondary-button" href="${escapeHtml(item.embed_url)}" target="_blank" rel="noopener noreferrer">Открыть ссылку ↗</a>` : "";
     const episodeMeta = [seriesLabel, sourceLabel, progress && !progress.completed ? `продолжить с ${formatTime(position)}` : ""].filter(Boolean).join(" · ");
-    return `<article class="library-episode"><div class="library-episode-art"><span>▶</span><small>${seriesLabel}</small><i style="--progress:${progressPct}%"></i></div><div class="library-episode-copy"><div class="eyebrow">${escapeHtml(item.title)}</div><h3>${escapeHtml(item.episode_title)}</h3><p class="muted small">${escapeHtml(episodeMeta)}</p><div class="library-episode-actions">${item.status === "ready" ? `<button class="primary-button" data-library-play="${item.id}" type="button">${progress && !progress.completed ? "Продолжить" : "Смотреть"}</button>${externalLinkAction}${downloadAction}<button class="secondary-button" data-library-room="${item.id}" type="button">Совместный просмотр</button>` : `<button class="secondary-button" data-library-refresh type="button">Обновить статус</button>`}</div></div></article>`;
+    return `<article class="library-episode"><div class="library-episode-art"><span>▶</span><small>${seriesLabel}</small><i style="--progress:${progressPct}%"></i></div><div class="library-episode-copy"><div class="eyebrow">${escapeHtml(item.title)}</div><h3>${escapeHtml(item.episode_title)}</h3><p class="muted small">${escapeHtml(episodeMeta)}</p><div class="library-episode-actions">${item.status === "ready" ? `<button class="primary-button" data-library-play="${item.id}" type="button">${progress && !progress.completed ? "Продолжить" : "Смотреть"}</button>${externalLinkAction}<button class="secondary-button" data-library-room="${item.id}" type="button">Совместный просмотр</button>` : `<button class="secondary-button" data-library-refresh type="button">Обновить статус</button>`}</div></div></article>`;
   }
 
   function catalogSearchMarkup() {
@@ -4545,7 +4727,7 @@
   }
 
   function renderLibraryView() {
-    page.innerHTML = `<div class="page-heading"><div><div class="eyebrow">Shared backend library</div><h1>Общий каталог</h1><p class="muted">Фильмы и серии устанавливаются один раз на backend. Все пользователи смотрят общий HLS-поток, а текущий MVP сохраняет продолжение в браузере.</p></div><span class="library-status">${escapeHtml(libraryStatus)}</span></div>${catalogSearchMarkup()}<section class="library-upload-card kinopoisk-import-card"><div><div class="section-kicker">Kinopoisk</div><h2>Добавить фильм или сериал</h2><p class="muted small">Вставь ID или ссылку на карточку. CineVault запустит привычную команду импорта, обновит каталог и сообщит, когда карточка готова.</p></div><form id="kinopoisk-import-form" class="library-upload-form"><label for="kinopoisk-import-input">Kinopoisk ID или ссылка<input id="kinopoisk-import-input" name="kinopoisk" required autocomplete="off" placeholder="Например, 689 или https://www.kinopoisk.ru/film/689/"></label><button class="primary-button" type="submit">Добавить в каталог</button><p id="kinopoisk-import-feedback" class="muted small" role="status" aria-live="polite"></p></form></section><section class="library-upload-card"><div><h2>Админский импорт</h2><p class="muted small">Для всего сезона можно выбрать папку целиком. Система сама разберёт <code>S01E01</code> или <code>Season 01/01.mp4</code>; обычным пользователям импорт не нужен.</p></div><form id="library-upload-form" class="library-upload-form"><input id="library-metadata" name="metadata" type="hidden" value="{}"><label>Админский ключ<input id="library-admin-token" type="password" autocomplete="off" placeholder="CINEVAULT_ADMIN_TOKEN"></label><label>Название тайтла<input name="title" data-library-title required maxlength="200" placeholder="Выбери карточку выше"></label><div class="library-upload-row"><label>Сезон<input name="season" type="number" min="0" value="1"></label><label>Серия<input name="episode" type="number" min="0" value="1"></label><label class="library-upload-wide">Название серии<input name="episode_title" maxlength="200" placeholder="Для одного файла"></label></div><label>Файлы или папка сезона<input name="file" type="file" required multiple webkitdirectory directory accept="video/*,.mkv,.avi"></label><button class="primary-button" type="submit">Импортировать выбранные серии</button><p id="library-upload-feedback" class="muted small" aria-live="polite"></p></form></section><section class="library-upload-card"><div><h2>Добавить RUTUBE-видео</h2><p class="muted small">Вставь ссылку RUTUBE вида <code>https://rutube.ru/video/...</code> или <code>/play/embed/...</code>. CineVault откроет официальный RUTUBE-плеер и не забирает прямой поток.</p></div><form id="library-external-form" class="library-upload-form"><label>Админский ключ<input name="admin_token" type="password" autocomplete="off" placeholder="CINEVAULT_ADMIN_TOKEN"></label><label>Название тайтла<input name="title" data-library-title required maxlength="200" placeholder="Например, Отчаянные домохозяйки"></label><div class="library-upload-row"><label>Сезон<input name="season" type="number" min="0" value="1"></label><label>Серия<input name="episode" type="number" min="0" value="1"></label><label class="library-upload-wide">Название серии<input name="episode_title" maxlength="200" placeholder="Например, Пилотная серия"></label></div><label>Ссылка RUTUBE<textarea name="embed_url" required rows="3" placeholder="https://rutube.ru/video/... или https://rutube.ru/play/embed/..."></textarea></label><button class="primary-button" type="submit">Подключить RUTUBE-плеер</button><p id="library-external-feedback" class="muted small" aria-live="polite"></p></form></section><section class="library-upload-card"><div><h2>Импорт JSON озвучек</h2><p class="muted small">Для фильма загрузи варианты с полями <code>data → translations → m3u8/name/quality</code>. Также поддерживаются <code>hlsUrl</code>, <code>filepath</code>, <code>url</code>, <code>sources</code> и <code>videoSources</code>. Система добавит или обновит карточку по Kinopoisk ID и сохранит только стабильные разрешённые HLS-ссылки.</p></div><form id="library-source-json-form" class="library-upload-form"><label>Админский ключ<input name="admin_token" type="password" autocomplete="off" placeholder="CINEVAULT_ADMIN_TOKEN"></label><div class="library-upload-row"><label>Kinopoisk ID<input name="kinopoisk_id" type="number" min="1" required placeholder="258687"></label><label>Тип<select name="kind"><option value="movie">Фильм</option><option value="series">Сериал</option></select></label><label class="library-upload-wide">Название (необязательно)<input name="title" maxlength="200" placeholder="Если карточки ещё нет"></label></div><label>Дополнительные метаданные (необязательно)<textarea name="metadata" rows="4" placeholder='{"title":"Интерстеллар","year":2014,"poster_url":"https://..."}'></textarea></label><label>JSON-файл источника<input name="source_json" type="file" required accept=".json,application/json"></label><button class="primary-button" type="submit">Добавить озвучки в каталог</button><p id="library-source-json-feedback" class="muted small" aria-live="polite"></p></form></section>${libraryEpisodes.length ? `<section class="section library-section"><div class="section-header"><h2>Фильмы и серии на сервере</h2><button class="text-button" data-library-refresh type="button">Обновить</button></div><div class="library-episodes">${libraryEpisodes.map(libraryEpisodeMarkup).join("")}</div></section>` : `<section class="section"><div class="empty-state"><div class="empty-pet">📚</div><h2>Общий каталог пока пуст</h2><p>Добавь первый разрешённый файл на backend. После транскодирования он станет доступен всем пользователям этого сервера.</p></div></section>`}<section class="notice library-notice"><strong>Как это работает.</strong> Локальный файл транскодируется в HLS на backend. RUTUBE-плеер остаётся у RUTUBE и не скачивается CineVault.</section>`;
+    page.innerHTML = `<div class="page-heading"><div><div class="eyebrow">Shared backend library</div><h1>Общий каталог</h1><p class="muted">Фильмы и серии устанавливаются один раз на backend. Все пользователи смотрят общий HLS-поток, а текущий MVP сохраняет продолжение в браузере.</p></div><span class="library-status">${escapeHtml(libraryStatus)}</span></div>${catalogSearchMarkup()}<section class="library-upload-card kinopoisk-import-card"><div><div class="section-kicker">Kinopoisk</div><h2>Добавить фильм или сериал</h2><p class="muted small">Вставь ID или ссылку на карточку. CineVault добавит карточку с метаданными без поиска видео. Поток обновится, когда откроешь карточку.</p></div><form id="kinopoisk-import-form" class="library-upload-form"><label>Админский ключ<input name="kinopoisk_admin_token" type="password" autocomplete="off" placeholder="CINEVAULT_ADMIN_TOKEN (локально необязательно)"></label><label for="kinopoisk-import-input">Kinopoisk ID или ссылка<input id="kinopoisk-import-input" name="kinopoisk" required autocomplete="off" placeholder="Например, 689 или https://www.kinopoisk.ru/film/689/"></label><button class="primary-button" type="submit">Добавить в каталог</button><p id="kinopoisk-import-feedback" class="muted small" role="status" aria-live="polite"></p></form></section><section class="library-upload-card"><div><h2>Админский импорт</h2><p class="muted small">Для всего сезона можно выбрать папку целиком. Система сама разберёт <code>S01E01</code> или <code>Season 01/01.mp4</code>; обычным пользователям импорт не нужен.</p></div><form id="library-upload-form" class="library-upload-form"><input id="library-metadata" name="metadata" type="hidden" value="{}"><label>Админский ключ<input id="library-admin-token" type="password" autocomplete="off" placeholder="CINEVAULT_ADMIN_TOKEN"></label><label>Название тайтла<input name="title" data-library-title required maxlength="200" placeholder="Выбери карточку выше"></label><div class="library-upload-row"><label>Сезон<input name="season" type="number" min="0" value="1"></label><label>Серия<input name="episode" type="number" min="0" value="1"></label><label class="library-upload-wide">Название серии<input name="episode_title" maxlength="200" placeholder="Для одного файла"></label></div><label>Файлы или папка сезона<input name="file" type="file" required multiple webkitdirectory directory accept="video/*,.mkv,.avi"></label><button class="primary-button" type="submit">Импортировать выбранные серии</button><p id="library-upload-feedback" class="muted small" aria-live="polite"></p></form></section><section class="library-upload-card"><div><h2>Добавить RUTUBE-видео</h2><p class="muted small">Вставь ссылку RUTUBE вида <code>https://rutube.ru/video/...</code> или <code>/play/embed/...</code>. CineVault откроет официальный RUTUBE-плеер и не забирает прямой поток.</p></div><form id="library-external-form" class="library-upload-form"><label>Админский ключ<input name="admin_token" type="password" autocomplete="off" placeholder="CINEVAULT_ADMIN_TOKEN"></label><label>Название тайтла<input name="title" data-library-title required maxlength="200" placeholder="Например, Отчаянные домохозяйки"></label><div class="library-upload-row"><label>Сезон<input name="season" type="number" min="0" value="1"></label><label>Серия<input name="episode" type="number" min="0" value="1"></label><label class="library-upload-wide">Название серии<input name="episode_title" maxlength="200" placeholder="Например, Пилотная серия"></label></div><label>Ссылка RUTUBE<textarea name="embed_url" required rows="3" placeholder="https://rutube.ru/video/... или https://rutube.ru/play/embed/..."></textarea></label><button class="primary-button" type="submit">Подключить RUTUBE-плеер</button><p id="library-external-feedback" class="muted small" aria-live="polite"></p></form></section><section class="library-upload-card"><div><h2>Импорт JSON озвучек</h2><p class="muted small">Для фильма загрузи варианты с полями <code>data → translations → m3u8/name/quality</code>. Также поддерживаются <code>hlsUrl</code>, <code>filepath</code>, <code>url</code>, <code>sources</code> и <code>videoSources</code>. Система добавит или обновит карточку по Kinopoisk ID и сохранит только стабильные разрешённые HLS-ссылки.</p></div><form id="library-source-json-form" class="library-upload-form"><label>Админский ключ<input name="admin_token" type="password" autocomplete="off" placeholder="CINEVAULT_ADMIN_TOKEN"></label><div class="library-upload-row"><label>Kinopoisk ID<input name="kinopoisk_id" type="number" min="1" required placeholder="258687"></label><label>Тип<select name="kind"><option value="movie">Фильм</option><option value="series">Сериал</option></select></label><label class="library-upload-wide">Название (необязательно)<input name="title" maxlength="200" placeholder="Если карточки ещё нет"></label></div><label>Дополнительные метаданные (необязательно)<textarea name="metadata" rows="4" placeholder='{"title":"Интерстеллар","year":2014,"poster_url":"https://..."}'></textarea></label><label>JSON-файл источника<input name="source_json" type="file" required accept=".json,application/json"></label><button class="primary-button" type="submit">Добавить озвучки в каталог</button><p id="library-source-json-feedback" class="muted small" aria-live="polite"></p></form></section>${libraryEpisodes.length ? `<section class="section library-section"><div class="section-header"><h2>Фильмы и серии на сервере</h2><button class="text-button" data-library-refresh type="button">Обновить</button></div><div class="library-episodes">${libraryEpisodes.map(libraryEpisodeMarkup).join("")}</div></section>` : `<section class="section"><div class="empty-state"><div class="empty-pet">📚</div><h2>Общий каталог пока пуст</h2><p>Добавь первый разрешённый файл на backend. После транскодирования он станет доступен всем пользователям этого сервера.</p></div></section>`}<section class="notice library-notice"><strong>Как это работает.</strong> Локальный файл транскодируется в HLS на backend. RUTUBE-плеер остаётся у RUTUBE и не скачивается CineVault.</section>`;
     removeAdminTokenFields(page);
     bindPageActions();
   }
@@ -4641,17 +4823,25 @@
       loadImportedTitleDetails(item);
     }
     stopDetailPrebuffer();
-    if (activeTitleId !== id) selectedSeason = 1;
+    const enteringTitle = activeTitleId !== id;
+    if (enteringTitle) selectedSeason = 1;
     activeTitleId = id;
+    const kinopoiskId = Number(item.kinopoiskId || item.kinopoisk_id || 0);
+    const requiresRefresh = shouldRefreshKinopoiskPlayback(item);
+    const shouldStartRefresh = requiresRefresh && !skipPlaybackRefresh && (enteringTitle || !detailPlaybackRefresh.has(kinopoiskId));
+    if (shouldStartRefresh) detailPlaybackRefresh.set(kinopoiskId, { status: "loading" });
+    const refreshState = requiresRefresh ? detailPlaybackRefresh.get(kinopoiskId) : null;
+    const playbackReady = !requiresRefresh || refreshState?.status === "ready";
     loadOnlineEpisodeAssets(item);
     const progress = progressForTitle(item);
-    // Refresh the current Kinopoisk card as soon as its detail page opens.
-    // This covers series as well as films, so an episode opened immediately
-    // afterwards receives the fresh per-episode source map.
-    const shouldRefreshDetailPlayback = !skipPlaybackRefresh && shouldRefreshKinopoiskPlayback(item);
     const favorite = state.favorites.includes(item.id);
     const resumeEpisode = progress?.episodeNumber || null;
-    const detailWatch = hasPlayableSource(item) ? watchButton(item, progress && !progress.completed ? "Продолжить просмотр" : "Смотреть") : item.providerUrl ? watchButton(item, "Смотреть") : "";
+    const detailWatch = playbackReady ? hasPlayableSource(item) ? watchButton(item, progress && !progress.completed ? "Продолжить просмотр" : "Смотреть") : item.providerUrl ? watchButton(item, "Смотреть") : "" : "";
+    const refreshAction = refreshState?.status === "loading"
+      ? `<span class="detail-stream-status" role="status"><span class="loading-spinner" aria-hidden="true"></span> Обновляю поток…</span>`
+      : refreshState?.status === "error"
+        ? `<span class="detail-stream-status is-error" role="alert">${escapeHtml(refreshState.message)} <button class="text-button" data-retry-detail-refresh="${escapeHtml(item.id)}" type="button">Повторить обновление</button></span>`
+        : "";
     const detailLocalTest = "";
     const sourceTitle = item.licenseLabel ? `${item.providerName} · ${item.licenseLabel}` : item.providerName;
     const sourceNote = item.providerNote || "Откроется на странице источника.";
@@ -4685,18 +4875,10 @@
     const actorAll = actors.length > 8 ? `<details class="detail-more"><summary>Показать всех актёров (${actors.length})</summary><div class="detail-people">${actors.map((actor) => `<span class="detail-person">${escapeHtml(actor)}</span>`).join("")}</div></details>` : "";
     const catalogReturnView = ["catalog", "movies", "series", "favorites", "evening", "history", "home"].includes(state.view) ? state.view : "catalog";
     const backLabel = catalogReturnView === "home" ? "← Назад" : "← Назад к списку";
-    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}<span class="detail-poster-kind">${item.kind === "series" ? "SERIES" : "MOVIE"}</span></div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"} · CineVault</div><h1>${escapeHtml(item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">★</span><strong>${ratingKinopoisk}</strong><small>КиноПоиск</small></div><div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div><div class="detail-status-card"><span class="detail-status-dot ${hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${hasPlayableSource(item) ? "Можно смотреть" : "Источник не подключён"}</strong><small>${item.kind === "series" ? `${item.seasons?.length || 0} сезонов` : formatRuntime(item.runtime)}</small></div></div><div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${detailWatch}${item.trailerUrl ? `<a class="secondary-button" href="${escapeHtml(item.trailerUrl)}" target="_blank" rel="noopener noreferrer">Трейлер ↗</a>` : ""}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? "♥ В избранном" : "♡ В избранное"}</button></div></div></div>${playbackPreferencesMarkup(item)}<div class="detail-facts"><dl>${factMarkup}</dl></div><div class="detail-description"><div class="section-kicker">О фильме</div><h2>${item.tagline ? escapeHtml(item.tagline) : "История, к которой хочется возвращаться"}</h2><p>${escapeHtml(item.description || "Описание пока не загружено.")}</p></div>${actors.length ? `<section class="detail-cast"><div class="section-kicker">В ролях</div><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}${providerPanel}</section>${item.kind === "series" ? renderSeasons(item) : ""}</div>`;
-    $(".detail-content .hero-actions")?.insertAdjacentHTML("afterend", `<p class="detail-prebuffer-status" id="detail-prebuffer-status" role="status" aria-live="polite">Подготавливаю начало видеопотока…</p>`);
+    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}<span class="detail-poster-kind">${item.kind === "series" ? "SERIES" : "MOVIE"}</span></div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"} · CineVault</div><h1>${escapeHtml(item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">★</span><strong>${ratingKinopoisk}</strong><small>КиноПоиск</small></div><div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div><div class="detail-status-card"><span class="detail-status-dot ${playbackReady && hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${!playbackReady ? "Обновляю источник" : hasPlayableSource(item) ? "Можно смотреть" : "Источник не подключён"}</strong><small>${item.kind === "series" ? `${item.seasons?.length || 0} сезонов` : formatRuntime(item.runtime)}</small></div></div><div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${refreshAction}${detailWatch}${item.trailerUrl ? `<a class="secondary-button" href="${escapeHtml(item.trailerUrl)}" target="_blank" rel="noopener noreferrer">Трейлер ↗</a>` : ""}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? "♥ В избранном" : "♡ В избранное"}</button></div></div></div>${playbackPreferencesMarkup(item)}<div class="detail-facts"><dl>${factMarkup}</dl></div><div class="detail-description"><div class="section-kicker">О фильме</div><h2>${item.tagline ? escapeHtml(item.tagline) : "История, к которой хочется возвращаться"}</h2><p>${escapeHtml(item.description || "Описание пока не загружено.")}</p></div>${actors.length ? `<section class="detail-cast"><div class="section-kicker">В ролях</div><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}${providerPanel}</section>${item.kind === "series" && playbackReady ? renderSeasons(item) : ""}</div>`;
+    if (refreshState?.status === "error") page.querySelector(".detail-status-card strong").textContent = "Поток не обновлён";
     bindPageActions();
-    if (shouldRefreshDetailPlayback) {
-      const refreshStatus = $("#detail-prebuffer-status");
-      if (refreshStatus) refreshStatus.textContent = "Обновляю видеопоток…";
-      refreshKinopoiskPlayback(item, { force: true }).then(() => {
-        if (activeTitleId === item.id) renderDetails(item.id, { skipPlaybackRefresh: true });
-      });
-      return;
-    }
-    startDetailPrebuffer(item);
+    if (shouldStartRefresh) queueMicrotask(() => refreshDetailPlayback(getTitle(id) || item));
   }
 
   function episodeTitle(item, season, episode) {
@@ -4774,8 +4956,8 @@
     bindVideoPlaybackControls(video, null, playOverlay, () => { status.innerHTML = "<strong>Воспроизведение не запустилось.</strong> Нажмите треугольник ещё раз."; });
     const saveProgress = (completed = false) => { state.progress[contentId] = { titleId: item.id, seasonNumber: season, episodeNumber: episode, position, duration, completed, updatedAt: Date.now() }; saveState(); };
     const updateBuffer = () => updatePlayerBuffer(video, duration, rangeWrap, bufferStatus);
-    const onMetadata = () => { loading.hidden = true; videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); positionLabel.textContent = formatTime(position); durationLabel.textContent = formatDuration(duration); updateBuffer(); if (position > 0 && position < duration) video.currentTime = position; };
-    const onTime = () => { position = Number(video.currentTime || 0); duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); positionLabel.textContent = formatTime(position); updateBuffer(); if (Date.now() - lastSavedAt > 3000) { lastSavedAt = Date.now(); saveProgress(false); } };
+    const onMetadata = () => { loading.hidden = true; videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); positionLabel.textContent = formatTime(position); durationLabel.textContent = formatDuration(duration); updateBuffer(); restorePlaybackPosition(video, position < duration ? position : 0, duration); };
+    const onTime = () => { if (protectResumePosition(video, position, duration)) return; position = Number(video.currentTime || 0); duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); positionLabel.textContent = formatTime(position); updateBuffer(); if (Date.now() - lastSavedAt > 3000) { lastSavedAt = Date.now(); saveProgress(false); } };
     const onEnded = () => { position = duration || Number(video.currentTime || 0); saveProgress(true); status.innerHTML = "<strong>Серия завершена.</strong> Прогресс сохранён."; };
     const onError = (statusCode = null) => { loading.hidden = true; if (Number(statusCode) === 410) sourceLinkExpired = true; if (sourceLinkExpired && Number(statusCode) !== 410) return; showSourceErrorCard(videoError, statusCode, "Проверьте полную ссылку, срок её действия и разрешение источника на воспроизведение в браузере."); status.innerHTML = sourceErrorMarkup(statusCode, "<strong>Видео не открылось.</strong> Проверь полную ссылку, срок её действия и разрешение источника на воспроизведение в браузере."); };
     video.addEventListener("loadedmetadata", onMetadata);
@@ -4832,8 +5014,8 @@
     let roomSync = null;
     const saveProgress = (completed = false) => { state.progress[contentId] = { titleId: item.id, providerId: "remote-source", seasonNumber: season, episodeNumber: episode, position, duration, completed, updatedAt: Date.now() }; saveState(); };
     const updateBuffer = () => updatePlayerBuffer(video, duration, rangeWrap, bufferStatus);
-    const onMetadata = () => { videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); durationLabel.textContent = formatDuration(duration); updateBuffer(); if (position > 0 && position < duration) { video.currentTime = position; status.innerHTML = `<strong>Продолжение восстановлено.</strong> Вы остановились на ${formatTime(position)}.`; } };
-    const onTime = () => { position = Number(video.currentTime || 0); duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); positionLabel.textContent = formatTime(position); updateBuffer(); if (Date.now() - lastSavedAt > 3000) { lastSavedAt = Date.now(); saveProgress(false); } };
+    const onMetadata = () => { videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); durationLabel.textContent = formatDuration(duration); updateBuffer(); if (restorePlaybackPosition(video, position < duration ? position : 0, duration)) status.innerHTML = `<strong>Продолжение восстановлено.</strong> Вы остановились на ${formatTime(position)}.`; };
+    const onTime = () => { if (protectResumePosition(video, position, duration)) return; position = Number(video.currentTime || 0); duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); positionLabel.textContent = formatTime(position); updateBuffer(); if (Date.now() - lastSavedAt > 3000) { lastSavedAt = Date.now(); saveProgress(false); } };
     const onEnded = () => { position = duration || Number(video.currentTime || 0); saveProgress(true); roomSync?.publish({ position, playing: false }); status.innerHTML = "<strong>Серия завершена.</strong> Прогресс сохранён."; };
     const retryExpiredSeriesSource = async () => {
       if (retryingExpiredSource) return;
@@ -4888,13 +5070,15 @@
     $("#remote-player-room")?.addEventListener("click", async () => {
       try {
         if (roomId) { const copied = await copyWatchRoomLink(roomId); roomStatus.hidden = false; roomStatus.textContent = copied ? "Ссылка на комнату скопирована." : "Комната активна. Ссылка находится в адресной строке."; return; }
-        const created = await createWatchRoom(item, season, episode);
+        const created = await createWatchRoom(item, season, episode, { position: Number(video.currentTime || position || 0), playing: !video.paused && !video.ended });
         const copied = await copyWatchRoomLink(created.room_id);
+        roomId = created.room_id;
         setWatchRoomInUrl(created.room_id);
-        modalRoot.innerHTML = "";
-        openItemPlayer(item, episode, season, created.room_id, false);
-        const nextRoomStatus = $("#remote-player-room-status");
-        if (nextRoomStatus) { nextRoomStatus.hidden = false; nextRoomStatus.textContent = copied ? "Комната создана. Ссылка скопирована." : "Комната создана. Ссылка находится в адресной строке."; }
+        roomSync?.dispose();
+        roomSync = installWatchRoomSync({ roomId, video, item, season, episode, roomStatus, onEpisodeChange: (nextSeason, nextEpisode) => { roomSync?.dispose(); modalRoot.innerHTML = ""; openItemPlayer(item, nextEpisode, nextSeason, roomId); } });
+        player._watchRoom = roomSync;
+        roomStatus.hidden = false;
+        roomStatus.textContent = copied ? "Вы хост комнаты. Ссылка скопирована." : "Вы хост комнаты. Ссылка находится в адресной строке.";
       } catch (error) { roomStatus.hidden = false; roomStatus.textContent = `Комнату создать не удалось: ${error.message}`; roomStatus.classList.add("is-error"); }
     });
     if (isHlsUrl(sourceUrl) && window.Hls && window.Hls.isSupported()) {
@@ -4931,7 +5115,7 @@
     const durationLabel = $("#rutube-duration");
     const status = $("#rutube-status");
     bindSeekTimePreview(range, rangeWrap);
-    const saveProgress = (completed = false) => { state.progress[contentId] = { titleId: contentId, providerId: `rutube:${videoId}`, seasonNumber: null, episodeNumber: null, position, duration, completed, updatedAt: Date.now() }; const linkedTitle = getTitle(contentId); if (linkedTitle && !state.history.includes(linkedTitle.id)) state.history.unshift(linkedTitle.id); saveState(); };
+    const saveProgress = (completed = false) => { state.progress[contentId] = { titleId: contentId, providerId: `rutube:${videoId}`, seasonNumber: null, episodeNumber: null, position, duration, completed, updatedAt: Date.now() }; const linkedTitle = getTitle(contentId); if (linkedTitle) rememberHistory(linkedTitle.id); saveState(); };
     const send = (message) => frame?.contentWindow?.postMessage(JSON.stringify(message), "https://rutube.ru");
     const handleMessage = (event) => {
       if (event.origin !== "https://rutube.ru") return;
@@ -4990,7 +5174,7 @@
     const bufferStatus = $("#video-buffer-status");
     const roomStatus = $("#video-room-status");
     bindSeekTimePreview(range, rangeWrap);
-    const saveProgress = (completed = false) => { state.progress[contentId] = { titleId: id, providerId: `html5:${item.providerName}:${activeVariant.voice}`, seasonNumber: episodeNumber ? selectedSeason : null, episodeNumber: episodeNumber || null, position, duration, completed, updatedAt: Date.now() }; if (!state.history.includes(id)) state.history.unshift(id); saveState(); };
+    const saveProgress = (completed = false) => { state.progress[contentId] = { titleId: id, providerId: `html5:${item.providerName}:${activeVariant.voice}`, seasonNumber: episodeNumber ? selectedSeason : null, episodeNumber: episodeNumber || null, position, duration, completed, updatedAt: Date.now() }; rememberHistory(id); saveState(); };
     let pendingPlay = false;
     let hls = null;
     let roomSync = null;
@@ -4999,8 +5183,10 @@
     const updateBuffer = () => updatePlayerBuffer(video, duration, rangeWrap, bufferStatus);
     const setVariant = (variant, autoplay = false, initial = false) => {
       activeVariant = variant;
-      position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : Number(position || 0);
-      saveProgress(false);
+      if (!initial) {
+        position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : Number(position || 0);
+        saveProgress(false);
+      }
       pendingPlay = autoplay;
       loading.hidden = false;
       videoError.hidden = true;
@@ -5032,8 +5218,8 @@
       setVariant(next, !video.paused);
       updatePlayerSettingsState("video");
     });
-    const onLoadedMetadata = () => { videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); durationLabel.textContent = formatDuration(duration); updateBuffer(); if (position > 0 && position < duration) { video.currentTime = position; status.innerHTML = `<strong>Продолжение восстановлено.</strong> Вы остановились на ${formatTime(position)}.`; } else { status.innerHTML = `<strong>Поток подключён.</strong> Жду первый фрагмент видео…`; } if (pendingPlay) { video.play().catch(() => { status.innerHTML = `<strong>Нажмите «Воспроизвести».</strong> Браузер заблокировал автозапуск.`; }); pendingPlay = false; } };
-    const onTimeUpdate = () => { position = Number(video.currentTime || 0); duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); positionLabel.textContent = formatTime(position); updateBuffer(); if (Date.now() - lastSavedAt > 3000) { saveProgress(false); lastSavedAt = Date.now(); } };
+    const onLoadedMetadata = () => { videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); durationLabel.textContent = formatDuration(duration); updateBuffer(); const restored = restorePlaybackPosition(video, position < duration ? position : 0, duration); if (restored) status.innerHTML = `<strong>Продолжение восстановлено.</strong> Вы остановились на ${formatTime(position)}.`; else status.innerHTML = `<strong>Поток подключён.</strong> Жду первый фрагмент видео…`; if (pendingPlay) { const start = () => video.play().catch(() => { status.innerHTML = `<strong>Нажмите «Воспроизвести».</strong> Браузер заблокировал автозапуск.`; }); if (video.readyState >= 3) start(); else video.addEventListener("canplay", start, { once: true }); pendingPlay = false; } };
+    const onTimeUpdate = () => { if (protectResumePosition(video, position, duration)) return; position = Number(video.currentTime || 0); duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); positionLabel.textContent = formatTime(position); updateBuffer(); if (Date.now() - lastSavedAt > 3000) { saveProgress(false); lastSavedAt = Date.now(); } };
     const onEnded = () => { position = duration || Number(video.currentTime || 0); saveProgress(true); roomSync?.publish({ position, playing: false }); status.innerHTML = `<strong>Просмотр завершён.</strong> Прогресс сохранён.`; };
     const retryExpiredSource = async () => {
       if (retryingExpiredSource) return;
@@ -5092,13 +5278,15 @@
     $("#video-room")?.addEventListener("click", async () => {
       try {
         if (roomId) { const copied = await copyWatchRoomLink(roomId); roomStatus.hidden = false; roomStatus.textContent = copied ? "Ссылка на комнату скопирована." : "Комната активна. Ссылка находится в адресной строке."; return; }
-        const created = await createWatchRoom(item, episodeNumber ? selectedSeason : 0, episodeNumber || 0);
+        const created = await createWatchRoom(item, episodeNumber ? selectedSeason : 0, episodeNumber || 0, { position: Number(video.currentTime || position || 0), playing: !video.paused && !video.ended });
         const copied = await copyWatchRoomLink(created.room_id);
+        roomId = created.room_id;
         setWatchRoomInUrl(created.room_id);
-        modalRoot.innerHTML = "";
-        openItemPlayer(item, episodeNumber, selectedSeason, created.room_id, false);
-        const nextRoomStatus = $("#video-room-status");
-        if (nextRoomStatus) { nextRoomStatus.hidden = false; nextRoomStatus.textContent = copied ? "Комната создана. Ссылка скопирована." : "Комната создана. Ссылка находится в адресной строке."; }
+        roomSync?.dispose();
+        roomSync = installWatchRoomSync({ roomId, video, item, season: episodeNumber ? selectedSeason : 0, episode: episodeNumber || 0, roomStatus });
+        fullscreenPlayer._watchRoom = roomSync;
+        roomStatus.hidden = false;
+        roomStatus.textContent = copied ? "Вы хост комнаты. Ссылка скопирована." : "Вы хост комнаты. Ссылка находится в адресной строке.";
       } catch (error) { roomStatus.hidden = false; roomStatus.textContent = `Комнату создать не удалось: ${error.message}`; roomStatus.classList.add("is-error"); }
     });
     const close = () => { if (playerClosed) return; playerClosed = true; position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; saveProgress(false); roomSync?.publish({ position, playing: false }); roomSync?.dispose(); fullscreenPlayer._exitFullscreen?.(); video.pause(); hls?.destroy(); removeLoadingState(); removeVolumeControl(); removeSettingsControl(); video.removeEventListener("loadedmetadata", onLoadedMetadata); video.removeEventListener("timeupdate", onTimeUpdate); video.removeEventListener("progress", updateBuffer); video.removeEventListener("canplay", updateBuffer); video.removeEventListener("ended", onEnded); video.removeEventListener("error", onError); video.removeEventListener("play", onPlay); video.removeEventListener("pause", onPause); fullscreenPlayer._removeFullscreenControls?.(); returnFromPlayer(); };
@@ -5241,8 +5429,8 @@
       }
     };
     const updateBuffer = () => updatePlayerBuffer(video, duration, rangeWrap, bufferStatus);
-    const onMetadata = () => { videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); $("#library-player-duration").textContent = formatDuration(duration); updateBuffer(); if (position > 0 && position < duration) video.currentTime = position; updateSkipControls(); maybeAutoSkip(); };
-    const onTime = () => { position = Number(video.currentTime || 0); duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); updateBuffer(); updateSkipControls(); maybeAutoSkip(); saveProgress(false); };
+    const onMetadata = () => { videoError.hidden = true; duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); $("#library-player-duration").textContent = formatDuration(duration); updateBuffer(); restorePlaybackPosition(video, position < duration ? position : 0, duration); updateSkipControls(); maybeAutoSkip(); };
+    const onTime = () => { if (protectResumePosition(video, position, duration)) return; position = Number(video.currentTime || 0); duration = Number(video.duration || duration); range.max = duration || 1; range.value = Math.min(position, duration || position); updateBuffer(); updateSkipControls(); maybeAutoSkip(); saveProgress(false); };
     const onEnded = () => { position = duration || Number(video.currentTime || 0); saveProgress(true); roomSync?.publish({ position, playing: false }); status.innerHTML = "<strong>Серия завершена.</strong> Прогресс сохранён."; };
     const onError = () => { loading.hidden = true; showSourceErrorCard(videoError, null, "Проверьте состояние FFmpeg и доступность исходного файла на сервере."); status.innerHTML = "<strong>Поток не открылся.</strong> Проверь статус FFmpeg и доступность исходного файла на сервере."; };
     const onPlay = () => { setPlayerPlayButton(play, true, false); if (!roomSync?.isApplying()) roomSync?.publish({ playing: true }); };
@@ -5277,14 +5465,18 @@
     $("#library-room")?.addEventListener("click", async () => {
       try {
         if (roomId) { await navigator.clipboard?.writeText(watchRoomLink(roomId)); roomStatus.hidden = false; roomStatus.textContent = "Ссылка на комнату скопирована."; return; }
-        const created = await createWatchRoom(item, item.season, item.episode);
+        const created = await createWatchRoom(item, item.season, item.episode, { position: Number(video.currentTime || position || 0), playing: !video.paused && !video.ended });
         await navigator.clipboard?.writeText(created.link);
+        roomId = created.room_id;
         setWatchRoomInUrl(created.room_id);
-        modalRoot.innerHTML = "";
-        openLibraryPlayer(item, created.room_id);
+        roomSync?.dispose();
+        roomSync = installWatchRoomSync({ roomId, video, item, season: item.season, episode: item.episode, roomStatus });
+        player._watchRoom = roomSync;
+        roomStatus.hidden = false;
+        roomStatus.textContent = "Вы хост комнаты. Ссылка скопирована.";
       } catch (error) { roomStatus.hidden = false; roomStatus.textContent = `Комнату создать не удалось: ${error.message}`; roomStatus.classList.add("is-error"); }
     });
-    const streamUrl = item.offlineUrl || item.hls_url || item.source_url;
+    const streamUrl = item.hls_url || item.source_url;
     if (item.hls_url && window.Hls && window.Hls.isSupported()) {
       hls = createHlsPlayer(video, streamUrl, "library", () => { videoError.hidden = true; }, (_event, data) => { if (data?.fatal) onError(); }, HLS_PLAYBACK_CONFIG, { preferredAudioKey: selectedHlsAudioKey(item), preferredAudioLabel: titlePlaybackSelection(item).hlsAudioLabel || "", preserveVolume: () => playerVolumeSnapshot(video), onAudioPreferenceChange: ({ key, label }) => { state.playbackSelections[item.id] = { ...titlePlaybackSelection(item), hlsAudio: key, hlsAudioLabel: label }; saveState(); } });
     } else {
@@ -5294,22 +5486,6 @@
     const close = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; saveProgress(false, true); roomSync?.publish({ position, playing: false }); roomSync?.dispose(); fullscreenPlayer._exitFullscreen?.(); video.pause(); hls?.destroy(); removeLoadingState(); removeVolumeControl(); removeSettingsControl(); video.removeEventListener("loadedmetadata", onMetadata); video.removeEventListener("timeupdate", onTime); video.removeEventListener("ended", onEnded); video.removeEventListener("error", onError); video.removeEventListener("play", onPlay); video.removeEventListener("pause", onPause); fullscreenPlayer._removeFullscreenControls?.(); returnFromPlayer(); };
     $("#player-close").addEventListener("click", close);
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
-  }
-
-  async function cacheLibraryOffline(item) {
-    const feedback = $("#library-upload-feedback");
-    try {
-      const manifestResponse = await apiFetch(item.offline_manifest_url, { headers: { accept: "application/json" } });
-      const manifest = await manifestResponse.json();
-      if (!manifestResponse.ok) throw new Error(manifest.error || `HTTP ${manifestResponse.status}`);
-      if (!window.caches) throw new Error("Cache Storage недоступен в этом браузере");
-      const cache = await caches.open("cinevault-media-v1");
-      for (const resource of manifest.resources) { const response = await apiFetch(resource, { cache: "no-store" }); if (!response.ok) throw new Error(`HTTP ${response.status}`); await cache.put(apiUrl(resource), response.clone()); }
-      state.offline = { ...(state.offline || {}), [item.id]: manifest.quality_playlist };
-      saveState();
-      item.offlineUrl = manifest.quality_playlist;
-      if (feedback) feedback.textContent = `${item.title} · ${item.episode_title} сохранена офлайн в качестве ${manifest.quality}.`;
-    } catch (error) { if (feedback) feedback.textContent = `Офлайн-загрузка не выполнена: ${error.message}`; }
   }
 
   async function createLibraryRoom(item) {
@@ -5322,8 +5498,15 @@
   }
 
   function bindPageActions() {
+    $$('[data-retry-detail-refresh]').forEach((button) => button.addEventListener("click", () => {
+      const item = getTitle(button.dataset.retryDetailRefresh);
+      if (item) refreshDetailPlayback(item, { force: true });
+    }));
     $$('[data-open-source-import]').forEach((button) => button.addEventListener("click", () => { const item = getTitle(button.dataset.openSourceImport); if (item) openCatalogSourceImport(item); }));
-    const beginCinematicWatch = () => { beginCinematicFullscreen(); };
+    // Opening a title must not enter fullscreen by itself: a pending source refresh
+    // or resume seek can otherwise make the browser exit fullscreen and reset the UI.
+    // Fullscreen remains available from the player's explicit control.
+    const beginCinematicWatch = () => {};
     $$('[data-play-media]').forEach((button) => button.addEventListener("click", () => { beginCinematicWatch(); const item = getTitle(button.dataset.playMedia); const season = button.dataset.resumeSeason ? Number(button.dataset.resumeSeason) : null; const episode = button.dataset.episode ? Number(button.dataset.episode) : null; openItemPlayer(item, episode, season); }));
     $$('[data-demo-play]').forEach((button) => button.addEventListener("click", () => { beginCinematicWatch(); const item = getTitle(button.dataset.demoPlay); const season = button.dataset.resumeSeason ? Number(button.dataset.resumeSeason) : null; const episode = button.dataset.episode ? Number(button.dataset.episode) : (item?.kind === "series" ? (progressForTitle(item)?.episodeNumber || 1) : null); openItemPlayer(item, episode, season); }));
     const episodeImages = $$('[data-episode-poster]');
@@ -5360,7 +5543,6 @@
     });
     finishEpisodeImageLoading();
     $$('[data-library-play]').forEach((button) => button.addEventListener("click", () => { const item = libraryEpisodes.find((episode) => episode.id === button.dataset.libraryPlay); if (item) openLibraryPlayer(item); }));
-    $$('[data-library-offline]').forEach((button) => button.addEventListener("click", () => { const item = libraryEpisodes.find((episode) => episode.id === button.dataset.libraryOffline); if (item) cacheLibraryOffline(item); }));
     $$('[data-library-room]').forEach((button) => button.addEventListener("click", () => { const item = libraryEpisodes.find((episode) => episode.id === button.dataset.libraryRoom); if (item) createLibraryRoom(item); }));
     $("#catalog-search-form")?.addEventListener("submit", runCatalogSearch);
     $$('[data-catalog-select]').forEach((button) => button.addEventListener("click", () => selectCatalogTitle(button.dataset.catalogSelect, button.dataset.catalogKind, button.dataset.catalogProvider)));
@@ -5372,6 +5554,7 @@
       const feedback = $("#kinopoisk-import-feedback");
       const submit = form.querySelector('[type="submit"]');
       const kinopoisk = String(new FormData(form).get("kinopoisk") || "").trim();
+      const kinopoiskAdminToken = String(new FormData(form).get("kinopoisk_admin_token") || "").trim();
       if (!kinopoisk) {
         input?.setAttribute("aria-invalid", "true");
         if (feedback) feedback.textContent = "Введи Kinopoisk ID или ссылку на фильм либо сериал.";
@@ -5380,11 +5563,11 @@
       }
       input?.removeAttribute("aria-invalid");
       submit.disabled = true;
-      feedback.textContent = "Запускаю импорт. Это может занять несколько минут — страницу можно не закрывать.";
+      feedback.textContent = "Добавляю карточку без видеопотока…";
       try {
         const response = await apiFetch("/api/catalog/kinopoisk-imports", {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", ...(kinopoiskAdminToken ? { "X-CineVault-Admin-Token": kinopoiskAdminToken } : {}) },
           body: JSON.stringify({ kinopoisk }),
         });
         const payload = await response.json();
@@ -5508,7 +5691,6 @@
         }
         state.playbackSelections[item.id] = current;
         saveState();
-        if (controlId !== "detail-hls-audio") startDetailPrebuffer(item);
       });
     });
     $$('[data-set-theme]').forEach((button) => button.addEventListener("click", () => { state.theme = "graphite"; persistAndRender(); }));
@@ -5524,6 +5706,7 @@
       const collectionId = String(button.dataset.catalogCollection || "");
       state.catalogCollection = state.catalogCollection === collectionId ? "" : collectionId;
       state.query = "";
+      searchDraft = "";
       const search = $("#search");
       if (search) search.value = "";
       hideSearchSuggestions();
@@ -5581,29 +5764,32 @@
     const results = searchMatches(query).slice(0, 6);
     popup.hidden = false;
     popup.innerHTML = results.length
-      ? `<p class="search-suggestions-title">${catalogCountLabel(searchMatches(query).length)} · быстрый выбор</p><div class="search-suggestions-list">${results.map((item) => `<a class="search-suggestion" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}"><span class="search-suggestion-poster" style="${posterStyle(item)}" aria-hidden="true"></span><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml([item.year, item.kind === "series" ? "сериал" : "фильм", ...genresForItem(item).slice(0, 2)].filter(Boolean).join(" · "))}</small></span><b>${escapeHtml(catalogRatingLabel(item) || "")}</b></a>`).join("")}</div>`
+      ? `<p class="search-suggestions-title">Быстрый выбор</p><div class="search-suggestions-list">${results.map((item) => `<a class="search-suggestion" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}"><span class="search-suggestion-poster" style="${posterStyle(item)}" aria-hidden="true"></span><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml([item.year, item.kind === "series" ? "сериал" : "фильм", ...genresForItem(item).slice(0, 2)].filter(Boolean).join(" · "))}</small></span><b>${escapeHtml(catalogRatingLabel(item) || "")}</b></a>`).join("")}</div>`
       : `<p class="search-suggestions-empty">По запросу «${escapeHtml(query)}» ничего не найдено. Измени запрос или открой каталог.</p>`;
   }
 
   $("#companion-open")?.addEventListener("click", openCompanion);
   $$(".pet-choice").forEach((button) => button.addEventListener("click", () => { state.companion = button.dataset.pet; $$(".pet-choice").forEach((item) => item.classList.toggle("is-selected", item === button)); $("#companion-popover").hidden = true; persistAndRender(); }));
+  searchDraft = state.query;
   $("#search").addEventListener("input", (event) => {
-    state.query = event.target.value;
+    searchDraft = event.target.value;
+    hideSearchSuggestions();
+  });
+  $("#search").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    state.query = searchDraft.trim();
+    state.catalogCollection = "";
+    state.catalogGenre = "";
     resetCatalogPage();
     saveState();
-    renderSearchSuggestions();
-    if (state.view !== "catalog" || safePathname() !== routeForView("catalog")) {
-      navigateToView("catalog", { replace: true });
-      window.requestAnimationFrame(() => { $("#search")?.focus({ preventScroll: true }); renderSearchSuggestions(); });
-      return;
-    }
-    window.clearTimeout(catalogSearchTimer);
-    catalogSearchTimer = window.setTimeout(() => loadRemoteCatalogPage(1), 220);
+    hideSearchSuggestions();
+    navigateToView("catalog", { replace: true, preserveCatalogFilters: true });
   });
-  $("#search").addEventListener("focus", renderSearchSuggestions);
+  $("#search").addEventListener("focus", hideSearchSuggestions);
   $("#search").addEventListener("blur", () => window.setTimeout(hideSearchSuggestions, 120));
   document.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); $("#search").focus(); renderSearchSuggestions(); }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); $("#search").focus(); hideSearchSuggestions(); }
     if (event.key === "Escape" && event.target === $("#search")) { hideSearchSuggestions(); $("#search").blur(); return; }
     const video = modalRoot.querySelector("video");
     const target = event.target instanceof Element ? event.target : null;
@@ -5655,14 +5841,16 @@
   renderRoute(initialRoute, { replaceHistory: true });
   const hydrateCatalog = () => {
     const importedCatalog = loadImportedCatalog()
-    .then(() => {
+    .then(async () => {
+      const route = readRouteFromLocation();
+      if (route.type === "title") await ensureCatalogTitle(route.id);
       catalogHydrating = false;
       initialCatalogReady = true;
       renderRoute(readRouteFromLocation(), { replaceHistory: true });
       return loadEpisodeAssets();
     })
     .then(() => {
-      render();
+      renderRoute(readRouteFromLocation(), { replaceHistory: true });
       return openWatchRoomFromUrl();
     });
     loadLibraryData(false)

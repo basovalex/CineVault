@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add a Kinopoisk film or series and build its CineVault card in one command."""
+"""Add a Kinopoisk card by ID or link without resolving a video stream."""
 
 from __future__ import annotations
 
@@ -8,32 +8,6 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-
-
-EXTERNAL_MEDIA_PROJECT = Path(
-    "/Users/aleksandrbasov/PycharmProjects/parsers/lk_dreamjob_reviews_parser-main/kinopoisk_media_system_fixed"
-)
-FILM_CARD_IDS = {
-    566766: "sintel-open",
-    420145: "big-buck-bunny-open",
-    313444: "elephants-dream-open",
-    44386: "gentlemen-of-fortune-rutube",
-    258687: "interstellar",
-    662596: "about-time",
-    807339: "little-women",
-    1188529: "knives-out",
-    104927: "the-holiday",
-    718811: "arrival",
-    326: "shawshank-redemption",
-    435: "green-mile",
-    448: "forrest-gump",
-    301: "the-matrix",
-    195334: "prestige",
-    1043758: "parasite",
-    683999: "grand-budapest",
-    328: "lord-of-the-rings",
-    689: "harry-potter-1",
-}
 
 
 def kinopoisk_id(value: str) -> int:
@@ -49,24 +23,18 @@ def kinopoisk_id(value: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Добавить фильм или сериал по Kinopoisk ID в CineVault")
     parser.add_argument("kinopoisk", help="ID или ссылка Kinopoisk")
-    parser.add_argument("--no-update", action="store_true", help="Использовать уже созданный generated JSON без новых запросов")
+    parser.add_argument("--no-update", action="store_true", help="Использовать только уже сохранённые метаданные")
     args = parser.parse_args()
 
     try:
-        kp_id = kinopoisk_id(args.kinopoisk)
+        kinopoisk_id(args.kinopoisk)
     except ValueError as error:
         parser.error(str(error))
 
-    if not EXTERNAL_MEDIA_PROJECT.exists():
-        print(f"Ошибка: не найден медиапроект {EXTERNAL_MEDIA_PROJECT}", file=sys.stderr)
-        return 1
-
-    command = [sys.executable, str(EXTERNAL_MEDIA_PROJECT / "add_media.py"), str(args.kinopoisk)]
-    if args.no_update:
-        command.append("--no-update")
-    print("Запускаю импорт:")
-    print(" ".join(command))
-    return subprocess.call(command, cwd=str(EXTERNAL_MEDIA_PROJECT))
+    command = [sys.executable, str(Path(__file__).with_name("import_kinopoisk_metadata.py")), str(args.kinopoisk)]
+    if not args.no_update:
+        command.append("--fetch-missing")
+    return subprocess.call(command)
 
 
 if __name__ == "__main__":

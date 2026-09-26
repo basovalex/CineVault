@@ -1,0 +1,9 @@
+[Unit]
+Description=CineVault daily TMDB metadata catalog sync
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/cinevault
+ExecStart=/usr/bin/docker compose --profile maintenance run --rm catalog-sync

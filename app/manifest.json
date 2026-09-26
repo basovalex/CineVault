@@ -2,9 +2,31 @@
   "name": "CineVault — кино для нас",
   "short_name": "CineVault",
   "lang": "ru",
-  "start_url": "./",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "any",
   "background_color": "#08070c",
   "theme_color": "#15132a",
+  "categories": ["entertainment", "video"],
+  "shortcuts": [
+    {
+      "name": "Для вас",
+      "short_name": "Для вас",
+      "url": "/"
+    },
+    {
+      "name": "Каталог",
+      "short_name": "Каталог",
+      "url": "/catalog/"
+    },
+    {
+      "name": "История",
+      "short_name": "История",
+      "url": "/history/"
+    }
+  ],
   "icons": [{"src": "./favicon.svg", "sizes": "any", "type": "image/svg+xml"}]
 }

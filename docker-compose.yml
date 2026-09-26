@@ -23,6 +23,9 @@ services:
     volumes:
       - ${CINEVAULT_DATA_DIR:-./data/media-library}:/data/media-library
       - ${CINEVAULT_INBOX_DIR:-./inbox}:/inbox:ro
+      # Catalog metadata is updated by the separate maintenance job. Mount it
+      # so the running backend sees new cards without a player restart.
+      - ./app/data:/opt/cinevault/app/data
     healthcheck:
       test:
         - CMD
@@ -33,3 +36,28 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+  catalog-sync:
+    build: .
+    profiles: ["maintenance"]
+    user: "0:0"
+    entrypoint: ["python", "tools/sync_tmdb_catalog.py"]
+    command: ["--mode", "daily", "--pages", "${CINEVAULT_TMDB_CATALOG_DAILY_PAGES:-2}"]
+    environment:
+      CINEVAULT_TMDB_API_TOKEN: ${CINEVAULT_TMDB_API_TOKEN:-}
+    volumes:
+      - ./app/data:/opt/cinevault/app/data
+  kinopoisk-catalog-sync:
+    build: .
+    profiles: ["maintenance"]
+    user: "0:0"
+    entrypoint: ["python", "tools/sync_kinopoisk_dev_catalog.py"]
+    command:
+      - --pages
+      - ${CINEVAULT_KINOPOISK_CATALOG_PAGES:-2}
+      - --limit
+      - ${CINEVAULT_KINOPOISK_CATALOG_PAGE_LIMIT:-100}
+    environment:
+      CINEVAULT_KINOPOISK_DEV_TOKEN: ${CINEVAULT_KINOPOISK_DEV_TOKEN:-}
+    volumes:
+      - ./app/data:/opt/cinevault/app/data
+      - ${CINEVAULT_DATA_DIR:-./data/media-library}:/opt/cinevault/data/media-library

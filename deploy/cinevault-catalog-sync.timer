@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CineVault TMDB catalog sync every day
+
+[Timer]
+OnCalendar=*-*-* 08:20:00 UTC
+Persistent=true
+Unit=cinevault-catalog-sync.service
+
+[Install]
+WantedBy=timers.target

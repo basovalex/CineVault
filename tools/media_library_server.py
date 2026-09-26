@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""First-party CineVault media-library server.
-
-This server accepts only user-supplied media files and never fetches or
-extracts streams from third-party sites.  It is intentionally dependency-free
-for the local MVP; put authentication, TLS and a reverse proxy in front of it
-before exposing it outside a trusted network.
-"""
+"""CineVault catalog and media-library server."""
 
 from __future__ import annotations
 
@@ -14,10 +8,13 @@ import cgi
 import html
 import hashlib
 import hmac
+import ipaddress
 import json
 import mimetypes
 import os
+import queue
 import re
+import secrets
 import shutil
 import threading
 import shlex
@@ -31,6 +28,7 @@ import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
+import requests
 
 try:
     import certifi
@@ -50,7 +48,7 @@ DEFAULT_DATA_DIR = ROOT / "data" / "media-library"
 CATALOG_IMPORTS_PATH = APP_DIR / "data" / "catalog_imports.json"
 CATALOG_INDEX_FIELDS = (
     "id", "kind", "title", "originalTitle", "year", "description", "tags", "genres",
-    "rating", "ratingKinopoisk", "imdbRating", "seasons", "runtime", "kinopoiskId",
+    "rating", "ratingKinopoisk", "imdbRating", "seasons", "runtime", "kinopoiskId", "tmdbId",
     "catalogId", "poster", "posterImage", "providerUrl", "providerName", "providerNote", "tagline",
 )
 
@@ -98,6 +96,8 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024 * 1024
 MAX_SOURCE_JSON_BYTES = 10 * 1024 * 1024
 MAX_TITLE_LENGTH = 200
 MAX_EXTERNAL_EMBED_URL_LENGTH = 4096
+DOWNLOAD_TICKET_TTL_SECONDS = 30 * 60
+STREAM_DOWNLOAD_LEASE_SECONDS = 90
 EXTERNAL_EMBED_HOSTS = {
     "cinemar.cc",
     "www.cinemar.cc",
@@ -142,8 +142,8 @@ def sitemap_title_ids(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[str]:
     """Return stable public card IDs from seed data and the current catalog."""
     title_ids = set(SITEMAP_SEED_TITLE_IDS)
     try:
-        payload = json.loads(Path(catalog_path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = imported_catalog_entries(catalog_path)
+    except RuntimeError:
         payload = []
     for entry in payload if isinstance(payload, list) else []:
         if not isinstance(entry, dict):
@@ -239,16 +239,9 @@ class KinopoiskCatalogImporter:
 
     def _catalog_entry(self, kinopoisk_id: int) -> Optional[Dict[str, Any]]:
         try:
-            catalog = json.loads(self.catalog_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            return imported_catalog_item(str(kinopoisk_id), self.catalog_path)
+        except (KeyError, RuntimeError):
             return None
-        for item in catalog if isinstance(catalog, list) else []:
-            try:
-                if isinstance(item, dict) and int(item.get("kinopoiskId") or 0) == kinopoisk_id:
-                    return dict(item)
-            except (TypeError, ValueError):
-                continue
-        return None
 
     @staticmethod
     def _public_job(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -351,15 +344,44 @@ class KinopoiskOnDemandUpdater:
     def script_path(self) -> Path:
         return self.updater_dir / "update_media.py"
 
+    def register_source_if_missing(self, entry: Dict[str, Any], env: Dict[str, str]) -> None:
+        """Register a metadata-only card only when its stream is first requested."""
+        add_script = self.updater_dir / "add_media.py"
+        if not add_script.is_file():
+            return
+        source_file = self.updater_dir / "media_sources.json"
+        try:
+            configured = json.loads(source_file.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            configured = {"media": []}
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Реестр источников Kinopoisk недоступен") from exc
+        kp_id = int(entry["kinopoiskId"])
+        media = configured.get("media") if isinstance(configured, dict) else None
+        if not isinstance(media, list):
+            raise RuntimeError("Реестр источников Kinopoisk имеет неверный формат")
+        for item in media:
+            url = str(item.get("url") if isinstance(item, dict) else item or "")
+            match = re.search(r"kinopoisk\.ru/(?:film|series)/(\d+)", url, re.I)
+            if match and int(match.group(1)) == kp_id:
+                return
+        kind = "series" if entry.get("kind") == "series" else "film"
+        url = "https://www.kinopoisk.ru/{}/{}/".format(kind, kp_id)
+        result = subprocess.run(
+            [sys.executable, str(add_script), url, "--no-update"],
+            cwd=str(self.updater_dir), env=env, check=False,
+            capture_output=True, text=True, timeout=self.timeout_seconds,
+        )
+        if result.returncode:
+            raise RuntimeError("Не удалось зарегистрировать карточку Kinopoisk перед обновлением потока")
+
     def catalog_entry(self, kinopoisk_id: int) -> Dict[str, Any]:
         try:
-            catalog = json.loads(self.catalog_path.read_text(encoding="utf-8"))
+            return imported_catalog_item(str(kinopoisk_id), self.catalog_path)
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError("Каталог CineVault временно недоступен") from exc
-        for item in catalog if isinstance(catalog, list) else []:
-            if isinstance(item, dict) and int(item.get("kinopoiskId") or 0) == kinopoisk_id:
-                return dict(item)
-        raise KeyError("Карточка Kinopoisk не найдена в каталоге CineVault")
+        except KeyError as exc:
+            raise KeyError("Карточка Kinopoisk не найдена в каталоге CineVault") from exc
 
     def refresh(self, kinopoisk_id: Any, force: bool = False) -> Dict[str, Any]:
         try:
@@ -371,7 +393,7 @@ class KinopoiskOnDemandUpdater:
         # Reject unknown IDs before starting the external helper. Viewers may
         # refresh existing cards, but cannot use this endpoint as a generic
         # command runner or add arbitrary provider URLs.
-        self.catalog_entry(resolved_id)
+        entry = self.catalog_entry(resolved_id)
         if not self.script_path.is_file():
             raise FileNotFoundError("Локальный Kinopoisk updater не найден")
 
@@ -381,9 +403,29 @@ class KinopoiskOnDemandUpdater:
                 return {"refreshed": False, "cached": True, "entry": self.catalog_entry(resolved_id)}
             print("Kinopoisk playback refresh: starting ID {}".format(resolved_id), flush=True)
             try:
+                updater_env = os.environ.copy()
+                updater_env.setdefault("CINEVAULT_SERVICE_DIR", str(ROOT))
+                helper_env_path = self.updater_dir / ".env"
+                if helper_env_path.is_file():
+                    for line in helper_env_path.read_text(encoding="utf-8").splitlines():
+                        assignment = line.strip()
+                        if assignment.startswith("export "):
+                            assignment = assignment[7:].strip()
+                        if not assignment or assignment.startswith("#") or "=" not in assignment:
+                            continue
+                        name, value = assignment.split("=", 1)
+                        name, value = name.strip(), value.strip()
+                        if name not in {"CINEVAULT_APBUGALL_TOKEN", "CINEVAULT_DEVICE_FP", "CINEVAULT_IFRAME_REQUEST_ID"}:
+                            continue
+                        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                            value = value[1:-1]
+                        if value:
+                            updater_env.setdefault(name, value)
+                self.register_source_if_missing(entry, updater_env)
                 result = subprocess.run(
                     kinopoisk_update_command(self.updater_dir, resolved_id, self.delay_seconds),
                     cwd=str(self.updater_dir),
+                    env=updater_env,
                     check=False,
                     capture_output=True,
                     text=True,
@@ -714,19 +756,38 @@ def update_catalog_from_source_json(
 
 
 def imported_catalog_entries(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[Dict[str, Any]]:
+    catalog_path = Path(catalog_path)
+    metadata_path = catalog_path.with_name("catalog_metadata.json")
     try:
         mtime_ns = catalog_path.stat().st_mtime_ns
     except OSError as exc:
         raise RuntimeError("Каталог CineVault временно недоступен") from exc
-    cache_key = str(catalog_path.resolve())
+    try:
+        metadata_mtime_ns = metadata_path.stat().st_mtime_ns
+    except FileNotFoundError:
+        metadata_mtime_ns = None
+    cache_key = (str(catalog_path.resolve()), str(metadata_path.resolve()), metadata_mtime_ns)
     with _catalog_cache_lock:
         if _catalog_cache.get("path") == cache_key and _catalog_cache.get("mtime_ns") == mtime_ns:
             return _catalog_cache["items"]
     try:
         payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+        metadata_payload = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_mtime_ns is not None else []
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError("Каталог CineVault временно недоступен") from exc
     items = [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+    known_ids = {str(item.get("id") or "") for item in items}
+    known_kinopoisk_ids = {str(item.get("kinopoiskId") or "") for item in items if item.get("kinopoiskId")}
+    for item in metadata_payload if isinstance(metadata_payload, list) else []:
+        if not isinstance(item, dict):
+            continue
+        identifier = str(item.get("id") or "")
+        kinopoisk_id = str(item.get("kinopoiskId") or "")
+        if not identifier or not kinopoisk_id or identifier in known_ids or kinopoisk_id in known_kinopoisk_ids:
+            continue
+        items.append(item)
+        known_ids.add(identifier)
+        known_kinopoisk_ids.add(kinopoisk_id)
     with _catalog_cache_lock:
         _catalog_cache.update({"path": cache_key, "mtime_ns": mtime_ns, "items": items})
     return items
@@ -747,6 +808,12 @@ def imported_catalog_item(identifier: str, catalog_path: Path = CATALOG_IMPORTS_
 def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
     """Return a small, server-filtered page of catalog cards."""
     items = imported_catalog_entries()
+    requested_ids = {
+        value.strip()
+        for raw_value in params.get("ids", [])
+        for value in raw_value.split(",")
+        if value.strip()
+    }
     query = str(params.get("search", [""])[0]).strip().casefold()
     genre = str(params.get("genre", [""])[0]).strip().casefold()
     kind = str(params.get("type", params.get("kind", [""]))[0]).strip().casefold()
@@ -769,6 +836,8 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
         return {str(value).strip().casefold() for value in values if str(value).strip()}
 
     def matches(item: Dict[str, Any]) -> bool:
+        if requested_ids and str(item.get("id", "")) not in requested_ids:
+            return False
         if kind and str(item.get("kind", "")).casefold() != kind:
             return False
         if query and query not in text(item):
@@ -835,16 +904,21 @@ class MediaLibrary:
         self.root = Path(data_dir).resolve()
         self.uploads_dir = self.root / "uploads"
         self.hls_dir = self.root / "hls"
+        self.downloads_dir = self.root / "downloads"
         self.db_path = self.root / "library.sqlite3"
         self.root.mkdir(parents=True, exist_ok=True)
         self.uploads_dir.mkdir(exist_ok=True)
         self.hls_dir.mkdir(exist_ok=True)
+        self.downloads_dir.mkdir(exist_ok=True)
         self.ffmpeg_path = ffmpeg_path or shutil.which("ffmpeg")
         self.tmdb_api_token = str(tmdb_api_token or "").strip()
         self.transcode_enabled = transcode
         self.max_quality_height = max_quality_height
         self._lock = threading.RLock()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cinevault-transcode")
+        self._download_jobs: Dict[str, Dict[str, Any]] = {}
+        self._stream_download_jobs: Dict[str, Dict[str, Any]] = {}
+        self._download_tickets: Dict[str, tuple[Path, str, float]] = {}
         self._db = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._init_db()
@@ -1000,6 +1074,7 @@ class MediaLibrary:
             "source_url": None if source_type == "external_embed" else f"/media/source/{row['id']}/{quote_path(Path(row['source_path']).name)}",
             "embed_url": external_url if source_type == "external_embed" else None,
             "offline_manifest_url": None if source_type == "external_embed" else f"/api/library/episodes/{row['id']}/offline-manifest",
+            "download_url": None if source_type == "external_embed" else f"/api/library/episodes/{row['id']}/download",
             "skip_segments": skip_segments,
             "progress": {
                 "position": float(progress["position_seconds"]),
@@ -1660,6 +1735,408 @@ class MediaLibrary:
             "resource_sizes": resource_sizes,
         }
 
+    def _download_row(self, episode_id: str) -> sqlite3.Row:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT e.*, t.title FROM episodes e JOIN titles t ON t.id = e.title_id WHERE e.id = ?",
+                (episode_id,),
+            ).fetchone()
+        if not row:
+            raise FileNotFoundError("Серия не найдена")
+        if row["source_type"] == "external_embed":
+            raise ValueError("Внешний embed нельзя скачать через CineVault")
+        return row
+
+    @staticmethod
+    def _download_filename(row: sqlite3.Row) -> str:
+        suffix = f"-s{int(row['season_number']):02d}e{int(row['episode_number']):02d}" if row["season_number"] else ""
+        return f"{slugify(str(row['title']))}{suffix}.mp4"
+
+    def _download_payload(self, episode_id: str, status: str, *, error: Optional[str] = None) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "episode_id": episode_id,
+            "status": status,
+            "download_url": f"/api/library/episodes/{episode_id}/download/file" if status == "ready" else None,
+        }
+        if error:
+            payload["error"] = error
+        return payload
+
+    def mp4_download_status(self, episode_id: str) -> Dict[str, Any]:
+        row = self._download_row(episode_id)
+        source = (self.root / row["source_path"]).resolve()
+        if source.suffix.lower() == ".mp4" and source.is_file():
+            return self._download_payload(episode_id, "ready")
+        output = self.downloads_dir / f"{episode_id}.mp4"
+        if output.is_file() and output.stat().st_size > 0:
+            return self._download_payload(episode_id, "ready")
+        with self._lock:
+            job = dict(self._download_jobs.get(episode_id, {}))
+        return self._download_payload(episode_id, job.get("status", "idle"), error=job.get("error"))
+
+    def start_mp4_download(self, episode_id: str) -> Dict[str, Any]:
+        row = self._download_row(episode_id)
+        source = (self.root / row["source_path"]).resolve()
+        try:
+            source.relative_to(self.uploads_dir.resolve())
+        except ValueError as exc:
+            raise ValueError("Некорректный исходный файл") from exc
+        if not is_materialized_file(source):
+            raise FileNotFoundError("Исходный файл сейчас недоступен на сервере")
+        if source.suffix.lower() == ".mp4":
+            return self._download_payload(episode_id, "ready")
+        output = self.downloads_dir / f"{episode_id}.mp4"
+        if output.is_file() and output.stat().st_size > 0:
+            return self._download_payload(episode_id, "ready")
+        if not self.ffmpeg_path:
+            raise RuntimeError("FFmpeg не найден: MP4 пока нельзя подготовить")
+        with self._lock:
+            current = self._download_jobs.get(episode_id, {})
+            if current.get("status") != "processing":
+                self._download_jobs[episode_id] = {"status": "processing"}
+                self._executor.submit(self._export_mp4, episode_id, source, output)
+        return self._download_payload(episode_id, "processing")
+
+    def _export_mp4(self, episode_id: str, source: Path, output: Path) -> None:
+        temporary = output.with_suffix(".part.mp4")
+        try:
+            temporary.unlink(missing_ok=True)
+            subprocess.run(
+                [self.ffmpeg_path, "-hide_banner", "-loglevel", "error", "-y", "-i", str(source), "-map", "0", "-c", "copy", "-movflags", "+faststart", str(temporary)],
+                check=True,
+                timeout=12 * 60 * 60,
+            )
+            if not temporary.is_file() or temporary.stat().st_size == 0:
+                raise RuntimeError("FFmpeg не создал MP4-файл")
+            temporary.replace(output)
+            with self._lock:
+                self._download_jobs[episode_id] = {"status": "ready"}
+        except Exception as exc:
+            temporary.unlink(missing_ok=True)
+            with self._lock:
+                self._download_jobs[episode_id] = {"status": "error", "error": str(exc)[:500]}
+
+    def mp4_download_file(self, episode_id: str) -> tuple[Path, str]:
+        row = self._download_row(episode_id)
+        source = (self.root / row["source_path"]).resolve()
+        candidate = source if source.suffix.lower() == ".mp4" else self.downloads_dir / f"{episode_id}.mp4"
+        if not candidate.is_file() or candidate.stat().st_size == 0:
+            raise FileNotFoundError("MP4 ещё готовится")
+        if not is_materialized_file(candidate):
+            raise FileNotFoundError("MP4 сейчас недоступен на сервере")
+        return candidate, self._download_filename(row)
+
+    def issue_download_ticket(self, candidate: Path, filename: str) -> str:
+        token = secrets.token_urlsafe(32)
+        with self._lock:
+            now = time.monotonic()
+            self._download_tickets = {key: value for key, value in self._download_tickets.items() if value[2] > now}
+            self._download_tickets[token] = (candidate.resolve(), filename, now + DOWNLOAD_TICKET_TTL_SECONDS)
+        return token
+
+    def download_ticket_file(self, token: str) -> tuple[Path, str]:
+        with self._lock:
+            entry = self._download_tickets.get(token)
+        if not entry or entry[2] <= time.monotonic() or not is_materialized_file(entry[0]):
+            raise FileNotFoundError("Ссылка на скачивание истекла")
+        return entry[0], entry[1]
+
+    @staticmethod
+    def _stream_source_url(item: Dict[str, Any], season: int, episode: int, source_key: str) -> str:
+        if item.get("kind") == "movie":
+            sources = item.get("videoSources") or []
+            if not isinstance(sources, list):
+                sources = []
+            for index, source in enumerate(sources):
+                if isinstance(source, dict) and (source_key == str(source.get("id") or f"source-{index + 1}")):
+                    return str(source.get("url") or "")
+            if not source_key and sources and isinstance(sources[0], dict):
+                return str(sources[0].get("url") or "")
+            return str(item.get("videoUrl") or "") if not source_key else ""
+
+        source_file = str(item.get("sourceFile") or "").strip()
+        if not source_file or season < 1 or episode < 1:
+            return ""
+        candidate = (APP_DIR / source_file).resolve()
+        if candidate.suffix != ".json" or not candidate.is_relative_to((APP_DIR / "data").resolve()):
+            raise ValueError("Некорректный файл источников")
+        try:
+            rows = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("Список источников недоступен") from exc
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict) or int(row.get("season") or 0) != season or int(row.get("episode") or 0) != episode:
+                continue
+            sources = row.get("sources") or []
+            for index, source in enumerate(sources if isinstance(sources, list) else []):
+                if not isinstance(source, dict):
+                    continue
+                label = str(source.get("label") or source.get("name") or f"Озвучка {index + 1}").strip()
+                variant_id = source.get("variant_id", source.get("variantId"))
+                key = f"variant:{variant_id}" if variant_id is not None else f"source:{index + 1}:{label}"
+                if key == source_key or (not source_key and index == 0):
+                    return str(source.get("url") or source.get("source_url") or "")
+            if not source_key or source_key == "legacy:default":
+                return str(row.get("token") or "") if row.get("is_full_url") else ""
+        return ""
+
+    @staticmethod
+    def _validate_stream_url(url: str) -> None:
+        parsed = urllib.parse.urlsplit(url)
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        if parsed.scheme != "https" or not hostname or parsed.username or parsed.password or parsed.port not in {None, 443}:
+            raise ValueError("Для экспорта нужен HTTPS-видеопоток из каталога")
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            address = None
+        if address is not None and not address.is_global:
+            raise ValueError("Внутренний адрес видеопотока не поддерживается")
+        if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith((".localhost", ".local", ".internal")):
+            raise ValueError("Внутренний адрес видеопотока не поддерживается")
+
+    def _stream_download_payload(self, job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
+        status = str(job.get("status") or "processing")
+        payload = {
+            "id": job_id, "status": status,
+            "download_url": f"/api/catalog/downloads/{job_id}/file" if status == "ready" else None,
+            "phase": job.get("phase") or ("ready" if status == "ready" else "preparing"),
+            "percent": 100 if status == "ready" else int(job.get("percent") or 0),
+            "processed_seconds": round(float(job.get("processed_seconds") or 0), 1),
+            "duration_seconds": round(float(job.get("duration_seconds") or 0), 1),
+            "elapsed_seconds": round(float(job.get("elapsed_seconds") or 0), 1),
+            "eta_seconds": round(float(job.get("eta_seconds") or 0), 1) if job.get("eta_seconds") is not None else None,
+        }
+        if status == "error":
+            payload["error"] = str(job.get("error") or "Не удалось собрать MP4")
+        return payload
+
+    @staticmethod
+    def _hls_attributes(tag: str) -> Dict[str, str]:
+        return {
+            key: value.strip('"')
+            for key, value in re.findall(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)', tag)
+        }
+
+    def _stream_export_inputs(self, source: str) -> tuple[list[str], list[str]]:
+        """Resolve HLS child playlists against the master's final redirect URL.
+
+        HLS.js uses the final CDN URL after a redirect. FFmpeg does not always
+        resolve relative variant URLs that way, and can end up with audio only.
+        """
+        if not urllib.parse.urlsplit(source).path.lower().endswith(".m3u8"):
+            return [source], ["-map", "0:v:0", "-map", "0:a:0?"]
+
+        current = source
+        with requests.Session() as session:
+            # Match FFmpeg's direct network route and avoid ambient proxy
+            # variables changing how the playlist is resolved.
+            session.trust_env = False
+            for _ in range(6):
+                self._validate_stream_url(current)
+                with session.get(current, timeout=20, allow_redirects=False, stream=True) as response:
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        location = response.headers.get("Location")
+                        if not location:
+                            raise RuntimeError("HLS-источник вернул пустое перенаправление")
+                        current = urllib.parse.urljoin(current, location)
+                        continue
+                    response.raise_for_status()
+                    chunks: list[bytes] = []
+                    size = 0
+                    for chunk in response.iter_content(64 * 1024):
+                        size += len(chunk)
+                        if size > 2 * 1024 * 1024:
+                            raise RuntimeError("HLS-плейлист слишком большой")
+                        chunks.append(chunk)
+                    playlist = b"".join(chunks).decode("utf-8-sig", errors="replace")
+                    break
+            else:
+                raise RuntimeError("Слишком много перенаправлений HLS")
+
+        lines = playlist.splitlines()
+        variants: list[tuple[int, str, str]] = []
+        audio_tracks: list[Dict[str, str]] = []
+        for index, line in enumerate(lines):
+            if line.startswith("#EXT-X-MEDIA:"):
+                attributes = self._hls_attributes(line)
+                if attributes.get("TYPE") == "AUDIO" and attributes.get("URI"):
+                    audio_tracks.append(attributes)
+            if not line.startswith("#EXT-X-STREAM-INF:"):
+                continue
+            attributes = self._hls_attributes(line)
+            variant = next((candidate.strip() for candidate in lines[index + 1:] if candidate.strip() and not candidate.startswith("#")), "")
+            if variant:
+                variants.append((int(attributes.get("BANDWIDTH") or 0), variant, attributes.get("AUDIO") or ""))
+
+        if not variants:
+            # Direct media playlists already contain segments, not renditions.
+            return [current], ["-map", "0:v:0", "-map", "0:a:0?"]
+
+        _, variant, audio_group = max(variants, key=lambda row: row[0])
+        video_url = urllib.parse.urljoin(current, variant)
+        self._validate_stream_url(video_url)
+        matching_audio = [track for track in audio_tracks if track.get("GROUP-ID") == audio_group]
+        audio = next((track for track in matching_audio if track.get("DEFAULT") == "YES"), None)
+        audio = audio or (matching_audio[0] if matching_audio else None)
+        if audio:
+            audio_url = urllib.parse.urljoin(current, audio["URI"])
+            self._validate_stream_url(audio_url)
+            return [video_url, audio_url], ["-map", "0:v:0", "-map", "1:a:0"]
+        return [video_url], ["-map", "0:v:0", "-map", "0:a:0?"]
+
+    def start_stream_download(self, title_id: str, season: int = 0, episode: int = 0, source_key: str = "") -> Dict[str, Any]:
+        item = imported_catalog_item(title_id)
+        season, episode = int(season or 0), int(episode or 0)
+        if item.get("kind") == "series" and (season < 1 or episode < 1):
+            raise ValueError("Выбери серию")
+        source = self._stream_source_url(item, season, episode, str(source_key or ""))
+        if not source:
+            raise ValueError("У выбранного фильма или серии нет потока")
+        self._validate_stream_url(source)
+        if not self.ffmpeg_path:
+            raise RuntimeError("FFmpeg не найден: MP4 пока нельзя подготовить")
+        identity = json.dumps([item["id"], season, episode, source_key, source], ensure_ascii=False)
+        job_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+        duration_seconds = 0.0
+        if item.get("kind") == "movie":
+            duration_seconds = next((float(candidate.get("duration") or 0) for candidate in item.get("videoSources") or []
+                                     if isinstance(candidate, dict) and str(candidate.get("url") or "") == source), 0.0)
+        if duration_seconds <= 0:
+            duration_seconds = float(item.get("runtime") or 0) * 60
+        suffix = f"-s{season:02d}e{episode:02d}" if season else ""
+        filename = f"{slugify(str(item.get('title') or title_id))}{suffix}.mp4"
+        output = self.downloads_dir / f"stream-{job_id}.mp4"
+        with self._lock:
+            job = self._stream_download_jobs.get(job_id)
+            if output.is_file() and output.stat().st_size > 0:
+                job = {"status": "ready", "phase": "ready", "percent": 100,
+                       "duration_seconds": duration_seconds, "processed_seconds": duration_seconds,
+                       "path": output, "filename": filename}
+                self._stream_download_jobs[job_id] = job
+            elif not job or job.get("status") != "processing":
+                job = {"status": "processing", "phase": "preparing", "percent": 0,
+                       "duration_seconds": duration_seconds, "processed_seconds": 0,
+                       "elapsed_seconds": 0, "eta_seconds": None,
+                       "last_seen_at": time.monotonic(), "cancel_event": threading.Event(),
+                       "path": output, "filename": filename}
+                self._stream_download_jobs[job_id] = job
+                self._executor.submit(self._export_stream_mp4, job_id, source, output)
+            return self._stream_download_payload(job_id, job)
+
+    def cancel_stream_download(self, job_id: str) -> Dict[str, Any]:
+        with self._lock:
+            job = self._stream_download_jobs.get(job_id)
+            if not job:
+                raise KeyError("Загрузка не найдена")
+            if job.get("status") == "processing":
+                job["cancel_event"].set()
+                job["phase"] = "cancelling"
+            return self._stream_download_payload(job_id, job)
+
+    def _stream_download_cancelled(self, job_id: str) -> bool:
+        with self._lock:
+            job = self._stream_download_jobs[job_id]
+            if time.monotonic() - float(job.get("last_seen_at") or 0) > STREAM_DOWNLOAD_LEASE_SECONDS:
+                job["cancel_event"].set()
+                job["phase"] = "cancelling"
+            return job["cancel_event"].is_set()
+
+    def _export_stream_mp4(self, job_id: str, source: str, output: Path) -> None:
+        temporary = output.with_suffix(".part.mp4")
+        process = None
+        try:
+            if self._stream_download_cancelled(job_id):
+                raise InterruptedError("Сборка MP4 отменена")
+            temporary.unlink(missing_ok=True)
+            inputs, maps = self._stream_export_inputs(source)
+            if self._stream_download_cancelled(job_id):
+                raise InterruptedError("Сборка MP4 отменена")
+            input_args = [argument for url in inputs for argument in
+                          ("-protocol_whitelist", "http,https,tcp,tls,crypto", "-i", url)]
+            with self._lock:
+                self._stream_download_jobs[job_id]["phase"] = "assembling"
+            process = subprocess.Popen(
+                [self.ffmpeg_path, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                 *input_args, *maps, "-c", "copy", "-movflags", "+faststart",
+                 "-progress", "pipe:1", "-stats_period", "0.5", str(temporary)],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1,
+            )
+            progress_lines: queue.Queue[Optional[str]] = queue.Queue()
+            def collect_progress() -> None:
+                assert process is not None and process.stdout is not None
+                for line in process.stdout:
+                    progress_lines.put(line.strip())
+                progress_lines.put(None)
+            threading.Thread(target=collect_progress, daemon=True).start()
+            started = time.monotonic()
+            while True:
+                if self._stream_download_cancelled(job_id):
+                    raise InterruptedError("Сборка MP4 отменена")
+                if time.monotonic() - started > 12 * 60 * 60:
+                    raise TimeoutError("Подготовка MP4 превысила лимит времени")
+                try:
+                    line = progress_lines.get(timeout=1)
+                except queue.Empty:
+                    continue
+                if line is None:
+                    break
+                if line.startswith("out_time_us="):
+                    try:
+                        processed = max(0.0, int(line.split("=", 1)[1]) / 1_000_000)
+                    except ValueError:
+                        continue
+                    elapsed = time.monotonic() - started
+                    with self._lock:
+                        job = self._stream_download_jobs[job_id]
+                        duration = float(job.get("duration_seconds") or 0)
+                        job["processed_seconds"] = processed
+                        job["elapsed_seconds"] = elapsed
+                        job["percent"] = min(99, int(processed / duration * 100)) if duration > 0 else 0
+                        job["eta_seconds"] = (elapsed / processed * max(0.0, duration - processed)) if processed >= 10 and duration > 0 else None
+                elif line == "progress=end":
+                    with self._lock:
+                        self._stream_download_jobs[job_id]["phase"] = "finalizing"
+            if process.wait(timeout=10) != 0:
+                raise RuntimeError("FFmpeg не смог собрать MP4")
+            if self._stream_download_cancelled(job_id):
+                raise InterruptedError("Сборка MP4 отменена")
+            if not temporary.is_file() or temporary.stat().st_size == 0:
+                raise RuntimeError("MP4-файл пуст")
+            temporary.replace(output)
+            with self._lock:
+                self._stream_download_jobs[job_id].update({"status": "ready", "phase": "ready", "percent": 100, "eta_seconds": 0})
+        except Exception:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            temporary.unlink(missing_ok=True)
+            with self._lock:
+                cancelled = self._stream_download_jobs[job_id]["cancel_event"].is_set()
+                if cancelled:
+                    self._stream_download_jobs[job_id].update({"status": "cancelled", "phase": "cancelled", "eta_seconds": None})
+                else:
+                    self._stream_download_jobs[job_id].update({"status": "error", "phase": "error", "error": "Поток не удалось собрать в MP4. Проверь доступность ссылки и формат видео."})
+
+    def stream_download_status(self, job_id: str) -> Dict[str, Any]:
+        with self._lock:
+            job = self._stream_download_jobs.get(job_id)
+            if not job:
+                raise KeyError("Загрузка не найдена")
+            if job.get("status") == "processing" and job.get("phase") != "cancelling":
+                job["last_seen_at"] = time.monotonic()
+            return self._stream_download_payload(job_id, job)
+
+    def stream_download_file(self, job_id: str) -> tuple[Path, str]:
+        with self._lock:
+            job = self._stream_download_jobs.get(job_id)
+            if not job or job.get("status") != "ready":
+                raise FileNotFoundError("MP4 ещё готовится")
+            candidate, filename = job["path"], job["filename"]
+        if not is_materialized_file(candidate):
+            raise FileNotFoundError("MP4 сейчас недоступен на сервере")
+        return candidate, filename
+
     def create_room(self, episode_id: str = "", payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         payload = payload or {}
         episode_id = str(payload.get("episode_id", episode_id) or "").strip()
@@ -1667,6 +2144,9 @@ class MediaLibrary:
         title_id = str(payload.get("title_id", "") or "").strip()
         season = max(0, int(payload.get("season", 0) or 0))
         episode = max(0, int(payload.get("episode", 0) or 0))
+        position = max(0.0, float(payload.get("position", 0) or 0))
+        playing_value = payload.get("playing", False)
+        playing = playing_value if isinstance(playing_value, bool) else str(playing_value).lower() in {"1", "true", "yes", "on"}
         local_episode = self._db.execute("SELECT * FROM episodes WHERE id = ?", (episode_id,)).fetchone() if episode_id else None
         if not local_episode and not target_key:
             raise KeyError("Укажите episode_id локальной серии или target_key для внешнего потока")
@@ -1685,8 +2165,8 @@ class MediaLibrary:
             "title_id": title_id,
             "season": season,
             "episode": episode,
-            "position": 0,
-            "playing": False,
+            "position": position,
+            "playing": playing,
             "seq": 0,
             "updated_at": now_iso(),
         }
@@ -1727,6 +2207,11 @@ def quote_path(value: str) -> str:
 
 class MediaLibraryHandler(SimpleHTTPRequestHandler):
     server_version = "CineVaultMediaLibrary/1.0"
+
+    def log_request(self, code="-", size="-") -> None:
+        # Download tickets are short-lived credentials; keep them out of logs.
+        request_path = urllib.parse.urlsplit(self.path).path if "ticket=" in self.path else self.path
+        self.log_message('"%s %s %s" %s %s', self.command, request_path, self.request_version, str(code), str(size))
 
     @property
     def library(self) -> MediaLibrary:
@@ -1816,6 +2301,31 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
         self.send_json(401, {"error": "Требуется viewer-токен CineVault"})
         return False
 
+    def download_authorized(self, parsed: urllib.parse.ParseResult) -> bool:
+        if self.viewer_authorized():
+            return True
+        ticket = urllib.parse.parse_qs(parsed.query).get("ticket", [""])[0]
+        if ticket:
+            try:
+                allowed_file, _ = self.library.download_ticket_file(ticket)
+                if parsed.path.startswith("/api/catalog/downloads/"):
+                    requested_file, _ = self.library.stream_download_file(parsed.path.split("/")[4])
+                else:
+                    requested_file, _ = self.library.mp4_download_file(parsed.path.split("/")[4])
+                if allowed_file == requested_file.resolve():
+                    return True
+            except (FileNotFoundError, IndexError):
+                pass
+        self.send_json(401, {"error": "Ссылка на скачивание истекла"})
+        return False
+
+    def download_response(self, payload: Dict[str, Any], file_getter) -> Dict[str, Any]:
+        if payload.get("status") == "ready" and payload.get("download_url") and getattr(self.server, "viewer_token", ""):
+            candidate, filename = file_getter()
+            ticket = self.library.issue_download_ticket(candidate, filename)
+            payload = {**payload, "download_url": f"{payload['download_url']}?ticket={urllib.parse.quote(ticket)}"}
+        return payload
+
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(204)
         self.send_cors_headers(preflight=True)
@@ -1825,7 +2335,8 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         protected = parsed.path.startswith("/api/") and parsed.path != "/api/health" or parsed.path.startswith("/media/")
-        if protected and not self.require_viewer():
+        download_file = parsed.path.endswith("/download/file") or (parsed.path.startswith("/api/catalog/downloads/") and parsed.path.endswith("/file"))
+        if protected and not (self.download_authorized(parsed) if download_file else self.require_viewer()):
             return
         if parsed.path == "/config.local.js":
             config = {
@@ -1920,6 +2431,36 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                 self.send_json(200, self.library.offline_manifest(episode_id, quality))
             except (FileNotFoundError, ValueError) as exc:
                 self.send_json(409, {"error": str(exc)})
+        elif parsed.path.startswith("/api/library/episodes/") and parsed.path.endswith("/download/file"):
+            episode_id = parsed.path.split("/")[4]
+            try:
+                candidate, filename = self.library.mp4_download_file(episode_id)
+                self.serve_download(candidate, filename)
+            except (FileNotFoundError, ValueError) as exc:
+                self.send_json(409, {"error": str(exc)})
+        elif parsed.path.startswith("/api/library/episodes/") and parsed.path.endswith("/download"):
+            episode_id = parsed.path.split("/")[4]
+            try:
+                payload = self.library.mp4_download_status(episode_id)
+                self.send_json(200, self.download_response(payload, lambda: self.library.mp4_download_file(episode_id)))
+            except (FileNotFoundError, ValueError) as exc:
+                self.send_json(404, {"error": str(exc)})
+        elif parsed.path.startswith("/api/catalog/downloads/") and parsed.path.endswith("/file"):
+            job_id = parsed.path.split("/")[4]
+            try:
+                candidate, filename = self.library.stream_download_file(job_id)
+                self.serve_download(candidate, filename)
+            except (FileNotFoundError, KeyError) as exc:
+                self.send_json(404, {"error": str(exc)})
+        elif parsed.path.startswith("/api/catalog/downloads/"):
+            job_id = parsed.path.split("/")[4]
+            try:
+                payload = self.library.stream_download_status(job_id)
+                self.send_json(200, self.download_response(payload, lambda: self.library.stream_download_file(job_id)))
+            except KeyError as exc:
+                self.send_json(404, {"error": str(exc)})
+        elif parsed.path.startswith("/api/watch/rooms/") and parsed.path.endswith("/events"):
+            self.handle_watch_room_events(parsed.path.split("/")[4])
         elif parsed.path.startswith("/api/watch/rooms/"):
             try:
                 self.send_json(200, self.library.get_room(parsed.path.rsplit("/", 1)[-1]))
@@ -1931,6 +2472,33 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/" or APP_ROUTE_RE.fullmatch(parsed.path):
                 self.path = "/index.html"
             super().do_GET()
+
+    def handle_watch_room_events(self, room_id: str) -> None:
+        if not self.require_viewer():
+            return
+        subscribers = self.server.watch_room_subscribe(room_id)  # type: ignore[attr-defined]
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        try:
+            initial = self.library.get_room(room_id)
+            self.wfile.write(f"data: {json.dumps(initial, ensure_ascii=False)}\n\n".encode("utf-8"))
+            self.wfile.flush()
+            while True:
+                try:
+                    event = subscribers.get(timeout=20)
+                    body = f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode("utf-8")
+                except queue.Empty:
+                    body = b": keep-alive\n\n"
+                self.wfile.write(body)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, KeyError):
+            pass
+        finally:
+            self.server.watch_room_unsubscribe(room_id, subscribers)  # type: ignore[attr-defined]
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -1973,8 +2541,30 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                 except RuntimeError as exc:
                     self.send_json(502, {"error": str(exc)})
                 return
+            if parsed.path.startswith("/api/library/episodes/") and parsed.path.endswith("/download"):
+                if not self.require_viewer():
+                    return
+                self.send_json(410, {"error": "Скачивание MP4 на сайте отключено; доступен онлайн-просмотр"})
+                return
+            if parsed.path == "/api/catalog/downloads":
+                if not self.require_viewer():
+                    return
+                self.send_json(410, {"error": "Сборка MP4 на сервере отключена; доступен онлайн-просмотр"})
+                return
+            cancel_match = re.fullmatch(r"/api/catalog/downloads/([0-9a-f]{32})/cancel", parsed.path)
+            if cancel_match:
+                if not self.require_viewer():
+                    return
+                try:
+                    self.send_json(200, self.library.cancel_stream_download(cancel_match.group(1)))
+                except KeyError as exc:
+                    self.send_json(404, {"error": str(exc)})
+                return
             if parsed.path == "/api/catalog/kinopoisk-imports":
                 if not self.require_viewer():
+                    return
+                if not self.admin_authorized():
+                    self.send_json(403, {"error": "Добавление карточек доступно только администратору backend"})
                     return
                 importer = getattr(self.server, "kinopoisk_catalog_importer", None)
                 if importer is None:
@@ -2002,10 +2592,12 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                 if not self.require_viewer():
                     return
                 payload = self.read_json()
-                self.send_json(200, self.library.update_room(parsed.path.rsplit("/", 1)[-1], payload))
+                result = self.library.update_room(parsed.path.rsplit("/", 1)[-1], payload)
+                self.server.watch_room_publish(result["room_id"], result)  # type: ignore[attr-defined]
+                self.send_json(200, result)
                 return
             self.send_json(404, {"error": "Неизвестный endpoint"})
-        except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        except (KeyError, ValueError, TypeError, RuntimeError, json.JSONDecodeError) as exc:
             self.send_json(400, {"error": str(exc)})
 
     def do_PUT(self) -> None:  # noqa: N802
@@ -2196,6 +2788,23 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                     return
                 remaining -= len(chunk)
 
+    def serve_download(self, candidate: Path, filename: str) -> None:
+        file_size = candidate.stat().st_size
+        quoted_filename = urllib.parse.quote(filename, safe="")
+        self.send_response(200)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Content-Length", str(file_size))
+        self.send_header("Content-Disposition", f"attachment; filename=video.mp4; filename*=UTF-8''{quoted_filename}")
+        self.send_header("Cache-Control", "private, no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        with candidate.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                try:
+                    self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    return
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="CineVault first-party media library server")
@@ -2236,6 +2845,35 @@ def main() -> None:
     server.cors_origins = os.environ.get("CINEVAULT_CORS_ORIGINS", "").strip()  # type: ignore[attr-defined]
     server.api_base_url = os.environ.get("CINEVAULT_API_BASE_URL", "").strip()  # type: ignore[attr-defined]
     server.public_base_url = os.environ.get("CINEVAULT_PUBLIC_URL", "").strip()  # type: ignore[attr-defined]
+    watch_room_lock = threading.Lock()
+    watch_room_subscribers: Dict[str, set[queue.Queue]] = {}
+    def watch_room_subscribe(room_id: str) -> queue.Queue:
+        subscriber: queue.Queue = queue.Queue(maxsize=8)
+        with watch_room_lock:
+            watch_room_subscribers.setdefault(room_id, set()).add(subscriber)
+        return subscriber
+    def watch_room_unsubscribe(room_id: str, subscriber: queue.Queue) -> None:
+        with watch_room_lock:
+            subscribers = watch_room_subscribers.get(room_id)
+            if subscribers:
+                subscribers.discard(subscriber)
+                if not subscribers:
+                    watch_room_subscribers.pop(room_id, None)
+    def watch_room_publish(room_id: str, event: Dict[str, Any]) -> None:
+        with watch_room_lock:
+            subscribers = list(watch_room_subscribers.get(room_id, ()))
+        for subscriber in subscribers:
+            try:
+                subscriber.put_nowait(event)
+            except queue.Full:
+                try:
+                    subscriber.get_nowait()
+                    subscriber.put_nowait(event)
+                except queue.Empty:
+                    pass
+    server.watch_room_subscribe = watch_room_subscribe  # type: ignore[attr-defined]
+    server.watch_room_unsubscribe = watch_room_unsubscribe  # type: ignore[attr-defined]
+    server.watch_room_publish = watch_room_publish  # type: ignore[attr-defined]
     updater = None
     if not args.disable_kinopoisk_playback_refresh:
         updater = KinopoiskOnDemandUpdater(
@@ -2257,7 +2895,7 @@ def main() -> None:
         print("Kinopoisk playback refresh: updater not found; previous sources remain available.", flush=True)
     else:
         print("Kinopoisk playback refresh: disabled.", flush=True)
-    print("Only user-supplied files are accepted; no third-party stream extraction is enabled.", flush=True)
+    print("Browser MP4 export: disabled; online playback remains available.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

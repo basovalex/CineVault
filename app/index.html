@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#292e34">
   <meta name="description" content="Личная медиатека CineVault для просмотра разрешённых видео дома и в поездках">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="CineVault">
   <base href="/">
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -12,7 +16,7 @@
   <link rel="sitemap" type="application/xml" href="/sitemap.xml">
   <title>CineVault — кино для вас</title>
   <style>.settings-grid [data-set-theme="night"] { display: none !important; }</style>
-    <link rel="stylesheet" href="/styles.css?v=20260910-lazy-loading-1">
+    <link rel="stylesheet" href="/styles.css?v=20260926-metadata-on-demand-1">
 </head>
 <body>
   <div id="app" class="app-shell" data-theme="graphite">
@@ -24,6 +28,7 @@
         <a class="nav-item" href="/movies/" data-view="movies" aria-label="Фильмы" title="Фильмы"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v13H4z"/><path d="M4 7h16l-2-3H6zM8 4l2 3m3-3 2 3m3-3 2 3"/></svg><span>Фильмы</span></a>
         <a class="nav-item" href="/series/" data-view="series" aria-label="Сериалы" title="Сериалы"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="13" rx="2"/><path d="M8 6V4m4 2V4m4 2V4M9 11h6m-6 4h6"/></svg><span>Сериалы</span></a>
         <a class="nav-item" href="/favorites/" data-view="favorites" aria-label="Избранное" title="Избранное"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 8.7c0 5-8.8 10.3-8.8 10.3S3.2 13.7 3.2 8.7A4.6 4.6 0 0 1 12 6.2a4.6 4.6 0 0 1 8.8 2.5Z"/></svg><span>Избранное</span></a>
+        <a class="nav-item" href="/history/" data-view="history" aria-label="История просмотра" title="История просмотра"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg><span>История</span></a>
       </nav>
       <div class="sidebar-bottom">
         <a class="nav-item" href="/settings/" data-view="settings" aria-label="Настройки" title="Настройки"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1a2 2 0 0 1-2.8 2.8l-.1-.1a2 2 0 0 0-3.4 1.4v.2a2 2 0 0 1-4 0v-.2a2 2 0 0 0-3.4-1.4l-.1.1a2 2 0 0 1-2.8-2.8l.1-.1A2 2 0 0 0 3.6 12a2 2 0 0 0-.6-1.4l-.1-.1A2 2 0 0 1 5.7 7.7l.1.1A2 2 0 0 0 9.2 6.4v-.2a2 2 0 0 1 4 0v.2a2 2 0 0 0 3.4 1.4l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a2 2 0 0 0 0 3.4Z"/></svg><span>Настройки</span></a>
@@ -36,7 +41,7 @@
         <label class="search-box">
           <span class="sr-only">Поиск по каталогу</span>
           <span aria-hidden="true">⌕</span>
-        <input id="search" type="search" placeholder="Найти фильм, сериал или актёра" autocomplete="off" aria-controls="search-suggestions">
+        <input id="search" type="search" placeholder="Введите название и нажмите Enter" autocomplete="off" aria-controls="search-suggestions">
           <kbd>⌘ K</kbd>
         </label>
         <div id="search-suggestions" class="search-suggestions" aria-label="Быстрые результаты поиска" hidden></div>
@@ -63,10 +68,10 @@
   </div>
   <script src="/config.local.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" crossorigin="anonymous"></script>
-    <script src="/app.js?v=20260911-playback-refresh-1" defer></script>
+    <script src="/app.js?v=20260926-metadata-on-demand-1" defer></script>
   <script>
     if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js?v=20260911-playback-refresh-1").catch(() => {}));
+      window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js?v=20260926-metadata-on-demand-1").catch(() => {}));
     }
   </script>
 </body>

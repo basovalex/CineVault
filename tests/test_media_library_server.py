@@ -1,17 +1,27 @@
 import io
+import http.client
 import json
+import queue
+import shutil
+import subprocess
 import tempfile
+import threading
 import time
+import urllib.request
+import urllib.error
 import unittest
 from datetime import datetime, timedelta, timezone
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from tools.media_library_server import (
     KinopoiskCatalogImporter,
     KinopoiskOnDemandUpdater,
     MediaLibrary,
+    MediaLibraryHandler,
     build_sitemap_xml,
+    catalog_page,
     kinopoisk_import_command,
     kinopoisk_update_command,
     normalize_catalog_source_json,
@@ -20,6 +30,7 @@ from tools.media_library_server import (
     sitemap_title_ids,
     update_catalog_from_source_json,
 )
+from tools.sync_tmdb_catalog import catalog_entry as tmdb_catalog_entry, merge_catalog as merge_tmdb_catalog
 
 
 class MediaLibraryTests(unittest.TestCase):
@@ -30,6 +41,16 @@ class MediaLibraryTests(unittest.TestCase):
     def tearDown(self):
         self.library.close()
         self.temp_dir.cleanup()
+
+    def test_catalog_page_filters_explicit_card_ids(self):
+        cards = [
+            {"id": "first", "title": "Первый", "kind": "movie", "rating": 8},
+            {"id": "second", "title": "Второй", "kind": "series", "rating": 7},
+        ]
+        with patch("tools.media_library_server.imported_catalog_entries", return_value=cards):
+            payload = catalog_page({"ids": ["second"]})
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(payload["items"], [{"id": "second", "title": "Второй", "kind": "series", "rating": 7}])
 
     def test_upload_is_stored_and_listed_without_network(self):
         result = self.library.create_upload(
@@ -52,6 +73,318 @@ class MediaLibraryTests(unittest.TestCase):
     def test_upload_rejects_unsafe_extension(self):
         with self.assertRaises(ValueError):
             self.library.create_upload("Test", 0, 0, "", "secret.exe", io.BytesIO(b"x"))
+
+    def test_tmdb_catalog_entry_has_no_video_source(self):
+        entry = tmdb_catalog_entry({
+            "id": 42,
+            "title": "Тестовый фильм",
+            "original_title": "Test Film",
+            "release_date": "2026-01-02",
+            "overview": "Описание",
+            "genre_ids": [1],
+            "vote_average": 7.4,
+            "poster_path": "/poster.jpg",
+        }, "movie", {1: "драма"})
+        self.assertEqual(entry["id"], "tmdb-movie-42")
+        self.assertEqual(entry["year"], 2026)
+        self.assertEqual(entry["videoSources"], [])
+        self.assertEqual(entry["genres"], ["драма"])
+
+    def test_tmdb_merge_preserves_existing_playback_fields(self):
+        existing = [{"id": "tmdb-movie-42", "title": "Старое", "kinopoiskId": 123, "videoSources": [{"url": "https://allowed.example/master.m3u8"}]}]
+        fresh = [{"id": "tmdb-movie-42", "title": "Новое", "videoSources": []}]
+        merged, created, updated = merge_tmdb_catalog(existing, fresh)
+        self.assertEqual((created, updated), (0, 1))
+        self.assertEqual(merged[0]["title"], "Новое")
+        self.assertEqual(merged[0]["kinopoiskId"], 123)
+        self.assertEqual(len(merged[0]["videoSources"]), 1)
+
+    def test_local_mp4_download_is_ready_without_transcoding(self):
+        result = self.library.create_upload(
+            "Наш фильм",
+            0,
+            0,
+            "",
+            "film.mp4",
+            io.BytesIO(b"local mp4 bytes"),
+        )
+        episode_id = result["episode_id"]
+        status = self.library.start_mp4_download(episode_id)
+        self.assertEqual(status["status"], "ready")
+        self.assertTrue(status["download_url"].endswith("/download/file"))
+        source, filename = self.library.mp4_download_file(episode_id)
+        self.assertEqual(source.read_bytes(), b"local mp4 bytes")
+        self.assertEqual(filename, "наш-фильм.mp4")
+
+    def test_mp4_download_endpoint_does_not_start_browser_export(self):
+        result = self.library.create_upload("Наш фильм", 0, 0, "", "film.mp4", io.BytesIO(b"download bytes"))
+        episode_id = result["episode_id"]
+        handler = lambda *args, **kwargs: MediaLibraryHandler(*args, directory=self.temp_dir.name, **kwargs)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.library = self.library  # type: ignore[attr-defined]
+        server.viewer_token = ""  # type: ignore[attr-defined]
+        server.admin_token = ""  # type: ignore[attr-defined]
+        server.local_open_admin = True  # type: ignore[attr-defined]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with self.assertRaises(urllib.error.HTTPError) as rejected:
+                opener.open(
+                    urllib.request.Request(f"http://127.0.0.1:{server.server_port}/api/library/episodes/{episode_id}/download", method="POST"),
+                    timeout=3,
+                )
+            self.assertEqual(rejected.exception.code, 410)
+            self.assertEqual(list(self.library.downloads_dir.glob("*.mp4")), [])
+            # Existing local uploads can still be served without creating a copy.
+            response = opener.open(f"http://127.0.0.1:{server.server_port}/api/library/episodes/{episode_id}/download/file", timeout=3)
+            self.assertEqual(response.read(), b"download bytes")
+            self.assertEqual(response.headers["Content-Type"], "video/mp4")
+            self.assertIn("attachment", response.headers["Content-Disposition"])
+            self.assertIn("filename*=UTF-8''", response.headers["Content-Disposition"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
+    def test_download_ticket_allows_only_its_file_with_viewer_auth(self):
+        first = self.library.create_upload("Первый фильм", 0, 0, "", "first.mp4", io.BytesIO(b"first"))
+        second = self.library.create_upload("Второй фильм", 0, 0, "", "second.mp4", io.BytesIO(b"second"))
+        handler = lambda *args, **kwargs: MediaLibraryHandler(*args, directory=self.temp_dir.name, **kwargs)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.library = self.library  # type: ignore[attr-defined]
+        server.viewer_token = "viewer-test"  # type: ignore[attr-defined]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            base = f"http://127.0.0.1:{server.server_port}"
+            candidate, filename = self.library.mp4_download_file(first["episode_id"])
+            ticket = self.library.issue_download_ticket(candidate, filename)
+            self.assertEqual(opener.open(f"{base}/api/library/episodes/{first['episode_id']}/download/file?ticket={ticket}", timeout=3).read(), b"first")
+            with self.assertRaises(urllib.error.HTTPError) as rejected:
+                opener.open(f"{base}/api/library/episodes/{second['episode_id']}/download/file?ticket={ticket}", timeout=3)
+            self.assertEqual(rejected.exception.code, 401)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
+    def test_hls_export_resolves_video_and_audio_after_master_redirect(self):
+        source = "https://example.org/original/master.m3u8"
+        redirect = MagicMock()
+        redirect.__enter__.return_value = redirect
+        redirect.status_code = 302
+        redirect.headers = {"Location": "https://cdn.example.org/media/master.m3u8"}
+        master = MagicMock()
+        master.__enter__.return_value = master
+        master.status_code = 200
+        master.iter_content.return_value = [(
+            '#EXTM3U\n'
+            '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Русский",DEFAULT=YES,URI="audio/index.m3u8"\n'
+            '#EXT-X-STREAM-INF:BANDWIDTH=1000,AUDIO="audio"\nvideo/low.m3u8\n'
+            '#EXT-X-STREAM-INF:BANDWIDTH=2000,AUDIO="audio"\nvideo/high.m3u8\n'
+        ).encode()]
+        with patch("tools.media_library_server.requests.Session") as session_factory:
+            get = session_factory.return_value.__enter__.return_value.get
+            get.side_effect = [redirect, master]
+            inputs, maps = self.library._stream_export_inputs(source)
+        self.assertEqual(inputs, [
+            "https://cdn.example.org/media/video/high.m3u8",
+            "https://cdn.example.org/media/audio/index.m3u8",
+        ])
+        self.assertEqual(maps, ["-map", "0:v:0", "-map", "1:a:0"])
+        self.assertEqual(get.call_count, 2)
+
+    def test_hls_export_rejects_redirect_to_private_address(self):
+        redirect = MagicMock()
+        redirect.__enter__.return_value = redirect
+        redirect.status_code = 302
+        redirect.headers = {"Location": "https://127.0.0.1/internal.m3u8"}
+        with patch("tools.media_library_server.requests.Session") as session_factory:
+            get = session_factory.return_value.__enter__.return_value.get
+            get.return_value = redirect
+            with self.assertRaises(ValueError):
+                self.library._stream_export_inputs("https://example.org/master.m3u8")
+        self.assertEqual(get.call_count, 1)
+
+    def test_stream_download_status_reports_progress_and_estimate(self):
+        payload = self.library._stream_download_payload("job", {
+            "status": "processing", "phase": "assembling", "percent": 35,
+            "processed_seconds": 35, "duration_seconds": 100,
+            "elapsed_seconds": 7, "eta_seconds": 13,
+        })
+        self.assertEqual(payload["percent"], 35)
+        self.assertEqual(payload["phase"], "assembling")
+        self.assertEqual(payload["eta_seconds"], 13)
+        self.assertIsNone(payload["download_url"])
+
+    def test_stream_download_can_be_cancelled_and_orphaned_job_expires(self):
+        job_id = "a" * 32
+        cancellation = threading.Event()
+        self.library._stream_download_jobs[job_id] = {
+            "status": "processing", "phase": "assembling", "cancel_event": cancellation,
+            "last_seen_at": time.monotonic(),
+        }
+        handler = lambda *args, **kwargs: MediaLibraryHandler(*args, directory=self.temp_dir.name, **kwargs)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.library = self.library  # type: ignore[attr-defined]
+        server.viewer_token = ""  # type: ignore[attr-defined]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/api/catalog/downloads/{job_id}/cancel",
+                data=b"", method="POST",
+            )
+            response = json.loads(opener.open(request, timeout=3).read())
+            self.assertEqual(response["phase"], "cancelling")
+            self.assertTrue(cancellation.is_set())
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+        cancellation.clear()
+        self.library._stream_download_jobs[job_id]["last_seen_at"] = time.monotonic() - 120
+        self.assertTrue(self.library._stream_download_cancelled(job_id))
+        self.assertTrue(cancellation.is_set())
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required")
+    def test_catalog_hls_stream_is_exported_to_mp4(self):
+        fixture_dir = Path(self.temp_dir.name) / "stream-fixture"
+        fixture_dir.mkdir()
+        subprocess.run([
+            shutil.which("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10", "-t", "1",
+            "-c:v", "libx264", "-f", "hls", "-hls_time", "0.5", "-hls_list_size", "0",
+            str(fixture_dir / "index.m3u8"),
+        ], check=True, timeout=20)
+        handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(*args, directory=str(fixture_dir), **kwargs)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        api_handler = lambda *args, **kwargs: MediaLibraryHandler(*args, directory=self.temp_dir.name, **kwargs)
+        api_server = ThreadingHTTPServer(("127.0.0.1", 0), api_handler)
+        api_server.library = self.library  # type: ignore[attr-defined]
+        api_server.viewer_token = ""  # type: ignore[attr-defined]
+        api_thread = threading.Thread(target=api_server.serve_forever, daemon=True)
+        api_thread.start()
+        try:
+            item = {"id": "test-film", "kind": "movie", "title": "Тестовый фильм", "videoSources": [
+                {"id": "test-source", "url": f"http://127.0.0.1:{server.server_port}/index.m3u8"},
+            ]}
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            base = f"http://127.0.0.1:{api_server.server_port}"
+            with patch("tools.media_library_server.imported_catalog_item", return_value=item), patch.object(self.library, "_validate_stream_url"):
+                request = urllib.request.Request(
+                    base + "/api/catalog/downloads",
+                    data=json.dumps({"title_id": "test-film", "source_key": "test-source"}).encode(),
+                    headers={"Content-Type": "application/json"}, method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as rejected:
+                    opener.open(request, timeout=3)
+                self.assertEqual(rejected.exception.code, 410)
+                self.assertEqual(self.library._stream_download_jobs, {})
+                result = self.library.start_stream_download("test-film", source_key="test-source")
+                for _ in range(100):
+                    result = json.loads(opener.open(f"{base}/api/catalog/downloads/{result['id']}", timeout=3).read())
+                    if result["status"] != "processing":
+                        break
+                    time.sleep(0.05)
+            self.assertEqual(result["status"], "ready", result.get("error"))
+            self.assertEqual(result["percent"], 100)
+            candidate, filename = self.library.stream_download_file(result["id"])
+            self.assertEqual(filename, "тестовый-фильм.mp4")
+            self.assertIn(b"ftyp", candidate.read_bytes()[:32])
+            response = opener.open(base + result["download_url"], timeout=3)
+            self.assertIn("attachment", response.headers["Content-Disposition"])
+            self.assertEqual(response.read(), candidate.read_bytes())
+        finally:
+            api_server.shutdown()
+            api_server.server_close()
+            api_thread.join(timeout=3)
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
+    def test_watch_room_sse_broadcasts_seek_to_second_client(self):
+        room = self.library.create_room(payload={
+            "title_id": "test-title",
+            "target_key": "test-title-s1e1",
+            "season": 1,
+            "episode": 1,
+            "position": 12.5,
+            "playing": False,
+        })
+        subscribers = set()
+        lock = threading.Lock()
+        handler = lambda *args, **kwargs: MediaLibraryHandler(*args, directory=self.temp_dir.name, **kwargs)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.library = self.library  # type: ignore[attr-defined]
+        server.viewer_token = ""  # type: ignore[attr-defined]
+        server.admin_token = ""  # type: ignore[attr-defined]
+        server.local_open_admin = True  # type: ignore[attr-defined]
+
+        def subscribe(_room_id):
+            subscriber = queue.Queue(maxsize=8)
+            with lock:
+                subscribers.add(subscriber)
+            return subscriber
+
+        def unsubscribe(_room_id, subscriber):
+            with lock:
+                subscribers.discard(subscriber)
+
+        def publish(_room_id, event):
+            with lock:
+                recipients = list(subscribers)
+            for subscriber in recipients:
+                subscriber.put_nowait(event)
+
+        server.watch_room_subscribe = subscribe  # type: ignore[attr-defined]
+        server.watch_room_unsubscribe = unsubscribe  # type: ignore[attr-defined]
+        server.watch_room_publish = publish  # type: ignore[attr-defined]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+        try:
+            connection.request("GET", f"/api/watch/rooms/{room['room_id']}/events")
+            events = connection.getresponse()
+            self.assertEqual(events.status, 200)
+            initial = events.readline().decode("utf-8")
+            self.assertIn('"position": 12.5', initial)
+            self.assertEqual(events.readline(), b"\n")
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            payload = json.dumps({"position": 321.25, "playing": True}).encode("utf-8")
+            response = opener.open(
+                urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/watch/rooms/{room['room_id']}",
+                    data=payload,
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                ),
+                timeout=3,
+            )
+            self.assertEqual(json.loads(response.read())["state"]["seq"], 1)
+            broadcast = events.readline().decode("utf-8")
+            self.assertIn('"position": 321.25', broadcast)
+            self.assertIn('"playing": true', broadcast)
+        finally:
+            connection.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
+    def test_external_embed_cannot_be_exported_as_mp4(self):
+        result = self.library.create_external_embed({
+            "title": "Внешняя серия",
+            "season": 1,
+            "episode": 1,
+            "embed_url": "https://rutube.ru/play/embed/abc123",
+        })
+        with self.assertRaises(ValueError):
+            self.library.start_mp4_download(result["episode_id"])
 
     def test_external_embed_accepts_url_and_curl_referer_without_network(self):
         embed_url = "https://cinemar.cc/embed/117515/demo-token"
@@ -88,6 +421,11 @@ class MediaLibraryTests(unittest.TestCase):
         updater_dir = Path(self.temp_dir.name) / "kinopoisk_media_system_fixed"
         updater_dir.mkdir()
         (updater_dir / "update_media.py").write_text("# test updater\n", encoding="utf-8")
+        (updater_dir / ".env").write_text(
+            'CINEVAULT_APBUGALL_TOKEN="fixture-token"\n'
+            'CINEVAULT_DEVICE_FP="fixture-fingerprint"\n'
+            'CINEVAULT_IFRAME_REQUEST_ID="fixture-request"\n', encoding="utf-8",
+        )
         catalog_path = Path(self.temp_dir.name) / "catalog_imports.json"
         catalog_path.write_text(json.dumps([{"id": "film", "kinopoiskId": 689, "videoSources": []}]), encoding="utf-8")
         updater = KinopoiskOnDemandUpdater(updater_dir, delay_seconds=7, catalog_path=catalog_path)
@@ -101,14 +439,11 @@ class MediaLibraryTests(unittest.TestCase):
             result = updater.refresh(689)
         self.assertTrue(result["refreshed"])
         self.assertEqual(result["entry"]["kinopoiskId"], 689)
-        run.assert_called_once_with(
-            expected_command,
-            cwd=str(updater_dir.resolve()),
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args[0][0], expected_command)
+        self.assertEqual(run.call_args[1]["cwd"], str(updater_dir.resolve()))
+        self.assertEqual(run.call_args[1]["env"]["CINEVAULT_SERVICE_DIR"], str(Path(__file__).resolve().parents[1]))
+        self.assertEqual(run.call_args[1]["env"]["CINEVAULT_APBUGALL_TOKEN"], "fixture-token")
 
     def test_kinopoisk_updater_rejects_unknown_catalog_id_without_process(self):
         updater_dir = Path(self.temp_dir.name) / "kinopoisk_media_system_fixed"
@@ -312,8 +647,12 @@ class MediaLibraryTests(unittest.TestCase):
             "target_key": "desperate-housewives-s2e15",
             "season": 2,
             "episode": 15,
+            "position": 347.25,
+            "playing": True,
         })
         self.assertEqual(room["state"]["target_key"], "desperate-housewives-s2e15")
+        self.assertEqual(room["state"]["position"], 347.25)
+        self.assertTrue(room["state"]["playing"])
         updated = self.library.update_room(room["room_id"], {
             "position": 31.5,
             "playing": False,

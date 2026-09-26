@@ -1,4 +1,6 @@
 app/config.local.js
+.env
+app/data/catalog_metadata.json
 .playwright-cli/
 output/playwright/
 data/media-library/
