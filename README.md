@@ -102,14 +102,27 @@ python3 tools/import_kinopoisk_metadata.py --links-file kinopoisk_media_system_f
 
 Без `--fetch-missing` команда использует только локальные `generated/<id>/response.json`. Для недостающих метаданных нужен `CINEVAULT_APBUGALL_TOKEN` в окружении и явный `--fetch-missing`; видеопотоки при этом не запрашиваются. `--offset` и `--limit` позволяют проверять небольшие партии. Список ссылок должен содержать реальные ID: перебор всех чисел не равен полному каталогу Kinopoisk.
 
-Для постепенного расширения за пределы уже известных ссылок подготовлен постраничный импорт метаданных из Kinopoisk.dev. Он читает `CINEVAULT_KINOPOISK_DEV_TOKEN` из окружения или локального игнорируемого Git-файла `.env`, не получает видео, не затирает подключённые карточки и после каждой сохранённой страницы записывает `data/media-library/kinopoisk_catalog_sync.json` для продолжения:
+Для постепенного расширения за пределы уже известных ссылок подготовлен импорт метаданных из Kinopoisk.dev. Он читает `CINEVAULT_KINOPOISK_DEV_TOKEN` из окружения или локального игнорируемого Git-файла `.env`, не получает видео и не затирает подключённые карточки. Режим `backfill` постранично обходит историческую базу и сохраняет контрольную точку в `data/media-library/kinopoisk_catalog_sync.json`; режим `daily` повторно забирает последние изменения с недельным перекрытием и обновляет названия, постеры и рейтинги:
 
 ```bash
-python3 tools/sync_kinopoisk_dev_catalog.py --pages 2 --limit 100 --dry-run
-python3 tools/sync_kinopoisk_dev_catalog.py --pages 2 --limit 100
+python3 tools/sync_kinopoisk_dev_catalog.py --mode backfill --pages 2 --limit 250 --dry-run
+python3 tools/sync_kinopoisk_dev_catalog.py --mode backfill --pages 2 --limit 250
+python3 tools/sync_kinopoisk_dev_catalog.py --mode backfill --kind series --pages 2 --limit 250
+python3 tools/sync_kinopoisk_dev_catalog.py --mode daily --pages 2 --limit 250 --lookback-days 7
 ```
 
-В Docker тот же ограниченный запуск доступен через `docker compose --profile maintenance run --rm kinopoisk-catalog-sync`. Это импорт карточек из индекса провайдера, а не гарантия полного совпадения со всем сайтом Kinopoisk. До первого запуска на сервере нужно сверить и сохранить его существующий каталог; локальный файл `catalog_imports.json` нельзя использовать вместо серверного.
+В Docker тот же ограниченный запуск доступен через `docker compose --profile maintenance run --rm kinopoisk-catalog-sync`. Для сервера добавлены `deploy/cinevault-kinopoisk-catalog-sync.service` и `.timer`; таймер запускает ежедневный режим, а историческое наполнение нужно запускать отдельными небольшими партиями. Это импорт карточек из индекса провайдера, а не гарантия полного совпадения со всем сайтом Kinopoisk. До первого запуска на сервере нужно сверить и сохранить его существующий каталог; локальный файл `catalog_imports.json` нельзя использовать вместо серверного.
+
+Полный каталог отдаётся браузеру только страницами через `/api/catalog`; `/api/catalog/index` возвращает ограниченную подборку для главной. Поэтому рост базы не заставляет браузер скачивать все карточки сразу. Полная карточка загружается при открытии, а поиск видеопотока начинается только после действия «Смотреть» или «Продолжить».
+
+Если постраничный backfill Kinopoisk.dev ограничен тарифом, для массового независимого наполнения можно использовать открытые записи Wikidata со свойством `P2603`. Импортёр получает только Kinopoisk ID и общедоступные метаданные, использует отдельную контрольную точку и не обращается к видеопровайдеру:
+
+```bash
+python3 tools/sync_wikidata_kinopoisk_catalog.py --batches 1 --limit 500 --dry-run
+python3 tools/sync_wikidata_kinopoisk_catalog.py --batches 10 --limit 500
+```
+
+Wikidata не гарантирует полноту всего каталога Kinopoisk, поэтому ежедневное обновление последних карточек остаётся за разрешённым режимом `sync_kinopoisk_dev_catalog.py --mode daily`.
 
 #### Через интерфейс CineVault
 

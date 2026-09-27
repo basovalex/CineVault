@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CineVault Kinopoisk.dev catalog sync every day
+
+[Timer]
+OnCalendar=*-*-* 09:10:00 UTC
+Persistent=true
+RandomizedDelaySec=15m
+Unit=cinevault-kinopoisk-catalog-sync.service
+
+[Install]
+WantedBy=timers.target

@@ -106,6 +106,37 @@ class KinopoiskMetadataImportTests(unittest.TestCase):
                                         start_page=0, pages=1, limit=100, delay_seconds=0)
         self.assertEqual(result["next_page"], 2)
 
+    def test_daily_sync_updates_metadata_without_removing_playback_fields(self):
+        old = kinopoisk_dev_entry({"id": 777, "name": "Старое имя", "type": "movie", "year": 2023})
+        old["videoSources"] = [{"url": "https://example.org/movie.m3u8"}]
+        self.metadata.write_text(json.dumps([old]), encoding="utf-8")
+        fresh = {"id": 777, "name": "Новое имя", "type": "movie", "year": 2024,
+                 "rating": {"kp": 8.1}, "poster": {"url": "https://example.org/new.jpg"}}
+        state = self.root / "checkpoint.json"
+        with patch("tools.sync_kinopoisk_dev_catalog.fetch_page", return_value={"docs": [fresh], "pages": 1}) as fetch:
+            result = sync_kinopoisk_dev("fake-token", self.catalog, self.metadata, state,
+                                        start_page=0, pages=1, limit=250, delay_seconds=0,
+                                        mode="daily", lookback_days=7)
+        saved = json.loads(self.metadata.read_text())
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(saved[0]["title"], "Новое имя")
+        self.assertEqual(saved[0]["videoSources"], old["videoSources"])
+        self.assertIsNotNone(fetch.call_args.kwargs["updated_since"])
+        self.assertIn("last_daily_sync", json.loads(state.read_text()))
+
+    def test_series_backfill_uses_independent_checkpoint(self):
+        row = {"id": 778, "name": "Новый сериал", "type": "tv-series", "isSeries": True}
+        state = self.root / "checkpoint.json"
+        state.write_text(json.dumps({"next_page": 9}), encoding="utf-8")
+        with patch("tools.sync_kinopoisk_dev_catalog.fetch_page", return_value={"docs": [row], "pages": 20}) as fetch:
+            sync_kinopoisk_dev("fake-token", self.catalog, self.metadata, state,
+                               start_page=0, pages=1, limit=250, delay_seconds=0,
+                               mode="backfill", kind="series")
+        saved_state = json.loads(state.read_text())
+        self.assertEqual(saved_state["next_page"], 9)
+        self.assertEqual(saved_state["next_page_series"], 2)
+        self.assertEqual(fetch.call_args.kwargs["kind"], "series")
+
     def test_provider_token_can_be_loaded_from_ignored_local_env_file(self):
         (self.root / ".env").write_text("CINEVAULT_KINOPOISK_DEV_TOKEN=test-only\n", encoding="utf-8")
         with patch.dict("tools.sync_kinopoisk_dev_catalog.os.environ", {}, clear=True), \

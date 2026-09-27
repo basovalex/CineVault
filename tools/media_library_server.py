@@ -793,8 +793,23 @@ def imported_catalog_entries(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[
     return items
 
 
-def imported_catalog_index(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[Dict[str, Any]]:
-    return [{key: item[key] for key in CATALOG_INDEX_FIELDS if key in item} for item in imported_catalog_entries(catalog_path)]
+def imported_catalog_index(catalog_path: Path = CATALOG_IMPORTS_PATH, limit: int = 500) -> list[Dict[str, Any]]:
+    """Return a bounded discovery set; full browsing uses /api/catalog pages."""
+    items = imported_catalog_entries(catalog_path)
+
+    def score(item: Dict[str, Any]) -> tuple[float, int]:
+        try:
+            item_rating = float(item.get("ratingKinopoisk") or item.get("rating") or item.get("imdbRating") or 0)
+        except (TypeError, ValueError):
+            item_rating = 0
+        try:
+            item_year = max(0, int(item.get("year") or 0))
+        except (TypeError, ValueError):
+            item_year = 0
+        return item_rating, item_year
+
+    selected = sorted(items, key=score, reverse=True)[:max(1, min(1000, int(limit or 500)))]
+    return [{key: item[key] for key in CATALOG_INDEX_FIELDS if key in item} for item in selected]
 
 
 def imported_catalog_item(identifier: str, catalog_path: Path = CATALOG_IMPORTS_PATH) -> Dict[str, Any]:
@@ -2364,7 +2379,12 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
             self.send_json(200, {"ok": True, "service": "cinevault-media-library"})
         elif parsed.path == "/api/catalog/index":
             try:
-                items = imported_catalog_index()
+                params = urllib.parse.parse_qs(parsed.query)
+                try:
+                    limit = int(params.get("limit", ["500"])[0])
+                except (TypeError, ValueError):
+                    limit = 500
+                items = imported_catalog_index(limit=limit)
                 self.send_json(200, {"items": items, "total": len(items)})
             except RuntimeError as exc:
                 self.send_json(503, {"error": str(exc)})

@@ -52,10 +52,16 @@ services:
     user: "0:0"
     entrypoint: ["python", "tools/sync_kinopoisk_dev_catalog.py"]
     command:
+      - --mode
+      - ${CINEVAULT_KINOPOISK_CATALOG_MODE:-daily}
+      - --kind
+      - ${CINEVAULT_KINOPOISK_CATALOG_KIND:-all}
       - --pages
       - ${CINEVAULT_KINOPOISK_CATALOG_PAGES:-2}
       - --limit
       - ${CINEVAULT_KINOPOISK_CATALOG_PAGE_LIMIT:-100}
+      - --lookback-days
+      - ${CINEVAULT_KINOPOISK_CATALOG_LOOKBACK_DAYS:-7}
     environment:
       CINEVAULT_KINOPOISK_DEV_TOKEN: ${CINEVAULT_KINOPOISK_DEV_TOKEN:-}
     volumes:

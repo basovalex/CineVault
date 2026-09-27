@@ -2586,7 +2586,7 @@
 
   async function loadRemoteDiscoveryCatalog() {
     try {
-      const response = await apiFetch("/api/catalog/index", { cache: "no-store", headers: { accept: "application/json" } });
+      const response = await apiFetch("/api/catalog/index?limit=500", { cache: "no-store", headers: { accept: "application/json" } });
       if (!response.ok) return;
       const payload = await response.json();
       if (!Array.isArray(payload.items)) return;
@@ -4631,7 +4631,15 @@
     const savedViewEmpty = state.view === "favorites"
       ? { title: "В избранном пока пусто", copy: "Открой карточку фильма или сериала и нажми «В избранное» — он появится здесь.", action: "Открыть каталог" }
       : { title: "История просмотра пока пуста", copy: "Запусти любой фильм или сериал — здесь появится то, к чему можно вернуться.", action: "Открыть каталог" };
-    const paginationMarkup = pagination.totalPages > 1 ? `<nav class="catalog-pagination" aria-label="Листать каталог"><button class="secondary-button catalog-page-arrow" data-catalog-page="${pagination.currentPage - 1}" type="button" aria-label="Предыдущая страница" title="Предыдущая страница"${pagination.currentPage === 1 ? " disabled" : ""}>←</button><button class="secondary-button catalog-page-arrow" data-catalog-page="${pagination.currentPage + 1}" type="button" aria-label="Следующая страница" title="Следующая страница"${pagination.currentPage === pagination.totalPages ? " disabled" : ""}>→</button></nav>` : "";
+    const previousPageButton = pagination.currentPage > 1
+      ? `<button class="secondary-button catalog-page-arrow" data-catalog-page="${pagination.currentPage - 1}" type="button" aria-label="Предыдущая страница" title="Предыдущая страница">←</button>`
+      : "";
+    const nextPageButton = pagination.currentPage < pagination.totalPages
+      ? `<button class="secondary-button catalog-page-arrow" data-catalog-page="${pagination.currentPage + 1}" type="button" aria-label="Следующая страница" title="Следующая страница">→</button>`
+      : "";
+    const paginationMarkup = items.length && pagination.totalPages > 1
+      ? `<nav class="catalog-pagination" aria-label="Листать каталог">${previousPageButton}${nextPageButton}</nav>`
+      : "";
     const genreFilterMarkup = `<div class="catalog-genre-heading"><h3>Жанры</h3></div><div class="genre-list" role="group" aria-label="Фильтр по жанру">${genreButtons}</div>`;
     const catalogMarkup = items.length ? `<div class="poster-grid" id="catalog-results" tabindex="-1">${pageItems.slice(0, 16).map((item) => poster(item)).join("")}${pageItems.length > 16 ? `<div id="catalog-lazy-sentinel" class="catalog-lazy-sentinel" aria-hidden="true"></div>` : ""}</div>${paginationMarkup}` : `<div class="empty-state"><div class="empty-pet">${petVisual()}</div><h2>${savedView ? savedViewEmpty.title : "Ничего не подошло"}</h2><p>${savedView ? savedViewEmpty.copy : emptyCopy}</p>${savedView ? `<a class="primary-button" href="${routeForView("catalog")}" data-view="catalog">${savedViewEmpty.action}</a>` : '<button class="primary-button" data-catalog-reset type="button">Сбросить фильтры</button>'}</div>`;
     const savedViewMarkup = `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div>${catalogMarkup}`;

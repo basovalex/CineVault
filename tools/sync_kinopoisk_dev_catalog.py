@@ -13,8 +13,9 @@ import json
 import os
 import sys
 import time
+from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 
 import requests
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,11 @@ from tools.import_kinopoisk_metadata import DEFAULT_CATALOG, DEFAULT_METADATA, r
 DEFAULT_STATE = ROOT / "data" / "media-library" / "kinopoisk_catalog_sync.json"
 API_URL = "https://api.kinopoisk.dev/v1.4/movie"
 SERIES_TYPES = {"tv-series", "animated-series", "anime"}
+SELECT_FIELDS = (
+    "id", "name", "alternativeName", "enName", "type", "isSeries", "year",
+    "description", "shortDescription", "genres", "countries", "rating", "poster",
+    "externalId", "movieLength", "seriesLength", "createdAt", "updatedAt",
+)
 
 
 def text_list(value: Any) -> List[str]:
@@ -86,10 +92,36 @@ def catalog_entry(row: Dict[str, Any]) -> Dict[str, Any]:
     return entry
 
 
-def fetch_page(session: requests.Session, token: str, page: int, limit: int) -> Dict[str, Any]:
-    response = session.get(API_URL, headers={"X-API-KEY": token, "Accept": "application/json"},
-                           params={"page": page, "limit": limit, "sortField": "id", "sortType": "1"}, timeout=45)
-    response.raise_for_status()
+def fetch_page(session: requests.Session, token: str, page: int, limit: int,
+               updated_since: Optional[date] = None, kind: str = "all") -> Dict[str, Any]:
+    params: list[tuple[str, Any]] = [
+        ("page", page), ("limit", limit),
+        ("sortField", "updatedAt" if updated_since else "id"), ("sortType", "-1" if updated_since else "1"),
+    ]
+    params.extend(("selectFields", field) for field in SELECT_FIELDS)
+    if updated_since:
+        # Kinopoisk.dev uses dd.mm.yyyy ranges for date filters. Keep an
+        # overlap between daily runs so a delayed provider update is retried.
+        params.append(("updatedAt", "{}-{}".format(updated_since.strftime("%d.%m.%Y"), date.today().strftime("%d.%m.%Y"))))
+    if kind == "series":
+        params.append(("isSeries", "true"))
+    elif kind == "movie":
+        params.append(("isSeries", "false"))
+    response = None
+    last_error: Optional[requests.RequestException] = None
+    for attempt in range(4):
+        try:
+            response = session.get(API_URL, headers={"X-API-KEY": token, "Accept": "application/json"},
+                                   params=params, timeout=45)
+            response.raise_for_status()
+            break
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt >= 3:
+                raise
+            time.sleep(2 ** attempt)
+    if response is None:
+        raise last_error or RuntimeError("Kinopoisk.dev не ответил")
     payload = response.json()
     if not isinstance(payload, dict) or not isinstance(payload.get("docs"), list):
         raise ValueError("Провайдер вернул неожиданный формат списка")
@@ -118,7 +150,7 @@ def api_token() -> str:
 
 
 def merge_page(rows: Iterable[Dict[str, Any]], cards: Dict[int, Dict[str, Any]], legacy_ids: set) -> Dict[str, int]:
-    result = {"seen": 0, "created": 0, "skipped": 0}
+    result = {"seen": 0, "created": 0, "updated": 0, "skipped": 0}
     for row in rows:
         result["seen"] += 1
         try:
@@ -127,8 +159,20 @@ def merge_page(rows: Iterable[Dict[str, Any]], cards: Dict[int, Dict[str, Any]],
             result["skipped"] += 1
             continue
         kp_id = entry["kinopoiskId"]
-        if kp_id in legacy_ids or kp_id in cards:
+        if kp_id in legacy_ids:
             result["skipped"] += 1
+            continue
+        previous = cards.get(kp_id)
+        if previous is not None:
+            # Metadata refreshes may improve titles, posters and ratings, but
+            # must never remove playback data added by another workflow.
+            preserved = {
+                key: previous[key]
+                for key in ("videoSources", "sourceFile", "episodeDataFile", "seasons", "catalogId")
+                if previous.get(key)
+            }
+            cards[kp_id] = {**previous, **entry, **preserved}
+            result["updated"] += 1
             continue
         cards[kp_id] = entry
         result["created"] += 1
@@ -137,7 +181,8 @@ def merge_page(rows: Iterable[Dict[str, Any]], cards: Dict[int, Dict[str, Any]],
 
 def sync(token: str, catalog_path: Path, metadata_path: Path, state_path: Path,
          start_page: int, pages: int, limit: int, delay_seconds: float,
-         dry_run: bool = False) -> Dict[str, int]:
+         dry_run: bool = False, mode: str = "backfill", lookback_days: int = 7,
+         kind: str = "all") -> Dict[str, int]:
     legacy = read_json(catalog_path, [])
     existing = read_json(metadata_path, [])
     if not isinstance(legacy, list) or not isinstance(existing, list):
@@ -145,19 +190,33 @@ def sync(token: str, catalog_path: Path, metadata_path: Path, state_path: Path,
     legacy_ids = {positive_int(item.get("kinopoiskId")) for item in legacy if isinstance(item, dict)}
     cards = {positive_int(item.get("kinopoiskId")): item for item in existing if isinstance(item, dict) and positive_int(item.get("kinopoiskId"))}
     state = read_json(state_path, {})
-    page = start_page or positive_int(state.get("next_page") if isinstance(state, dict) else 0) or 1
-    totals = {"pages": 0, "seen": 0, "created": 0, "skipped": 0, "next_page": page}
+    if mode not in {"backfill", "daily"} or kind not in {"all", "movie", "series"}:
+        raise ValueError("Неизвестный режим синхронизации")
+    checkpoint_key = "next_page" if kind == "all" else "next_page_{}".format(kind)
+    page = 1 if mode == "daily" else start_page or positive_int(state.get(checkpoint_key) if isinstance(state, dict) else 0) or 1
+    updated_since = date.today() - timedelta(days=lookback_days) if mode == "daily" else None
+    totals = {"pages": 0, "seen": 0, "created": 0, "updated": 0, "skipped": 0, "next_page": page}
     with requests.Session() as session:
         for _ in range(pages):
-            payload = fetch_page(session, token, page, limit)
+            payload = fetch_page(session, token, page, limit, updated_since=updated_since, kind=kind)
             rows = payload["docs"]
             if not rows:
                 break
             result = merge_page(rows, cards, legacy_ids)
             if not dry_run:
                 save_json_atomic(metadata_path, list(cards.values()))
-                save_json_atomic(state_path, {"provider": "kinopoisk.dev-v1.4", "next_page": page + 1})
-            for key in ("seen", "created", "skipped"):
+                next_state = dict(state) if isinstance(state, dict) else {}
+                next_state["provider"] = "kinopoisk.dev-v1.4"
+                if mode == "backfill":
+                    next_state[checkpoint_key] = page + 1
+                    completion_key = "backfill_complete" if kind == "all" else "backfill_{}_complete".format(kind)
+                    next_state[completion_key] = page >= positive_int(payload.get("pages")) > 0
+                else:
+                    next_state["last_daily_sync"] = date.today().isoformat()
+                    next_state["daily_lookback_days"] = lookback_days
+                save_json_atomic(state_path, next_state)
+                state = next_state
+            for key in ("seen", "created", "updated", "skipped"):
                 totals[key] += result[key]
             totals["pages"] += 1
             page += 1
@@ -170,28 +229,36 @@ def sync(token: str, catalog_path: Path, metadata_path: Path, state_path: Path,
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Постранично добавить карточки Kinopoisk.dev без видеопотоков")
+    parser = argparse.ArgumentParser(description="Добавить или обновить карточки Kinopoisk.dev без видеопотоков")
+    parser.add_argument("--mode", choices=("backfill", "daily"), default="backfill",
+                        help="backfill постепенно обходит всю базу; daily обновляет последние изменения")
+    parser.add_argument("--kind", choices=("all", "movie", "series"), default="all",
+                        help="Ограничить обход фильмами или сериалами; контрольные точки хранятся отдельно")
     parser.add_argument("--catalog-path", type=Path, default=DEFAULT_CATALOG)
     parser.add_argument("--metadata-path", type=Path, default=DEFAULT_METADATA)
     parser.add_argument("--state-path", type=Path, default=DEFAULT_STATE)
     parser.add_argument("--start-page", type=int, default=0, help="0 — продолжить с контрольной точки")
-    parser.add_argument("--pages", type=int, default=1, help="Не более 20 страниц за запуск")
+    parser.add_argument("--pages", type=int, default=1, help="Не более 100 страниц за запуск")
     parser.add_argument("--limit", type=int, default=100, help="До 250 карточек на страницу")
     parser.add_argument("--delay-seconds", type=float, default=1.0)
+    parser.add_argument("--lookback-days", type=int, default=7,
+                        help="Перекрытие обновлений для daily (1–31 день)")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    if args.start_page < 0 or not 1 <= args.pages <= 20 or not 1 <= args.limit <= 250 or args.delay_seconds < 0:
-        parser.error("Проверь диапазоны start-page, pages, limit и delay-seconds")
+    if args.start_page < 0 or not 1 <= args.pages <= 100 or not 1 <= args.limit <= 250 or args.delay_seconds < 0 or not 1 <= args.lookback_days <= 31:
+        parser.error("Проверь диапазоны start-page, pages, limit, delay-seconds и lookback-days")
     token = api_token()
     if not token:
         parser.error("Задай CINEVAULT_KINOPOISK_DEV_TOKEN в окружении")
     try:
         result = sync(token, args.catalog_path, args.metadata_path, args.state_path,
-                      args.start_page, args.pages, args.limit, args.delay_seconds, args.dry_run)
+                      args.start_page, args.pages, args.limit, args.delay_seconds, args.dry_run,
+                      mode=args.mode, lookback_days=args.lookback_days, kind=args.kind)
     except (OSError, ValueError, requests.RequestException, json.JSONDecodeError) as exc:
         parser.exit(1, "Синхронизация остановлена на текущей странице: {}\n".format(type(exc).__name__))
-    print("{}: страниц {pages}, просмотрено {seen}, добавлено {created}, пропущено {skipped}, следующая страница {next_page}".format(
-        "Проверено" if args.dry_run else "Сохранено", **result))
+    print("{}: режим {}, тип {}, страниц {{pages}}, просмотрено {{seen}}, добавлено {{created}}, обновлено {{updated}}, пропущено {{skipped}}, следующая страница {{next_page}}".format(
+        "Проверено" if args.dry_run else "Сохранено", args.mode, args.kind).format(
+        **result))
     return 0
 
 
