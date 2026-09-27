@@ -31,7 +31,14 @@ class FilmMediaTests(unittest.TestCase):
                 }
             },
             "players": {"data": [{"type": "Veoveo"}]},
-            "access": {"content_id": 1234, "dle_token": "test-token"},
+            "access": {
+                "content_id": 1234,
+                "dle_token": "test-token",
+                "catalog_api_base_url": (
+                    "https://video.example/balancer-api/proxy/"
+                    "playlists/catalog-api"
+                ),
+            },
             "catalog": {"title": "Тестовый фильм", "originalTitle": "Test Film"},
             "episodes": [
                 {

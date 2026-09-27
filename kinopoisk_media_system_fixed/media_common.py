@@ -18,9 +18,41 @@ SERVICE_DIR = Path(
 CONFIG_PATH = PROJECT_DIR / "media_sources.json"
 GENERATED_DIR = PROJECT_DIR / "generated"
 
+
+def load_local_env():
+    """Загрузить локальный .env, не перезаписывая переменные процесса."""
+    env_path = PROJECT_DIR / ".env"
+    if not env_path.is_file():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        name = name.strip()
+        value = value.strip().strip('"').strip("'")
+        if name:
+            os.environ.setdefault(name, value)
+
+
+load_local_env()
+
 APBUGALL_TOKEN = os.environ.get("CINEVAULT_APBUGALL_TOKEN", "").strip()
 DEVICE_FP = os.environ.get("CINEVAULT_DEVICE_FP", "").strip()
 IFRAME_REQUEST_ID = os.environ.get("CINEVAULT_IFRAME_REQUEST_ID", "").strip()
+PLAYERS_API_URL = os.environ.get(
+    "CINEVAULT_PLAYERS_API_URL",
+    "https://fbphdplay.top/api/players",
+).strip()
+PLAYER_ORIGIN = os.environ.get(
+    "CINEVAULT_PLAYER_ORIGIN",
+    "https://fbfind.online",
+).strip().rstrip("/")
+CATALOG_API_BASE_URL = os.environ.get(
+    "CINEVAULT_CATALOG_API_BASE_URL",
+    "",
+).strip().rstrip("/")
 
 COMMON_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -191,10 +223,11 @@ def fetch_film_metadata(kinopoisk_value):
     access = find_veoveo_access(players)
     content_id = access["content_id"]
     dle_token = access["dle_token"]
+    catalog_api_base_url = access["catalog_api_base_url"]
     print("✓ content_id найден автоматически: {}".format(content_id))
 
     print("\n3. Получаю каталог...")
-    catalog = fetch_catalog(session, content_id, dle_token)
+    catalog = fetch_catalog(session, content_id, dle_token, catalog_api_base_url)
     print(
         "✓ Найдено: {} ({})".format(
             catalog.get("title") or data.get("name"),
@@ -203,7 +236,9 @@ def fetch_film_metadata(kinopoisk_value):
     )
 
     print("\n4. Получаю свежие ссылки фильма...")
-    raw_video_payload = fetch_episodes(session, content_id, dle_token)
+    raw_video_payload = fetch_episodes(
+        session, content_id, dle_token, catalog_api_base_url
+    )
     video_payload = sanitize_film_video_payload(raw_video_payload)
     variants_count = len(video_payload.get("episodeVariants", []))
     if not variants_count:
@@ -356,15 +391,15 @@ def fetch_players(session, kinopoisk_id):
     headers = {
         "accept": "*/*",
         "accept-language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-        "origin": "https://fbfind.life",
-        "referer": "https://fbfind.life/",
+        "origin": PLAYER_ORIGIN,
+        "referer": PLAYER_ORIGIN + "/",
         "user-agent": COMMON_UA,
     }
 
     return request_json(
         session,
         "GET",
-        "https://fbphdplay.top/api/players",
+        PLAYERS_API_URL,
         params={"kinopoisk": str(kinopoisk_id)},
         headers=headers,
     )
@@ -386,10 +421,16 @@ def find_veoveo_access(players_payload):
         tokens = query.get("token")
 
         if movie_ids:
+            iframe_origin = "{}://{}".format(parsed.scheme, parsed.netloc)
             return {
                 "content_id": int(movie_ids[0]),
                 "dle_token": tokens[0] if tokens else None,
                 "iframe_url": iframe_url,
+                "catalog_api_base_url": (
+                    CATALOG_API_BASE_URL
+                    or iframe_origin
+                    + "/balancer-api/proxy/playlists/catalog-api"
+                ),
             }
 
     raise RuntimeError(
@@ -397,12 +438,19 @@ def find_veoveo_access(players_payload):
     )
 
 
-def make_catalog_headers(dle_token):
+def make_catalog_headers(dle_token, catalog_api_base_url):
+    parsed_catalog_url = urlparse(catalog_api_base_url)
+    catalog_origin = "{}://{}".format(
+        parsed_catalog_url.scheme,
+        parsed_catalog_url.netloc,
+    )
     headers = {
         "accept": "application/json, text/plain, */*",
         "accept-language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
         "cdc-friendly": "false",
         "iframe-request-id": IFRAME_REQUEST_ID,
+        "origin": catalog_origin,
+        "referer": catalog_origin + "/",
         "user-agent": COMMON_UA,
         "x-has-token": "true",
         "x-session-context": DEVICE_FP,
@@ -421,29 +469,23 @@ def make_catalog_cookies():
     }
 
 
-def fetch_catalog(session, content_id, dle_token):
+def fetch_catalog(session, content_id, dle_token, catalog_api_base_url):
     return request_json(
         session,
         "GET",
-        (
-            "https://tazaromikaz.link/balancer-api/proxy/"
-            "playlists/catalog-api/contents/{}"
-        ).format(content_id),
-        headers=make_catalog_headers(dle_token),
+        "{}/contents/{}".format(catalog_api_base_url, content_id),
+        headers=make_catalog_headers(dle_token, catalog_api_base_url),
         cookies=make_catalog_cookies(),
     )
 
 
-def fetch_episodes(session, content_id, dle_token):
+def fetch_episodes(session, content_id, dle_token, catalog_api_base_url):
     return request_json(
         session,
         "GET",
-        (
-            "https://tazaromikaz.link/balancer-api/proxy/"
-            "playlists/catalog-api/episodes"
-        ),
+        "{}/episodes".format(catalog_api_base_url),
         params={"content-id": str(content_id)},
-        headers=make_catalog_headers(dle_token),
+        headers=make_catalog_headers(dle_token, catalog_api_base_url),
         cookies=make_catalog_cookies(),
     )
 
@@ -577,11 +619,12 @@ def fetch_series_by_kinopoisk(kinopoisk_value):
 
     content_id = access["content_id"]
     dle_token = access["dle_token"]
+    catalog_api_base_url = access["catalog_api_base_url"]
 
     print("✓ content_id найден автоматически: {}".format(content_id))
 
     print("\n3. Получаю каталог...")
-    catalog = fetch_catalog(session, content_id, dle_token)
+    catalog = fetch_catalog(session, content_id, dle_token, catalog_api_base_url)
 
     print(
         "✓ Найдено: {} ({})".format(
@@ -591,7 +634,7 @@ def fetch_series_by_kinopoisk(kinopoisk_value):
     )
 
     print("\n4. Получаю свежие ссылки серий...")
-    episodes = fetch_episodes(session, content_id, dle_token)
+    episodes = fetch_episodes(session, content_id, dle_token, catalog_api_base_url)
 
     links = build_episode_links(
         catalog=catalog,
