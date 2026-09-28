@@ -88,9 +88,10 @@ SITEMAP_TITLE_ID_BY_KINOPOISK_ID = {
 APP_ROUTE_RE = re.compile(
     r"^/(?:title/[^/]+/?|catalog/?|movies/?|series/?|library/?|favorites/?|evening/?|history/?|settings/?)$"
 )
-DEFAULT_KINOPOISK_UPDATE_DELAY_SECONDS = 0
+DEFAULT_KINOPOISK_UPDATE_DELAY_SECONDS = 2
 DEFAULT_KINOPOISK_UPDATE_TIMEOUT_SECONDS = 5 * 60
 KINOPOISK_REFRESH_COOLDOWN_SECONDS = 15
+KINOPOISK_UPDATE_RETRY_ATTEMPTS = 2
 DEFAULT_KINOPOISK_IMPORT_TIMEOUT_SECONDS = 30 * 60
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024 * 1024
 MAX_SOURCE_JSON_BYTES = 10 * 1024 * 1024
@@ -194,6 +195,8 @@ def kinopoisk_update_command(updater_dir: Path, kinopoisk_id: int, delay_seconds
         "{:g}".format(max(0, float(delay_seconds))),
         "--only",
         str(int(kinopoisk_id)),
+        "--retry-attempts",
+        str(KINOPOISK_UPDATE_RETRY_ATTEMPTS),
     ]
     return command
 

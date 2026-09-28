@@ -431,7 +431,7 @@ class MediaLibraryTests(unittest.TestCase):
         updater = KinopoiskOnDemandUpdater(updater_dir, delay_seconds=7, catalog_path=catalog_path)
         expected_command = kinopoisk_update_command(updater_dir.resolve(), 689, delay_seconds=7)
         self.assertEqual(expected_command[1], str(updater_dir.resolve() / "update_media.py"))
-        self.assertEqual(expected_command[-2:], ["--only", "689"])
+        self.assertEqual(expected_command[-4:], ["--only", "689", "--retry-attempts", "2"])
         with patch("tools.media_library_server.subprocess.run") as run:
             run.return_value.returncode = 0
             run.return_value.stdout = "Успешно: 1\nОшибок: 0"
