@@ -67,3 +67,18 @@ services:
     volumes:
       - ./app/data:/opt/cinevault/app/data
       - ${CINEVAULT_DATA_DIR:-./data/media-library}:/opt/cinevault/data/media-library
+  wikidata-kinopoisk-catalog-sync:
+    build: .
+    profiles: ["maintenance"]
+    user: "0:0"
+    entrypoint: ["python", "tools/sync_wikidata_kinopoisk_catalog.py"]
+    command:
+      - --batches
+      - ${CINEVAULT_WIKIDATA_CATALOG_BATCHES:-5}
+      - --limit
+      - ${CINEVAULT_WIKIDATA_CATALOG_LIMIT:-500}
+      - --delay-seconds
+      - ${CINEVAULT_WIKIDATA_CATALOG_DELAY_SECONDS:-1}
+    volumes:
+      - ./app/data:/opt/cinevault/app/data
+      - ${CINEVAULT_DATA_DIR:-./data/media-library}:/opt/cinevault/data/media-library

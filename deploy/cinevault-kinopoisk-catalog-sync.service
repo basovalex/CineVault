@@ -1,9 +1,9 @@
 [Unit]
-Description=CineVault daily Kinopoisk.dev metadata catalog sync
+Description=CineVault daily open Kinopoisk ID catalog sync via Wikidata
 Requires=docker.service
 After=docker.service network-online.target
 
 [Service]
 Type=oneshot
 WorkingDirectory=/srv/cinevault
-ExecStart=/usr/bin/docker compose --profile maintenance run --rm kinopoisk-catalog-sync
+ExecStart=/usr/bin/docker compose --profile maintenance run --rm wikidata-kinopoisk-catalog-sync
