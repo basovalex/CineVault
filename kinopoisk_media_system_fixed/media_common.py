@@ -2,6 +2,8 @@
 import json
 import os
 import re
+import unicodedata
+from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
@@ -59,6 +61,69 @@ COMMON_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/151.0.0.0 Safari/537.36"
 )
+
+
+def normalize_media_title(value):
+    """Нормализовать название для защиты от неверного content_id."""
+    text = unicodedata.normalize("NFKD", str(value or "").casefold().replace("ё", "е"))
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return " ".join(re.findall(r"[a-zа-я0-9]+", text))
+
+
+def media_titles_match(expected_titles, actual_titles):
+    """Допустить пунктуацию/подзаголовки, но отвергнуть другой фильм."""
+    expected = [normalize_media_title(value) for value in expected_titles if normalize_media_title(value)]
+    actual = [normalize_media_title(value) for value in actual_titles if normalize_media_title(value)]
+    for left in expected:
+        for right in actual:
+            shorter, longer = sorted((left, right), key=len)
+            if left == right:
+                return True
+            if len(shorter) >= 5 and (longer.startswith(shorter + " ") or shorter in longer.split(" ")):
+                return True
+            if SequenceMatcher(None, left, right).ratio() >= 0.72:
+                return True
+            left_tokens = set(left.split())
+            right_tokens = set(right.split())
+            if min(len(left_tokens), len(right_tokens)) >= 2 and (
+                left_tokens <= right_tokens or right_tokens <= left_tokens
+            ):
+                return True
+    return False
+
+
+def validate_catalog_identity(metadata, catalog, kinopoisk_id):
+    expected = (
+        metadata.get("name"),
+        metadata.get("original_name"),
+        metadata.get("originalName"),
+        metadata.get("alternative_name"),
+    )
+    actual = (catalog.get("title"), catalog.get("originalTitle"))
+    if not media_titles_match(expected, actual):
+        raise RuntimeError(
+            "Контент источника не соответствует Kinopoisk {}: ожидалось {!r}, найдено {!r}".format(
+                kinopoisk_id,
+                metadata.get("name") or metadata.get("original_name"),
+                catalog.get("title") or catalog.get("originalTitle"),
+            )
+        )
+
+
+def validate_single_film_payload(payload, kinopoisk_id):
+    """Фильм у провайдера — одна техническая серия season/order == 0."""
+    if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
+        raise RuntimeError(
+            "Источник вернул сериал вместо фильма Kinopoisk {}: записей {}".format(
+                kinopoisk_id, len(payload) if isinstance(payload, list) else "неизвестно"
+            )
+        )
+    episode = payload[0]
+    season = episode.get("season") if isinstance(episode.get("season"), dict) else {}
+    if season.get("order") not in (None, 0, "0") or episode.get("order") not in (None, 0, "0"):
+        raise RuntimeError(
+            "Источник вернул сериал вместо фильма Kinopoisk {}".format(kinopoisk_id)
+        )
 
 
 def extract_kinopoisk_id(value):
@@ -228,6 +293,7 @@ def fetch_film_metadata(kinopoisk_value):
 
     print("\n3. Получаю каталог...")
     catalog = fetch_catalog(session, content_id, dle_token, catalog_api_base_url)
+    validate_catalog_identity(data, catalog, kinopoisk_id)
     print(
         "✓ Найдено: {} ({})".format(
             catalog.get("title") or data.get("name"),
@@ -239,6 +305,7 @@ def fetch_film_metadata(kinopoisk_value):
     raw_video_payload = fetch_episodes(
         session, content_id, dle_token, catalog_api_base_url
     )
+    validate_single_film_payload(raw_video_payload, kinopoisk_id)
     video_payload = sanitize_film_video_payload(raw_video_payload)
     variants_count = len(video_payload.get("episodeVariants", []))
     if not variants_count:
@@ -625,6 +692,9 @@ def fetch_series_by_kinopoisk(kinopoisk_value):
 
     print("\n3. Получаю каталог...")
     catalog = fetch_catalog(session, content_id, dle_token, catalog_api_base_url)
+    legacy_data = legacy.get("data") if isinstance(legacy, dict) else {}
+    if isinstance(legacy_data, dict) and legacy_data.get("name"):
+        validate_catalog_identity(legacy_data, catalog, kinopoisk_id)
 
     print(
         "✓ Найдено: {} ({})".format(

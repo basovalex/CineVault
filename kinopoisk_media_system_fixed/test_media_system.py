@@ -101,6 +101,53 @@ class FilmMediaTests(unittest.TestCase):
 
         self.assertFalse((self.generated_dir / "999").exists())
 
+    def test_film_rejects_catalog_for_another_title(self):
+        responses = self.film_responses()
+        responses["catalog"] = {"title": "Совсем другой фильм", "originalTitle": "Another Movie"}
+        with patch.object(media_common, "GENERATED_DIR", self.generated_dir), patch.multiple(
+            media_common,
+            fetch_legacy=Mock(return_value=responses["legacy"]),
+            fetch_players=Mock(return_value=responses["players"]),
+            find_veoveo_access=Mock(return_value=responses["access"]),
+            fetch_catalog=Mock(return_value=responses["catalog"]),
+            fetch_episodes=Mock(return_value=responses["episodes"]),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "не соответствует Kinopoisk"):
+                media_common.fetch_film_metadata(999)
+
+        self.assertFalse((self.generated_dir / "999").exists())
+
+    def test_film_rejects_series_episodes_even_when_catalog_title_matches(self):
+        responses = self.film_responses()
+        responses["episodes"] = [
+            {"season": {"order": 1}, "order": number, "title": "{} серия".format(number),
+             "episodeVariants": [{"id": number, "filepath": "https://video.example/{}.mp4".format(number)}]}
+            for number in range(1, 13)
+        ]
+        with patch.object(media_common, "GENERATED_DIR", self.generated_dir), patch.multiple(
+            media_common,
+            fetch_legacy=Mock(return_value=responses["legacy"]),
+            fetch_players=Mock(return_value=responses["players"]),
+            find_veoveo_access=Mock(return_value=responses["access"]),
+            fetch_catalog=Mock(return_value=responses["catalog"]),
+            fetch_episodes=Mock(return_value=responses["episodes"]),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "сериал вместо фильма"):
+                media_common.fetch_film_metadata(999)
+
+        self.assertFalse((self.generated_dir / "999").exists())
+
+    def test_title_matching_allows_localized_alias_and_subtitle(self):
+        self.assertTrue(media_common.media_titles_match(
+            ["Pixar Shorts: Partly Cloudy"], ["Partly Cloudy"]
+        ))
+        self.assertTrue(media_common.media_titles_match(
+            ["Смешарики"], ["Смешарики: Избранное. Выпуск 1"]
+        ))
+        self.assertFalse(media_common.media_titles_match(
+            ["Элементарно", "Elemental"], ["Игра в кальмара", "Squid Game"]
+        ))
+
     def test_numeric_media_kind_uses_fetched_metadata(self):
         self.assertEqual(
             add_media.detect_kind("258687", {"data": {"category": 1}}),
