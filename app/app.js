@@ -2409,7 +2409,23 @@
   }
 
   function routeHistoryState(route, scrollY = 0, extra = {}) {
-    return { cinevaultRoute: true, route: route.type, view: route.view || "", titleId: route.id || "", scrollY: Math.max(0, Number(scrollY) || 0), ...extra };
+    return {
+      cinevaultRoute: true,
+      route: route.type,
+      view: route.view || "",
+      titleId: route.id || "",
+      scrollY: Math.max(0, Number(scrollY) || 0),
+      catalogContext: {
+        page: Math.max(1, Number(state.catalogPage) || 1),
+        query: String(state.query || ""),
+        genre: String(state.catalogGenre || ""),
+        collection: String(state.catalogCollection || ""),
+        moodOnly: Boolean(state.catalogMoodOnly),
+        playableOnly: Boolean(state.catalogPlayableOnly),
+        sort: String(state.catalogSort || "rating"),
+      },
+      ...extra,
+    };
   }
 
   function updateCurrentHistoryScroll() {
@@ -2423,6 +2439,44 @@
 
   function scheduleScroll(top = 0) {
     window.requestAnimationFrame(() => window.scrollTo({ top: Math.max(0, Number(top) || 0), left: 0, behavior: "auto" }));
+  }
+
+  function restoreCatalogContext(historyState) {
+    const context = historyState?.catalogContext;
+    if (!context || typeof context !== "object") return;
+    state.catalogPage = Math.max(1, Number(context.page) || 1);
+    state.query = String(context.query || "");
+    searchDraft = state.query;
+    state.catalogGenre = String(context.genre || "");
+    state.catalogCollection = String(context.collection || "");
+    state.catalogMoodOnly = Boolean(context.moodOnly);
+    state.catalogPlayableOnly = Boolean(context.playableOnly);
+    state.catalogSort = String(context.sort || "rating");
+  }
+
+  function restoreCatalogPosition(historyState) {
+    const fallbackTop = Math.max(0, Number(historyState?.scrollY) || 0);
+    const anchorId = String(historyState?.catalogAnchorId || "");
+    const applyPosition = () => {
+      if (readRouteFromLocation().type !== "view") return;
+      if (anchorId && String(window.history.state?.catalogAnchorId || "") !== anchorId) return;
+      const anchor = anchorId
+        ? [...document.querySelectorAll("[data-open-title]")].find((element) => element.dataset.openTitle === anchorId)
+        : null;
+      const savedOffset = Number(historyState?.catalogAnchorOffset);
+      if (anchor && Number.isFinite(savedOffset)) {
+        const top = window.scrollY + anchor.getBoundingClientRect().top - savedOffset;
+        window.scrollTo({ top: Math.max(0, top), left: 0, behavior: "auto" });
+        return;
+      }
+      window.scrollTo({ top: fallbackTop, left: 0, behavior: "auto" });
+    };
+    // Browsers may perform their own delayed focus restoration after popstate.
+    // Re-apply our saved position after that pass so the old pagination button
+    // cannot pull the catalogue to the bottom.
+    window.requestAnimationFrame(() => window.requestAnimationFrame(applyPosition));
+    window.setTimeout(applyPosition, 120);
+    window.setTimeout(applyPosition, 360);
   }
 
   function updateDocumentRoute(route, item = null) {
@@ -2473,26 +2527,35 @@
     }
 
     const previousView = state.view;
+    const historyState = window.history.state || {};
+    const catalogViews = ["catalog", "movies", "series", "favorites", "evening", "history"];
+    if (restoreScroll && catalogViews.includes(route.view)) restoreCatalogContext(historyState);
     // Genre, search and collection are controls of one catalogue visit, not
     // application-wide settings. An explicit navigation always starts the
     // destination with its complete source set. History/detail return keeps
     // the context because the view does not change.
     if (!preserveCatalogFilters && route.view !== previousView) clearCatalogScope();
     state.view = route.view;
-    const catalogViews = ["catalog", "movies", "series", "favorites", "evening", "history"];
     const shouldReloadCatalog = catalogViews.includes(route.view) && !catalogHydrating;
     if (shouldReloadCatalog) {
       catalog = [];
       remoteCatalog = { page: 1, pages: 1, total: 0, facets: remoteCatalog.facets };
       remoteCatalogLoading = true;
-      resetCatalogPage();
+      if (!restoreScroll) resetCatalogPage();
     }
     saveState();
     if (replaceHistory) window.history.replaceState(routeHistoryState(route), "", window.location.href);
     render();
     updateDocumentRoute(route);
-    scheduleScroll(restoreScroll ? window.history.state?.scrollY : 0);
-    if (shouldReloadCatalog && !catalogHydrating) loadRemoteCatalogPage(1);
+    if (shouldReloadCatalog && !catalogHydrating) {
+      const requestedPage = restoreScroll ? Math.max(1, Number(state.catalogPage) || 1) : 1;
+      loadRemoteCatalogPage(requestedPage).then(() => {
+        if (restoreScroll) restoreCatalogPosition(historyState);
+        else scheduleScroll(0);
+      });
+    } else {
+      scheduleScroll(restoreScroll ? historyState.scrollY : 0);
+    }
     if (state.view === "history") loadLibraryData(true);
   }
 
@@ -2526,6 +2589,18 @@
     hideSearchSuggestions();
     const returnView = ROUTE_PATHS[state.view] ? state.view : "catalog";
     updateCurrentHistoryScroll();
+    const trigger = [...document.querySelectorAll("[data-open-title]")]
+      .find((element) => element.dataset.openTitle === item.id);
+    const triggerOffset = trigger?.getBoundingClientRect().top;
+    window.history.replaceState(
+      {
+        ...(window.history.state || {}),
+        catalogAnchorId: item.id,
+        catalogAnchorOffset: Number.isFinite(triggerOffset) ? triggerOffset : null,
+      },
+      "",
+      window.location.href,
+    );
     const route = { type: "title", id: item.id };
     window.history.pushState(
       routeHistoryState(route, 0, { returnView, hasPreviousView: true }),
