@@ -74,6 +74,25 @@ class MediaLibraryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.library.create_upload("Test", 0, 0, "", "secret.exe", io.BytesIO(b"x"))
 
+    def test_application_shell_is_never_cached(self):
+        app_js = Path(self.temp_dir.name) / "app.js"
+        app_js.write_text("console.log('fresh');", encoding="utf-8")
+        handler = lambda *args, **kwargs: MediaLibraryHandler(*args, directory=self.temp_dir.name, **kwargs)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.library = self.library  # type: ignore[attr-defined]
+        server.viewer_token = ""  # type: ignore[attr-defined]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            response = opener.open(f"http://127.0.0.1:{server.server_port}/app.js?v=test", timeout=3)
+            self.assertEqual(response.read(), b"console.log('fresh');")
+            self.assertEqual(response.headers["Cache-Control"], "no-store, max-age=0")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
     def test_tmdb_catalog_entry_has_no_video_source(self):
         entry = tmdb_catalog_entry({
             "id": 42,

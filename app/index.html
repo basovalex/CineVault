@@ -68,10 +68,16 @@
   </div>
   <script src="/config.local.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" crossorigin="anonymous"></script>
-    <script src="/app.js?v=20260928-stream-on-play-1" defer></script>
+    <script src="/app.js?v=20260928-stream-on-play-2" defer></script>
   <script>
     if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js?v=20260926-metadata-on-demand-1").catch(() => {}));
+      let reloadingForUpdate = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (reloadingForUpdate) return;
+        reloadingForUpdate = true;
+        window.location.reload();
+      });
+      window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js?v=20260928-stream-on-play-2", { updateViaCache: "none" }).catch(() => {}));
     }
   </script>
 </body>

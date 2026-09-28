@@ -2348,6 +2348,16 @@ def quote_path(value: str) -> str:
 class MediaLibraryHandler(SimpleHTTPRequestHandler):
     server_version = "CineVaultMediaLibrary/1.0"
 
+    def end_headers(self) -> None:
+        # The application shell changes independently from the media library.
+        # Do not let a browser keep an old SPA bundle after a deployment: an
+        # already-open tab could otherwise retain obsolete playback behaviour
+        # when navigating from Favorites into a title card.
+        request_path = urllib.parse.urlsplit(self.path).path
+        if request_path in {"/index.html", "/app.js", "/styles.css", "/sw.js"}:
+            self.send_header("Cache-Control", "no-store, max-age=0")
+        super().end_headers()
+
     def log_request(self, code="-", size="-") -> None:
         # Download tickets are short-lived credentials; keep them out of logs.
         request_path = urllib.parse.urlsplit(self.path).path if "ticket=" in self.path else self.path
