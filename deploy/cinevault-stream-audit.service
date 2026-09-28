@@ -1,0 +1,14 @@
+[Unit]
+Description=CineVault gradual Kinopoisk stream audit
+Requires=docker.service
+After=docker.service network-online.target cinevault.service
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/cinevault
+ExecStart=/usr/bin/docker compose exec -T cinevault python tools/audit_kinopoisk_catalog.py --delay-seconds 5
+Restart=always
+RestartSec=10m
+
+[Install]
+WantedBy=multi-user.target
