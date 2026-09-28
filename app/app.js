@@ -3140,7 +3140,12 @@
     rangeWrap.style.setProperty("--buffered-percent", `${percent}%`);
     bufferStatus.textContent = bufferedEnd > 0 ? `Прогружено: ${formatTime(bufferedEnd)}${total > 0 ? ` из ${formatTime(total)} · ${Math.round(percent)}%` : ""}` : "Буфер: загружается…";
   }
-  function formatRuntime(minutes) { return minutes >= 60 ? `${Math.floor(minutes / 60)} ч ${minutes % 60 ? `${minutes % 60} мин` : ""}`.trim() : `${minutes} мин`; }
+  function formatRuntime(minutes) {
+    const value = Number(minutes);
+    if (!Number.isFinite(value) || value <= 0) return "";
+    const rounded = Math.round(value);
+    return rounded >= 60 ? `${Math.floor(rounded / 60)} ч ${rounded % 60 ? `${rounded % 60} мин` : ""}`.trim() : `${rounded} мин`;
+  }
   function posterStyle(item) { return item.posterImage ? `background-image:linear-gradient(180deg, transparent 38%, rgba(0,0,0,.18)),url(${escapeHtml(item.posterImage)});background-size:cover;background-position:center` : `--poster:${item.poster}`; }
   function posterTitleArt(item) { return item.posterImage ? "" : `<span class="poster-title-art">${escapeHtml(item.title)}</span>`; }
   function catalogRatingLabel(item) {

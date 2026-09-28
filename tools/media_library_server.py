@@ -3021,6 +3021,7 @@ def main() -> None:
         updater = KinopoiskOnDemandUpdater(
             args.kinopoisk_updater_dir,
             args.kinopoisk_update_delay_seconds,
+            failure_state_path=library.root / "kinopoisk_playback_failures.json",
         )
     server.kinopoisk_updater = updater  # type: ignore[attr-defined]
     server.kinopoisk_catalog_importer = KinopoiskCatalogImporter()  # type: ignore[attr-defined]

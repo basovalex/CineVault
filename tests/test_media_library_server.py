@@ -497,6 +497,17 @@ class MediaLibraryTests(unittest.TestCase):
         self.assertEqual(third["failures"], 3)
         self.assertEqual(json.loads(catalog_path.read_text(encoding="utf-8")), [])
 
+    def test_kinopoisk_updater_accepts_persistent_failure_state_path(self):
+        updater_dir = Path(self.temp_dir.name) / "kinopoisk_media_system_fixed"
+        updater_dir.mkdir()
+        catalog_path = Path(self.temp_dir.name) / "catalog_imports.json"
+        state_path = Path(self.temp_dir.name) / "persistent" / "failures.json"
+        updater = KinopoiskOnDemandUpdater(
+            updater_dir, catalog_path=catalog_path, failure_state_path=state_path
+        )
+        updater._set_failure_count(123, 2)
+        self.assertEqual(json.loads(state_path.read_text(encoding="utf-8")), {"123": 2})
+
     def test_kinopoisk_updater_keeps_card_with_previous_stream_on_refresh_failure(self):
         updater_dir = Path(self.temp_dir.name) / "kinopoisk_media_system_fixed"
         updater_dir.mkdir()
