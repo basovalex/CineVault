@@ -3128,6 +3128,12 @@
     }));
   }
   function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char])); }
+  function highResolutionPosterUrl(value) {
+    return String(value || "").replace(
+      /^(https?:\/\/avatars\.mds\.yandex\.net\/get-kinopoisk-image\/[^/]+\/[^/]+\/)\d+x\d+([?#].*)?$/i,
+      (_match, prefix, suffix = "") => `${prefix}600x900${suffix}`,
+    );
+  }
   function removeAdminTokenFields(root = document) {
     $$('input[name="admin_token"], #library-admin-token', root).forEach((input) => {
       input.closest("label")?.remove();
@@ -3221,7 +3227,7 @@
     const rounded = Math.round(value);
     return rounded >= 60 ? `${Math.floor(rounded / 60)} ч ${rounded % 60 ? `${rounded % 60} мин` : ""}`.trim() : `${rounded} мин`;
   }
-  function posterStyle(item) { return item.posterImage ? `background-image:linear-gradient(180deg, transparent 38%, rgba(0,0,0,.18)),url(${escapeHtml(item.posterImage)});background-size:cover;background-position:center` : `--poster:${item.poster}`; }
+  function posterStyle(item) { return item.posterImage ? `background-image:linear-gradient(180deg, transparent 38%, rgba(0,0,0,.18)),url(${escapeHtml(highResolutionPosterUrl(item.posterImage))});background-size:cover;background-position:center` : `--poster:${item.poster}`; }
   function posterTitleArt(item) { return item.posterImage ? "" : `<span class="poster-title-art">${escapeHtml(item.title)}</span>`; }
   function catalogRatingLabel(item) {
     const value = Number(item.ratingKinopoisk ?? item.rating);
@@ -4299,7 +4305,7 @@
     const meta = [item.year, catalogRatingLabel(item), item.kind === "series" ? `${item.seasons.length} сезонов` : formatRuntime(item.runtime)].filter(Boolean);
     const genres = genresForItem(item).slice(0, 3);
     const posterAttrs = item.posterImage ? ` style="--poster:${escapeHtml(item.poster || "linear-gradient(145deg, #5c3b63, #221b31)")}"` : ` style="${posterStyle(item)}"`;
-    const posterImage = item.posterImage ? `<img class="poster-art-image" src="${escapeHtml(item.posterImage)}" alt="" loading="lazy" decoding="async" aria-hidden="true">` : "";
+    const posterImage = item.posterImage ? `<img class="poster-art-image" src="${escapeHtml(highResolutionPosterUrl(item.posterImage))}" alt="" loading="lazy" decoding="async" aria-hidden="true">` : "";
     return `<a class="poster-card ${extra}" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="Открыть ${escapeHtml(item.title)}"><div class="poster-art"${posterAttrs}>${posterImage}${posterTitleArt(item)}${progress ? `<span class="progress-bar" style="--progress:${progressPct}%"><i></i></span>` : ""}</div><div class="poster-card-copy"><strong>${escapeHtml(item.title)}</strong><div class="poster-card-meta">${meta.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div><p class="poster-card-description">${escapeHtml(item.description || "Подробности появятся после синхронизации каталога.")}</p><div class="poster-card-tags">${genres.map((genre) => `<span>#${escapeHtml(genre)}</span>`).join("")}</div></div></a>`;
   }
 
@@ -4309,7 +4315,7 @@
     const playbackAttr = hasPlayableSource(item) ? `data-play-media="${item.id}"` : `data-demo-play="${item.id}"`;
     const episodeAttrs = progress.episodeNumber ? `data-resume-season="${Number(progress.seasonNumber) || 1}" data-episode="${Number(progress.episodeNumber)}"` : "";
     const posterAttrs = item.posterImage ? ` style="--poster:${escapeHtml(item.poster || "linear-gradient(145deg, #5c3b63, #221b31)")}"` : ` style="${posterStyle(item)}"`;
-    const posterImage = item.posterImage ? `<img class="poster-art-image" src="${escapeHtml(item.posterImage)}" alt="" loading="lazy" decoding="async" aria-hidden="true">` : "";
+    const posterImage = item.posterImage ? `<img class="poster-art-image" src="${escapeHtml(highResolutionPosterUrl(item.posterImage))}" alt="" loading="lazy" decoding="async" aria-hidden="true">` : "";
     return `<button class="poster-card" ${playbackAttr} ${episodeAttrs} type="button"><div class="poster-art"${posterAttrs}>${posterImage}${posterTitleArt(item)}<span class="progress-bar" style="--progress:${progressPct}%"><i></i></span></div><strong>${escapeHtml(item.title)}</strong><small>${item.kind === "series" ? `${item.seasons.length} сезонов${episodeText}` : `${item.year} · ${formatTime(progress.position)} из ${formatTime(progress.duration)}`}</small></button>`;
   }
 
@@ -4958,7 +4964,7 @@
     const ratingKinopoisk = detailRating(item.ratingKinopoisk || item.rating);
     const ratingImdb = detailRating(item.imdbRating);
     const premiere = String(item.premiere || "").trim();
-    const backdropStyle = item.posterImage ? ` style="--detail-backdrop: url('${escapeHtml(item.posterImage)}')"` : "";
+    const backdropStyle = item.posterImage ? ` style="--detail-backdrop: url('${escapeHtml(highResolutionPosterUrl(item.posterImage))}')"` : "";
     const factMarkup = [
       detailFact("Оригинальное название", item.originalTitle),
       detailFact("Год", item.year),

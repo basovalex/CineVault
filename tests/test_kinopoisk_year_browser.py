@@ -30,6 +30,13 @@ class KinopoiskYearBrowserTests(unittest.TestCase):
         self.assertEqual(entry["posterImage"], "https://poster/136x204")
         self.assertEqual(entry["videoSources"], [])
 
+    def test_kinopoisk_thumbnail_is_upgraded_for_catalog_cards(self):
+        source = "//avatars.mds.yandex.net/get-kinopoisk-image/4486362/poster-id/136x204"
+        self.assertEqual(
+            year_sync._poster_from_srcset(f"{source} 2x", ""),
+            "https://avatars.mds.yandex.net/get-kinopoisk-image/4486362/poster-id/600x900",
+        )
+
     def test_merge_does_not_replace_legacy_or_playback_fields(self):
         incoming = year_sync.catalog_entry_from_browser_row({
             "href": "/film/10/", "title": "Новое название",

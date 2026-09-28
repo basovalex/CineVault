@@ -38,6 +38,19 @@ def save_json_atomic(path: Path, payload: Any) -> None:
     os.replace(temporary, path)
 
 
+def _high_resolution_poster(value: str) -> str:
+    """Use a catalogue-sized Kinopoisk poster instead of its tiny list thumbnail."""
+    result = str(value or "").strip()
+    if result.startswith("//"):
+        result = "https:" + result
+    return re.sub(
+        r"^(https?://avatars\.mds\.yandex\.net/get-kinopoisk-image/[^/]+/[^/]+/)\d+x\d+([?#].*)?$",
+        r"\g<1>600x900\2",
+        result,
+        flags=re.I,
+    )
+
+
 def _poster_from_srcset(value: str, fallback: str) -> str:
     candidates = []
     for item in str(value or "").split(","):
@@ -45,7 +58,7 @@ def _poster_from_srcset(value: str, fallback: str) -> str:
         if url:
             candidates.append(url)
     result = candidates[-1] if candidates else str(fallback or "")
-    return "https:" + result if result.startswith("//") else result
+    return _high_resolution_poster(result)
 
 
 def catalog_entry_from_browser_row(row: Dict[str, Any], year: int) -> Dict[str, Any]:
