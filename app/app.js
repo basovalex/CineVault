@@ -17,6 +17,10 @@
   const configuredApiBaseUrl = String(window.CINEVAULT_CONFIG?.apiBaseUrl || "").trim().replace(/\/+$/, "");
   const configuredPublicBaseUrl = String(window.CINEVAULT_CONFIG?.publicBaseUrl || "").trim();
   const viewerToken = String(window.CINEVAULT_CONFIG?.viewerToken || "").trim();
+  const PLAYBACK_REFRESH_FRESH_MS = 10 * 60 * 1000;
+  const PLAYBACK_ERROR_REFRESH_COOLDOWN_MS = 60 * 1000;
+  const PLAYBACK_REFRESH_TIMEOUT_MS = 45 * 1000;
+  const PLAYBACK_START_TIMEOUT_MS = 20 * 1000;
   const HLS_PLAYBACK_CONFIG = {
     enableWorker: true,
     // Do not silently downgrade to 480p just because the player is displayed
@@ -2337,6 +2341,7 @@
   const importedDetailsLoading = new Set();
   const importedDetailsLoaded = new Set();
   const playbackRefreshAt = new Map();
+  const playbackFailureRefreshAt = new Map();
   const detailPlaybackRefresh = new Map();
   let remoteCatalog = { page: 1, pages: 1, total: 0, facets: { genres: {} } };
   let remoteCatalogRequest = 0;
@@ -3646,16 +3651,24 @@
     if (!shouldRefreshKinopoiskPlayback(item)) return item;
     const kinopoiskId = Number(item.kinopoiskId || item.kinopoisk_id);
     if (playbackRefreshes.has(kinopoiskId)) return playbackRefreshes.get(kinopoiskId);
+    const persistedRefreshAt = Date.parse(String(item.playbackUpdatedAt || ""));
+    if (!force && hasPlayableSource(item) && Number.isFinite(persistedRefreshAt) && Date.now() - persistedRefreshAt < PLAYBACK_REFRESH_FRESH_MS) {
+      playbackRefreshAt.set(kinopoiskId, persistedRefreshAt);
+      return item;
+    }
     const refreshedAt = Number(playbackRefreshAt.get(kinopoiskId) || 0);
     if (!force && refreshedAt && Date.now() - refreshedAt < 60_000) return item;
     const refresh = (async () => {
       setPlaybackButtonsBusy(item, true);
       item.playbackRefreshWarning = "";
+      const refreshController = new AbortController();
+      const refreshTimeout = window.setTimeout(() => refreshController.abort(), PLAYBACK_REFRESH_TIMEOUT_MS);
       try {
         const response = await apiFetch("/api/playback/refresh", {
           method: "POST",
           headers: { "content-type": "application/json", accept: "application/json" },
           body: JSON.stringify({ kinopoisk_id: kinopoiskId, force }),
+          signal: refreshController.signal,
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
@@ -3674,8 +3687,10 @@
         playbackRefreshAt.set(kinopoiskId, Date.now());
         item.playbackRefreshWarning = "";
       } catch (error) {
-        item.playbackRefreshWarning = `Свежую ссылку получить не удалось (${error.message}). Пробую предыдущую.`;
+        const message = error?.name === "AbortError" ? "обновление заняло больше 45 секунд" : error.message;
+        item.playbackRefreshWarning = `Свежую ссылку получить не удалось (${message}). Пробую предыдущую.`;
       } finally {
+        window.clearTimeout(refreshTimeout);
         setPlaybackButtonsBusy(item, false);
       }
       return getTitle(item.id) || item;
@@ -5288,6 +5303,11 @@
     let roomSync = null;
     let retryingExpiredSource = false;
     let playerClosed = false;
+    let sourceLoadTimer = null;
+    const clearSourceLoadTimer = () => {
+      if (sourceLoadTimer) window.clearTimeout(sourceLoadTimer);
+      sourceLoadTimer = null;
+    };
     const updateBuffer = () => updatePlayerBuffer(video, duration, rangeWrap, bufferStatus);
     const setVariant = (variant, autoplay = false, initial = false) => {
       activeVariant = variant;
@@ -5316,6 +5336,10 @@
         video.src = variant.url;
         video.load();
       }
+      clearSourceLoadTimer();
+      sourceLoadTimer = window.setTimeout(() => {
+        if (!playerClosed && video.readyState < 3) onError(null, "Источник не начал воспроизведение за 20 секунд");
+      }, PLAYBACK_START_TIMEOUT_MS);
       status.innerHTML = initial ? "<strong>Подключаю видеопоток…</strong> Позиция восстановится автоматически." : `<strong>${escapeHtml(variant.quality)} · ${escapeHtml(variant.voice)}.</strong> Источник переключён без сброса позиции.`;
     };
     $("#video-variant")?.addEventListener("change", (event) => {
@@ -5356,22 +5380,30 @@
         status.innerHTML = `<strong>Обновление не завершилось.</strong> ${escapeHtml(error.message || "Попробуйте ещё раз позже.")}`;
       }
     };
-    const onError = (statusCode = null) => {
-      if ((Number(statusCode) === 410 || !Number(statusCode)) && shouldRefreshKinopoiskPlayback(item)) {
+    const onError = (statusCode = null, reason = "") => {
+      clearSourceLoadTimer();
+      const kinopoiskId = Number(item.kinopoiskId || item.kinopoisk_id || 0);
+      const lastFailureRefresh = Number(playbackFailureRefreshAt.get(kinopoiskId) || 0);
+      const canRefreshAgain = !lastFailureRefresh || Date.now() - lastFailureRefresh > PLAYBACK_ERROR_REFRESH_COOLDOWN_MS;
+      if ((Number(statusCode) === 410 || !Number(statusCode)) && shouldRefreshKinopoiskPlayback(item) && canRefreshAgain) {
+        playbackFailureRefreshAt.set(kinopoiskId, Date.now());
         retryExpiredSource();
         return;
       }
       loading.hidden = true;
       showSourceErrorCard(videoError, statusCode, "Проверьте срок действия ссылки или выберите другой подключённый источник.");
-      status.innerHTML = sourceErrorMarkup(statusCode, "<strong>Поток не открылся.</strong> Проверьте источник или выберите другой вариант.");
+      status.innerHTML = reason
+        ? `<strong>Поток не открылся.</strong> ${escapeHtml(reason)}. Закройте плеер и повторите запуск.`
+        : sourceErrorMarkup(statusCode, "<strong>Поток не открылся.</strong> Проверьте источник или выберите другой вариант.");
     };
-    const onPlay = () => { setPlayerPlayButton(playButton, true, false); if (!roomSync?.isApplying()) roomSync?.publish({ playing: true }); };
+    const onCanPlay = () => { clearSourceLoadTimer(); updateBuffer(); };
+    const onPlay = () => { clearSourceLoadTimer(); playbackFailureRefreshAt.delete(Number(item.kinopoiskId || item.kinopoisk_id || 0)); setPlayerPlayButton(playButton, true, false); if (!roomSync?.isApplying()) roomSync?.publish({ playing: true }); };
     const onPause = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; setPlayerPlayButton(playButton, false, false); saveProgress(false); if (!roomSync?.isApplying()) roomSync?.publish({ position, playing: false }); };
     const seekBy = (seconds) => { const currentPosition = Number.isFinite(video.currentTime) ? Number(video.currentTime) : Number(position || 0); const nextPosition = Math.max(0, Math.min(video.duration || duration || Number.MAX_SAFE_INTEGER, currentPosition + seconds)); position = nextPosition; video.currentTime = nextPosition; range.value = nextPosition; positionLabel.textContent = formatTime(nextPosition); saveProgress(false); roomSync?.publish({ position: nextPosition }); };
     video.addEventListener("loadedmetadata", onLoadedMetadata);
     video.addEventListener("timeupdate", onTimeUpdate);
     video.addEventListener("progress", updateBuffer);
-    video.addEventListener("canplay", updateBuffer);
+    video.addEventListener("canplay", onCanPlay);
     video.addEventListener("ended", onEnded);
     video.addEventListener("error", onError);
     video.addEventListener("play", onPlay);
@@ -5397,7 +5429,7 @@
         roomStatus.textContent = copied ? "Вы хост комнаты. Ссылка скопирована." : "Вы хост комнаты. Ссылка находится в адресной строке.";
       } catch (error) { roomStatus.hidden = false; roomStatus.textContent = `Комнату создать не удалось: ${error.message}`; roomStatus.classList.add("is-error"); }
     });
-    const close = () => { if (playerClosed) return; playerClosed = true; position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; saveProgress(false); roomSync?.publish({ position, playing: false }); roomSync?.dispose(); fullscreenPlayer._exitFullscreen?.(); video.pause(); hls?.destroy(); removeLoadingState(); removeVolumeControl(); removeSettingsControl(); video.removeEventListener("loadedmetadata", onLoadedMetadata); video.removeEventListener("timeupdate", onTimeUpdate); video.removeEventListener("progress", updateBuffer); video.removeEventListener("canplay", updateBuffer); video.removeEventListener("ended", onEnded); video.removeEventListener("error", onError); video.removeEventListener("play", onPlay); video.removeEventListener("pause", onPause); fullscreenPlayer._removeFullscreenControls?.(); returnFromPlayer(); };
+    const close = () => { if (playerClosed) return; playerClosed = true; clearSourceLoadTimer(); position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; saveProgress(false); roomSync?.publish({ position, playing: false }); roomSync?.dispose(); fullscreenPlayer._exitFullscreen?.(); video.pause(); hls?.destroy(); removeLoadingState(); removeVolumeControl(); removeSettingsControl(); video.removeEventListener("loadedmetadata", onLoadedMetadata); video.removeEventListener("timeupdate", onTimeUpdate); video.removeEventListener("progress", updateBuffer); video.removeEventListener("canplay", onCanPlay); video.removeEventListener("ended", onEnded); video.removeEventListener("error", onError); video.removeEventListener("play", onPlay); video.removeEventListener("pause", onPause); fullscreenPlayer._removeFullscreenControls?.(); returnFromPlayer(); };
     $("#video-close").addEventListener("click", close);
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
     setVariant(activeVariant, false, true);

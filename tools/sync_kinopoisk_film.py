@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import urlparse
@@ -173,6 +174,7 @@ def build_entry(payload: Dict[str, Any], kinopoisk_id: int, card_id: str, video_
         "kinopoiskId": kinopoisk_id,
         "posterImage": str(data.get("poster") or data.get("posterUrl") or "").strip(),
         "videoSources": video_sources,
+        "playbackUpdatedAt": datetime.now(timezone.utc).isoformat() if video_sources else None,
         "videoSourcesSkipped": skipped,
         "providerUrl": "https://www.kinopoisk.ru/film/{}/".format(kinopoisk_id),
         "providerName": "Kinopoisk · импортированные данные",

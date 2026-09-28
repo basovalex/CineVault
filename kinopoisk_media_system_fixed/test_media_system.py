@@ -101,6 +101,59 @@ class FilmMediaTests(unittest.TestCase):
 
         self.assertFalse((self.generated_dir / "999").exists())
 
+    def test_json_descriptor_is_expanded_into_playable_hls_sources(self):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "sources": [
+                {
+                    "label": "Оригинал",
+                    "isDefault": False,
+                    "links": [
+                        {"quality": "720p", "src": "https://video.example/original/720/master.m3u8"},
+                        {"quality": "1080p", "src": "https://video.example/original/1080/master.m3u8"},
+                    ],
+                },
+                {
+                    "label": "Дубляж",
+                    "isDefault": True,
+                    "link": "https://video.example/dub/grouped.m3u8",
+                },
+            ]
+        }
+        session = Mock()
+        session.get.return_value = response
+
+        result = media_common.resolve_film_video_descriptors(session, {
+            "episodeVariants": [{
+                "id": 7,
+                "filepath": "https://video.example/movie/parsed.json",
+                "title": "Старое имя",
+            }]
+        })
+
+        self.assertEqual(len(result["episodeVariants"]), 2)
+        self.assertEqual(result["episodeVariants"][0]["title"], "Дубляж")
+        self.assertEqual(result["episodeVariants"][0]["filepath"], "https://video.example/dub/grouped.m3u8")
+        self.assertEqual(result["episodeVariants"][1]["streamQuality"], "1080p")
+        self.assertEqual(result["episodeVariants"][1]["filepath"], "https://video.example/original/1080/master.m3u8")
+
+    def test_json_descriptor_without_hls_is_rejected(self):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "sources": [{"label": "Сломанный источник", "link": "https://video.example/not-video.json"}]
+        }
+        session = Mock()
+        session.get.return_value = response
+
+        with self.assertRaisesRegex(RuntimeError, "не содержит HLS-ссылок"):
+            media_common.resolve_film_video_descriptors(session, {
+                "episodeVariants": [{
+                    "filepath": "https://video.example/movie/parsed.json",
+                }]
+            })
+
     def test_film_rejects_catalog_for_another_title(self):
         responses = self.film_responses()
         responses["catalog"] = {"title": "Совсем другой фильм", "originalTitle": "Another Movie"}

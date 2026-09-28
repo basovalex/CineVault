@@ -307,6 +307,7 @@ def fetch_film_metadata(kinopoisk_value):
     )
     validate_single_film_payload(raw_video_payload, kinopoisk_id)
     video_payload = sanitize_film_video_payload(raw_video_payload)
+    video_payload = resolve_film_video_descriptors(session, video_payload)
     variants_count = len(video_payload.get("episodeVariants", []))
     if not variants_count:
         raise RuntimeError(
@@ -452,6 +453,91 @@ def sanitize_film_video_payload(payload):
     return {
         "episodeVariants": result_variants
     }
+
+
+def resolve_film_video_descriptors(session, payload):
+    """Expand provider ``parsed.json`` descriptors into playable HLS sources.
+
+    Some newer films expose a JSON descriptor in ``episodeVariants.filepath``
+    instead of media. Passing that URL to ``<video>`` makes Chromium reject the
+    JSON response and the player waits forever. Resolve it during the normal
+    updater run so the catalog always receives actual ``.m3u8`` URLs, just like
+    older cards.
+    """
+
+    variants = payload.get("episodeVariants") if isinstance(payload, dict) else []
+    if not isinstance(variants, list):
+        return {"episodeVariants": []}
+
+    resolved = []
+    seen_urls = set()
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+        url = str(variant.get("filepath") or "").strip()
+        if not url:
+            continue
+        if not urlparse(url).path.lower().endswith(".json"):
+            if url not in seen_urls:
+                seen_urls.add(url)
+                resolved.append(variant)
+            continue
+
+        try:
+            response = session.get(
+                url,
+                timeout=20,
+                headers={
+                    "accept": "application/json, text/plain, */*",
+                    "referer": PLAYER_ORIGIN + "/",
+                    "user-agent": COMMON_UA,
+                },
+            )
+            response.raise_for_status()
+            descriptor = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            raise RuntimeError("Не удалось раскрыть JSON-описание видеопотока") from exc
+
+        sources = descriptor.get("sources") if isinstance(descriptor, dict) else None
+        if not isinstance(sources, list):
+            raise RuntimeError("JSON-описание видеопотока не содержит sources")
+        # The provider marks the preferred dubbing explicitly. Keep it first so
+        # the player starts with it, while preserving the other voice options.
+        sources = sorted(
+            (source for source in sources if isinstance(source, dict)),
+            key=lambda source: not bool(source.get("isDefault")),
+        )
+        expanded = 0
+        for index, source in enumerate(sources, start=1):
+            stream_url = str(source.get("link") or "").strip()
+            stream_quality = "Авто"
+            if ".m3u8" not in urlparse(stream_url).path.lower():
+                stream_url = ""
+                links = source.get("links") or []
+                links = [link for link in links if isinstance(link, dict) and link.get("src")]
+                if links:
+                    def quality_rank(link):
+                        match = re.search(r"\d+", str(link.get("quality") or ""))
+                        return int(match.group(0)) if match else 0
+                    selected = max(links, key=quality_rank)
+                    stream_url = str(selected.get("src") or "").strip()
+                    stream_quality = str(selected.get("quality") or "Авто")
+            if not stream_url or ".m3u8" not in urlparse(stream_url).path.lower() or stream_url in seen_urls:
+                continue
+            seen_urls.add(stream_url)
+            expanded += 1
+            resolved.append({
+                **variant,
+                "id": "{}-{}".format(variant.get("id") or "source", index),
+                "filepath": stream_url,
+                "m3u8": stream_url,
+                "title": source.get("label") or variant.get("title") or "Оригинал",
+                "streamQuality": stream_quality,
+            })
+        if not expanded:
+            raise RuntimeError("JSON-описание видеопотока не содержит HLS-ссылок")
+
+    return {"episodeVariants": resolved}
 
 
 def fetch_players(session, kinopoisk_id):
