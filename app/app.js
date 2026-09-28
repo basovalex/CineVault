@@ -3573,6 +3573,16 @@
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        if (payload.deleted) {
+          catalog = catalog.filter((entry) => Number(entry.kinopoiskId || 0) !== kinopoiskId);
+          discoveryCatalog = discoveryCatalog.filter((entry) => Number(entry.kinopoiskId || 0) !== kinopoiskId);
+          state.favorites = state.favorites.filter((id) => id !== item.id);
+          state.watchlist = state.watchlist.filter((id) => id !== item.id);
+          saveState();
+          activeTitleId = null;
+          navigateToView("catalog");
+          throw new Error(payload.warning || "Карточка удалена после трёх неудачных попыток");
+        }
         if (!payload.refreshed && !payload.cached) throw new Error(payload.warning || "Источник не отдал новый поток");
         await applyRefreshedCatalogEntry(getTitle(item.id) || item, payload.entry);
         playbackRefreshAt.set(kinopoiskId, Date.now());

@@ -472,6 +472,51 @@ class MediaLibraryTests(unittest.TestCase):
         self.assertTrue(refreshed["refreshed"])
         self.assertEqual(run.call_count, 2)
 
+    def test_kinopoisk_updater_deletes_streamless_card_after_three_failures(self):
+        updater_dir = Path(self.temp_dir.name) / "kinopoisk_media_system_fixed"
+        updater_dir.mkdir()
+        (updater_dir / "update_media.py").write_text("# test updater\n", encoding="utf-8")
+        catalog_path = Path(self.temp_dir.name) / "catalog_imports.json"
+        catalog_path.write_text(
+            json.dumps([{"id": "missing-film", "kinopoiskId": 4889667, "videoSources": []}]),
+            encoding="utf-8",
+        )
+        metadata_path = catalog_path.with_name("catalog_metadata.json")
+        metadata_path.write_text("[]", encoding="utf-8")
+        updater = KinopoiskOnDemandUpdater(updater_dir, catalog_path=catalog_path)
+        with patch("tools.media_library_server.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "Успешно: 0\nНедоступно у источника: 1\nОшибок: 0"
+            run.return_value.stderr = ""
+            first = updater.refresh(4889667, force=True)
+            second = updater.refresh(4889667, force=True)
+            third = updater.refresh(4889667, force=True)
+        self.assertEqual(first["failures"], 1)
+        self.assertEqual(second["failures"], 2)
+        self.assertTrue(third["deleted"])
+        self.assertEqual(third["failures"], 3)
+        self.assertEqual(json.loads(catalog_path.read_text(encoding="utf-8")), [])
+
+    def test_kinopoisk_updater_keeps_card_with_previous_stream_on_refresh_failure(self):
+        updater_dir = Path(self.temp_dir.name) / "kinopoisk_media_system_fixed"
+        updater_dir.mkdir()
+        (updater_dir / "update_media.py").write_text("# test updater\n", encoding="utf-8")
+        catalog_path = Path(self.temp_dir.name) / "catalog_imports.json"
+        catalog_path.write_text(json.dumps([{
+            "id": "available-film", "kinopoiskId": 689,
+            "videoSources": [{"url": "https://video.example/master.m3u8"}],
+        }]), encoding="utf-8")
+        updater = KinopoiskOnDemandUpdater(updater_dir, catalog_path=catalog_path)
+        with patch("tools.media_library_server.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "Успешно: 0\nНедоступно у источника: 1\nОшибок: 0"
+            run.return_value.stderr = ""
+            for _ in range(3):
+                result = updater.refresh(689, force=True)
+        self.assertNotIn("failures", result)
+        self.assertFalse(result.get("deleted", False))
+        self.assertEqual(len(json.loads(catalog_path.read_text(encoding="utf-8"))), 1)
+
     def test_kinopoisk_catalog_import_accepts_id_or_canonical_url(self):
         self.assertEqual(parse_kinopoisk_import_input("689"), 689)
         self.assertEqual(parse_kinopoisk_import_input("https://www.kinopoisk.ru/series/412344/"), 412344)

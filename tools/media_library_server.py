@@ -326,19 +326,113 @@ class KinopoiskCatalogImporter:
 class KinopoiskOnDemandUpdater:
     """Refresh one imported Kinopoisk title immediately before playback."""
 
+    MAX_MISSING_STREAM_ATTEMPTS = 3
+
     def __init__(
         self,
         updater_dir: Path,
         delay_seconds: float = DEFAULT_KINOPOISK_UPDATE_DELAY_SECONDS,
         catalog_path: Path = CATALOG_IMPORTS_PATH,
         timeout_seconds: int = DEFAULT_KINOPOISK_UPDATE_TIMEOUT_SECONDS,
+        failure_state_path: Optional[Path] = None,
     ):
         self.updater_dir = updater_dir.expanduser().resolve()
         self.delay_seconds = max(0, float(delay_seconds))
         self.catalog_path = Path(catalog_path).expanduser().resolve()
+        self.failure_state_path = Path(
+            failure_state_path or self.catalog_path.with_name(".kinopoisk_playback_failures.json")
+        ).expanduser().resolve()
         self.timeout_seconds = max(1, int(timeout_seconds))
         self._lock = threading.Lock()
         self._last_refreshes: Dict[int, float] = {}
+
+    @staticmethod
+    def _entry_has_playback(entry: Dict[str, Any]) -> bool:
+        return bool(
+            entry.get("videoSources")
+            or entry.get("sourceFile")
+            or entry.get("hlsUrl")
+            or entry.get("videoUrl")
+            or entry.get("embedUrl")
+            or entry.get("rutubeId")
+        )
+
+    @staticmethod
+    def _write_json_atomic(path: Path, payload: Any) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+
+    def _failure_counts(self) -> Dict[str, int]:
+        try:
+            payload = json.loads(self.failure_state_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Счётчик попыток Kinopoisk недоступен") from exc
+        if not isinstance(payload, dict):
+            return {}
+        result: Dict[str, int] = {}
+        for key, value in payload.items():
+            try:
+                count = max(0, int(value))
+            except (TypeError, ValueError):
+                continue
+            if count:
+                result[str(key)] = count
+        return result
+
+    def _set_failure_count(self, kinopoisk_id: int, count: int) -> None:
+        counts = self._failure_counts()
+        key = str(int(kinopoisk_id))
+        if count > 0:
+            counts[key] = int(count)
+        else:
+            counts.pop(key, None)
+        self._write_json_atomic(self.failure_state_path, counts)
+
+    def _unregister_source(self, kinopoisk_id: int) -> None:
+        path = self.updater_dir / "media_sources.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return
+        media = payload.get("media") if isinstance(payload, dict) else None
+        if not isinstance(media, list):
+            return
+        pattern = re.compile(r"kinopoisk\.ru/(?:film|series)/(\d+)", re.I)
+        kept = []
+        for item in media:
+            value = str(item.get("url") if isinstance(item, dict) else item or "")
+            match = pattern.search(value)
+            if match and int(match.group(1)) == int(kinopoisk_id):
+                continue
+            kept.append(item)
+        if len(kept) != len(media):
+            self._write_json_atomic(path, {**payload, "media": kept})
+
+    def _delete_catalog_card(self, kinopoisk_id: int) -> bool:
+        deleted = False
+        for path in (self.catalog_path, self.catalog_path.with_name("catalog_metadata.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                continue
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError("Не удалось удалить недоступную карточку из каталога") from exc
+            if not isinstance(payload, list):
+                continue
+            filtered = [
+                item for item in payload
+                if not isinstance(item, dict) or int(item.get("kinopoiskId") or 0) != int(kinopoisk_id)
+            ]
+            if len(filtered) != len(payload):
+                self._write_json_atomic(path, filtered)
+                deleted = True
+        if deleted:
+            self._unregister_source(kinopoisk_id)
+        return deleted
 
     @property
     def script_path(self) -> Path:
@@ -442,17 +536,45 @@ class KinopoiskOnDemandUpdater:
             output = "{}\n{}".format(result.stdout or "", result.stderr or "")
             refreshed = "Успешно: 1" in output
             entry = self.catalog_entry(resolved_id)
+            stream_found = self._entry_has_playback(entry)
+            if refreshed and stream_found:
+                self._set_failure_count(resolved_id, 0)
+                failures = 0
+            elif stream_found:
+                # A provider refresh may be temporarily unavailable. Keep a
+                # card that still has a previously imported playable source.
+                self._set_failure_count(resolved_id, 0)
+                failures = 0
+            else:
+                failures = self._failure_counts().get(str(resolved_id), 0) + 1
+                if failures >= self.MAX_MISSING_STREAM_ATTEMPTS:
+                    deleted = self._delete_catalog_card(resolved_id)
+                    self._set_failure_count(resolved_id, 0)
+                    self._last_refreshes.pop(resolved_id, None)
+                    return {
+                        "refreshed": False,
+                        "cached": False,
+                        "deleted": deleted,
+                        "kinopoisk_id": resolved_id,
+                        "failures": failures,
+                        "warning": "Видеопоток не найден после 3 попыток. Карточка удалена из каталога.",
+                    }
+                self._set_failure_count(resolved_id, failures)
             self._last_refreshes[resolved_id] = time.monotonic()
             print(
                 "Kinopoisk playback refresh: {} ID {}".format(
-                    "completed" if refreshed else "kept previous source for",
+                    "completed" if refreshed else "missing source for" if failures else "kept previous source for",
                     resolved_id,
                 ),
                 flush=True,
             )
             payload = {"refreshed": refreshed, "cached": False, "entry": entry}
             if not refreshed:
-                payload["warning"] = "Источник не отдал новый поток; используется предыдущая ссылка"
+                if failures:
+                    payload["failures"] = failures
+                    payload["warning"] = "Видеопоток не найден (попытка {}/3)".format(failures)
+                else:
+                    payload["warning"] = "Источник не отдал новый поток; используется предыдущая ссылка"
             return payload
 
 
