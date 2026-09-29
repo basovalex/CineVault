@@ -5111,6 +5111,12 @@
     let lastSavedAt = 0;
     let sourceLinkExpired = false;
     let retryingExpiredSource = false;
+    let playerClosed = false;
+    let sourceLoadTimer = null;
+    const clearSourceLoadTimer = () => {
+      if (sourceLoadTimer) window.clearTimeout(sourceLoadTimer);
+      sourceLoadTimer = null;
+    };
     const remotePlayerSettings = hlsTrackControlsMarkup("remote-player");
     const preferredVoice = String(titlePlaybackSelection(item).voice || "").trim();
     const episodeVoices = episodeSourceOptions(item, season, episode);
@@ -5148,6 +5154,7 @@
       status.innerHTML = "<strong>Ссылка серии устарела.</strong> Обновляю поток и подключаю его заново…";
       try {
         const refreshedItem = await refreshKinopoiskPlayback(item, { force: true });
+        if (playerClosed) return;
         const refreshedUrl = directEpisodeUrl(refreshedItem, season, episode);
         if (!refreshedUrl || refreshedUrl === sourceUrl) throw new Error("источник не отдал новую ссылку для этой серии");
         hls?.destroy();
@@ -5164,21 +5171,32 @@
         retryingExpiredSource = false;
       }
     };
-    const onError = (statusCode = null) => {
-      if (Number(statusCode) === 410 && !retryingExpiredSource) { retryExpiredSeriesSource(); return; }
+    const onError = (statusCode = null, reason = "") => {
+      clearSourceLoadTimer();
+      const kinopoiskId = Number(item.kinopoiskId || item.kinopoisk_id || 0);
+      const lastFailureRefresh = Number(playbackFailureRefreshAt.get(kinopoiskId) || 0);
+      const canRefreshAgain = !lastFailureRefresh || Date.now() - lastFailureRefresh > PLAYBACK_ERROR_REFRESH_COOLDOWN_MS;
+      if ((Number(statusCode) === 410 || !Number(statusCode)) && !retryingExpiredSource && canRefreshAgain) {
+        playbackFailureRefreshAt.set(kinopoiskId, Date.now());
+        retryExpiredSeriesSource();
+        return;
+      }
       loading.hidden = true;
       if (Number(statusCode) === 410) sourceLinkExpired = true;
       if (sourceLinkExpired && Number(statusCode) !== 410) return;
       showSourceErrorCard(videoError, statusCode, "Проверьте срок действия ссылки и разрешение источника на воспроизведение в браузере.");
-      status.innerHTML = sourceErrorMarkup(statusCode, "<strong>Поток не открылся.</strong> Проверьте срок действия ссылки и разрешение источника на воспроизведение в браузере.");
+      status.innerHTML = reason
+        ? `<strong>Поток не открылся.</strong> ${escapeHtml(reason)}. Закройте плеер и повторите запуск.`
+        : sourceErrorMarkup(statusCode, "<strong>Поток не открылся.</strong> Проверьте срок действия ссылки и разрешение источника на воспроизведение в браузере.");
     };
-    const onPlay = () => { setPlayerPlayButton(playButton, true, false); if (!roomSync?.isApplying()) roomSync?.publish({ playing: true }); };
+    const onCanPlay = () => { clearSourceLoadTimer(); updateBuffer(); };
+    const onPlay = () => { clearSourceLoadTimer(); playbackFailureRefreshAt.delete(Number(item.kinopoiskId || item.kinopoisk_id || 0)); setPlayerPlayButton(playButton, true, false); if (!roomSync?.isApplying()) roomSync?.publish({ playing: true }); };
     const onPause = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; setPlayerPlayButton(playButton, false, false); saveProgress(false); if (!roomSync?.isApplying()) roomSync?.publish({ position, playing: false }); };
     const seekBy = (seconds) => { const currentPosition = Number.isFinite(video.currentTime) ? Number(video.currentTime) : Number(position || 0); const nextPosition = Math.max(0, Math.min(video.duration || duration || Number.MAX_SAFE_INTEGER, currentPosition + seconds)); position = nextPosition; video.currentTime = nextPosition; range.value = nextPosition; positionLabel.textContent = formatTime(nextPosition); saveProgress(false); roomSync?.publish({ position: nextPosition }); };
     video.addEventListener("loadedmetadata", onMetadata);
     video.addEventListener("timeupdate", onTime);
     video.addEventListener("progress", updateBuffer);
-    video.addEventListener("canplay", updateBuffer);
+    video.addEventListener("canplay", onCanPlay);
     video.addEventListener("ended", onEnded);
     video.addEventListener("error", onError);
     video.addEventListener("play", onPlay);
@@ -5218,7 +5236,10 @@
       video.src = sourceUrl;
       video.load();
     }
-    const close = () => { position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; saveProgress(false); roomSync?.publish({ position, playing: false }); roomSync?.dispose(); player._exitFullscreen?.(); video.pause(); hls?.destroy(); removeLoadingState(); removeVolumeControl(); removeSettingsControl(); video.removeEventListener("loadedmetadata", onMetadata); video.removeEventListener("timeupdate", onTime); video.removeEventListener("ended", onEnded); video.removeEventListener("error", onError); video.removeEventListener("play", onPlay); video.removeEventListener("pause", onPause); player._removeFullscreenControls?.(); returnFromPlayer(); };
+    sourceLoadTimer = window.setTimeout(() => {
+      if (!playerClosed && video.readyState < 3) onError(null, "Источник серии не начал воспроизведение за 20 секунд");
+    }, PLAYBACK_START_TIMEOUT_MS);
+    const close = () => { if (playerClosed) return; playerClosed = true; clearSourceLoadTimer(); position = Number.isFinite(video.currentTime) ? Number(video.currentTime) : position; duration = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration) : duration; saveProgress(false); roomSync?.publish({ position, playing: false }); roomSync?.dispose(); player._exitFullscreen?.(); video.pause(); hls?.destroy(); removeLoadingState(); removeVolumeControl(); removeSettingsControl(); video.removeEventListener("loadedmetadata", onMetadata); video.removeEventListener("timeupdate", onTime); video.removeEventListener("canplay", onCanPlay); video.removeEventListener("ended", onEnded); video.removeEventListener("error", onError); video.removeEventListener("play", onPlay); video.removeEventListener("pause", onPause); player._removeFullscreenControls?.(); returnFromPlayer(); };
     $("#remote-player-close").addEventListener("click", close);
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
   }

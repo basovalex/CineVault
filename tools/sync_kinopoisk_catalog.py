@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -196,6 +197,7 @@ def build_entry(input_path: Path) -> Dict[str, Any]:
         "seasons": seasons,
         "runtime": round(int(details.get("duration") or 2580) / 60) if int(details.get("duration") or 0) > 180 else int(details.get("duration") or 43),
         "kinopoiskId": kinopoisk_id,
+        "playbackUpdatedAt": datetime.now(timezone.utc).isoformat(),
         "catalogId": details.get("id"),
         "poster": "linear-gradient(145deg, #87644f, #1b2338)",
         "posterImage": details.get("posterUrl") or first.get("poster") or "",
