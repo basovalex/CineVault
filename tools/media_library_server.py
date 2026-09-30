@@ -50,6 +50,7 @@ CATALOG_INDEX_FIELDS = (
     "id", "kind", "title", "originalTitle", "year", "description", "tags", "genres",
     "rating", "ratingKinopoisk", "imdbRating", "seasons", "runtime", "kinopoiskId", "tmdbId",
     "catalogId", "poster", "posterImage", "providerUrl", "providerName", "providerNote", "tagline",
+    "episodeDataFile", "episodeDataProvider", "episodePosterPolicy",
 )
 
 _catalog_cache_lock = threading.Lock()

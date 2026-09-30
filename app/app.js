@@ -2340,6 +2340,7 @@
   let discoveryCatalog = [];
   const importedDetailsLoading = new Set();
   const importedDetailsLoaded = new Set();
+  const importedDetailsCache = new Map();
   const playbackRefreshAt = new Map();
   const playbackFailureRefreshAt = new Map();
   const detailPlaybackRefresh = new Map();
@@ -2688,8 +2689,8 @@
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         const loaded = Array.isArray(payload.items) ? payload.items[0] : null;
         if (loaded) {
-          catalog = [...catalog.filter((entry) => entry.id !== loaded.id), loaded];
-          item = loaded;
+          item = mergeCachedImportedDetails(loaded);
+          catalog = [...catalog.filter((entry) => entry.id !== item.id), item];
         }
       } catch {}
     }
@@ -2727,7 +2728,8 @@
       if (!Array.isArray(imported)) return;
       catalog = imported.map((entry) => {
         const isImportedDesperateHousewives = Number(entry.catalogId || 0) === 2205 || Number(entry.kinopoiskId || 0) === 160958;
-        return isImportedDesperateHousewives ? { ...entry, posterImage: importedDesperateHousewives.posterImage, episodePosterUrls: importedDesperateHousewives.episodePosterUrls } : entry;
+        const prepared = isImportedDesperateHousewives ? { ...entry, posterImage: importedDesperateHousewives.posterImage, episodePosterUrls: importedDesperateHousewives.episodePosterUrls } : entry;
+        return mergeCachedImportedDetails(prepared);
       });
       remoteCatalog = { page: payload.page, pages: payload.pages, total: payload.total, facets: remoteCatalog.facets };
       state.catalogPage = payload.page;
@@ -2747,15 +2749,30 @@
     } catch {}
   }
 
+  function mergeCachedImportedDetails(item) {
+    const kinopoiskId = String(item?.kinopoiskId || item?.kinopoisk_id || "").trim();
+    const details = kinopoiskId ? importedDetailsCache.get(kinopoiskId) : null;
+    return details ? { ...details, ...item } : item;
+  }
+
   async function loadImportedTitleDetails(item) {
     const kinopoiskId = String(item?.kinopoiskId || "").trim();
-    if (!kinopoiskId || importedDetailsLoaded.has(kinopoiskId) || importedDetailsLoading.has(kinopoiskId)) return;
+    if (!kinopoiskId) return;
+    const cachedDetails = importedDetailsCache.get(kinopoiskId);
+    if (cachedDetails) {
+      Object.assign(item, cachedDetails, item);
+      importedDetailsLoaded.add(kinopoiskId);
+      return;
+    }
+    if (importedDetailsLoaded.has(kinopoiskId) || importedDetailsLoading.has(kinopoiskId)) return;
     importedDetailsLoading.add(kinopoiskId);
     try {
       const response = await apiFetch(`/api/catalog/imported/${encodeURIComponent(kinopoiskId)}`, { cache: "no-store", headers: { accept: "application/json" } });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const details = await response.json();
-      catalog = catalog.map((entry) => entry.id === item.id ? { ...entry, ...details } : entry);
+      importedDetailsCache.set(kinopoiskId, details);
+      catalog = catalog.map((entry) => entry.id === item.id ? { ...details, ...entry } : entry);
+      discoveryCatalog = discoveryCatalog.map((entry) => entry.id === item.id ? { ...details, ...entry } : entry);
       importedDetailsLoaded.add(kinopoiskId);
       if (activeTitleId === item.id) renderDetails(item.id, { skipPlaybackRefresh: true });
     } catch {
@@ -3636,6 +3653,8 @@
     const originalId = item.id;
     const originalSeasons = Array.isArray(item.seasons) && item.seasons.length ? item.seasons : null;
     Object.assign(item, entry, { id: originalId || entry.id });
+    const kinopoiskId = String(item.kinopoiskId || item.kinopoisk_id || "").trim();
+    if (kinopoiskId) importedDetailsCache.set(kinopoiskId, { ...(importedDetailsCache.get(kinopoiskId) || {}), ...item });
     if (originalSeasons) item.seasons = originalSeasons;
     if (item.sourceFile) {
       try {
@@ -5018,8 +5037,9 @@
     const poster = item.episodePosterUrls?.[String(season)]?.[String(episode)] || "";
     const fallback = item.posterImage || "";
     const action = episodePlayable ? `data-play-media="${escapeHtml(item.id)}"` : `data-demo-play="${escapeHtml(item.id)}"`;
-    const image = poster
-      ? `<span class="episode-card-image" style="--poster:${item.poster}"><span class="episode-image-placeholder" aria-hidden="true"></span><img data-episode-poster data-fallback="${escapeHtml(fallback)}" src="${escapeHtml(poster)}" alt="" loading="${item.episodeDataProvider ? "lazy" : "eager"}"><span class="episode-image-status" aria-hidden="true">Не удалось загрузить</span></span>`
+    const imageSource = poster || fallback;
+    const image = imageSource
+      ? `<span class="episode-card-image" style="--poster:${item.poster}"><span class="episode-image-placeholder" aria-hidden="true"></span><img data-episode-poster${poster && fallback ? ` data-fallback="${escapeHtml(fallback)}"` : ""} src="${escapeHtml(imageSource)}" alt="" loading="lazy"><span class="episode-image-status" aria-hidden="true">Не удалось загрузить</span></span>`
       : `<span class="episode-card-image" style="--poster:${item.poster}"><span class="episode-image-placeholder" aria-hidden="true"></span><span class="episode-image-status" aria-hidden="true">Превью пока недоступно</span></span>`;
     return `<button class="episode-card-art${episodePlayable ? "" : " episode-card-art-unavailable"}" ${action} data-episode="${episode}" type="button" aria-label="Открыть ${escapeHtml(title)}">${image}<span class="episode-card-play">▶</span><span class="episode-card-number">${String(episode).padStart(2, "0")}</span></button>`;
   }
