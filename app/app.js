@@ -4470,6 +4470,53 @@
 
   function discoveryItems() { return discoveryCatalog.length ? discoveryCatalog : catalog; }
 
+  // Today's picks for the home hero: stable for a day and mood instead of a
+  // new random title on every render.
+  let homeFeatureIndex = 0;
+  function stableHash(value) {
+    let hash = 2166136261;
+    for (const char of String(value)) { hash ^= char.codePointAt(0); hash = Math.imul(hash, 16777619); }
+    return hash >>> 0;
+  }
+  function homeFeaturePicks(count = 5) {
+    const source = discoveryItems();
+    const credible = source.filter(isCredibleRecommendation);
+    const eligible = credible.length ? credible : source;
+    const unseen = eligible.filter((item) => !hasSharedHistory(item));
+    const ranked = sortPersonalRecommendations(unseen.length ? unseen : eligible);
+    const complete = ranked.filter((item) => item.posterImage && String(item.description || "").length >= 60);
+    const pool = (complete.length >= count ? complete : ranked).slice(0, 30);
+    const seed = `${new Date().toISOString().slice(0, 10)}:${state.mood}`;
+    return [...pool].sort((left, right) => stableHash(`${seed}:${left.id}`) - stableHash(`${seed}:${right.id}`)).slice(0, count);
+  }
+
+  function featureWatchAction(item) {
+    if (hasPlayableSource(item) || shouldRefreshKinopoiskPlayback(item)) {
+      return `<button class="primary-button feature-play" data-play-media="${escapeHtml(item.id)}" type="button">${playerIcon("play")}<span>Смотреть</span></button>`;
+    }
+    if (Number(item.kinopoiskId || 0) > 0) {
+      return `<button class="primary-button feature-play" data-alternative-player="${escapeHtml(item.id)}" type="button">${playerIcon("play")}<span>Смотреть</span></button>`;
+    }
+    return "";
+  }
+
+  function homeFeatureMarkup(picks) {
+    const pick = picks[Math.min(homeFeatureIndex, picks.length - 1)] || picks[0];
+    if (!pick) return "";
+    const image = pick.posterImage ? highResolutionPosterUrl(pick.posterImage) : "";
+    const backdrop = pick.backdropImage || image;
+    const rating = catalogRatingValue(pick);
+    const imdb = Number(pick.imdbRating || 0);
+    const length = pick.kind === "series" ? (pick.seasons?.length ? `${pick.seasons.length} ${pick.seasons.length === 1 ? "сезон" : pick.seasons.length < 5 ? "сезона" : "сезонов"}` : "Сериал") : formatRuntime(pick.runtime);
+    const age = Number(pick.ageRating || 0) > 0 ? `${Number(pick.ageRating)}+` : "";
+    const meta = [pick.year, length, age, (pick.countries || [])[0]].filter(Boolean);
+    const favorite = state.favorites.includes(pick.id);
+    const progress = progressForTitle(pick);
+    const progressPct = progress?.duration > 0 && !progress.completed ? Math.min(100, Math.round(progress.position / progress.duration * 100)) : 0;
+    const thumbs = picks.length > 1 ? `<div class="feature-picks" role="tablist" aria-label="Рекомендации на сегодня">${picks.map((item, index) => `<button class="feature-pick${item.id === pick.id ? " is-active" : ""}" data-feature-pick="${index}" type="button" role="tab" aria-selected="${item.id === pick.id}" aria-label="${escapeHtml(item.title)}">${item.posterImage ? `<img src="${escapeHtml(highResolutionPosterUrl(item.posterImage))}" alt="" loading="lazy" decoding="async">` : `<span style="${posterStyle(item)}"></span>`}</button>`).join("")}</div>` : "";
+    return `<section class="home-feature" aria-labelledby="home-feature-title"${backdrop ? ` style="--feature-image:url('${escapeHtml(backdrop)}')"` : ""}><div class="feature-backdrop" aria-hidden="true"></div><div class="feature-body"><div class="feature-copy"><span class="feature-chip">✦ Рекомендация на сегодня${picks.length > 1 ? ` · ${picks.indexOf(pick) + 1}/${picks.length}` : ""}</span><h1 id="home-feature-title">${escapeHtml(pick.title)}</h1>${pick.originalTitle && pick.originalTitle !== pick.title ? `<p class="feature-original">${escapeHtml(pick.originalTitle)}</p>` : ""}<div class="feature-meta">${rating ? `<span class="feature-score"><b>★ ${rating.toFixed(1)}</b> КиноПоиск</span>` : ""}${imdb ? `<span class="feature-score"><b>${imdb.toFixed(1)}</b> IMDb</span>` : ""}${meta.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div><div class="feature-genres">${genresForItem(pick).slice(0, 4).map((genre) => `<span>${escapeHtml(genre)}</span>`).join("")}</div>${pick.description ? `<p class="feature-description">${escapeHtml(pick.description)}</p>` : ""}<p class="feature-reason">${escapeHtml(recommendationReason(pick))}</p><div class="hero-actions">${featureWatchAction(pick)}<a class="secondary-button" href="${routeForTitle(pick.id)}" data-open-title="${escapeHtml(pick.id)}">Подробнее</a><button class="secondary-button feature-icon-button" data-favorite="${escapeHtml(pick.id)}" type="button" aria-label="${favorite ? "Убрать из избранного" : "В избранное"}">${favorite ? "♥" : "♡"}</button><button class="secondary-button feature-icon-button" data-feature-shuffle type="button" aria-label="Другая рекомендация" title="Другая рекомендация">↻</button></div></div><a class="feature-poster" href="${routeForTitle(pick.id)}" data-open-title="${escapeHtml(pick.id)}" aria-hidden="true" tabindex="-1">${image ? `<img src="${escapeHtml(image)}" alt="" decoding="async">` : `<span style="${posterStyle(pick)}"></span>`}${progressPct ? `<span class="progress-bar" style="--progress:${progressPct}%"><i></i></span>` : ""}</a></div>${thumbs}</section>`;
+  }
+
   function recommendation() {
     const source = discoveryItems();
     const credible = source.filter(isCredibleRecommendation);
@@ -4550,10 +4597,7 @@
   }
 
   function renderHome() {
-    const [, petName, petDescription] = getPet();
-    const petEmoji = petVisual();
-    const pick = recommendation();
-    const pickWatch = hasPlayableSource(pick) ? watchButton(pick, "Смотреть") : "";
+    const picks = homeFeaturePicks();
     const continueItems = Object.entries(state.progress).map(([contentId, progress]) => ({ item: getTitleForProgress(contentId, progress), progress: { ...progress, contentId } })).filter((entry) => entry.item && !entry.progress.completed).sort((a, b) => b.progress.updatedAt - a.progress.updatedAt);
     const moodTitle = moodDefinition(state.mood)?.title || state.mood;
     const shelves = [
@@ -4563,7 +4607,7 @@
       discoveryShelf({ id: "evening", eyebrow: "Без лишнего выбора", title: "На один вечер", description: "Фильмы, которые удобно включить сегодня.", items: collectionItems("evening", 8) }),
       discoveryShelf({ id: "anime", eyebrow: "Отдельная полка", title: "Аниме", description: "Сериалы и фильмы с жанром «аниме».", items: collectionItems("anime", 8) }),
     ].filter(Boolean).join("");
-    page.innerHTML = `<section class="home-hero"><div class="hero-card"><div class="eyebrow">Рекомендация на сегодня</div><h1>${escapeHtml(pick.title)}</h1><p>${escapeHtml(recommendationReason(pick))}</p><div class="hero-actions">${pickWatch}<a class="secondary-button" href="${routeForTitle(pick.id)}" data-open-title="${escapeHtml(pick.id)}">Открыть карточку</a></div></div><div class="companion-card"><div class="pet-art" aria-label="${escapeHtml(petName)}">${petEmoji}</div><div><h2>${escapeHtml(petName)} рядом</h2><p>${escapeHtml(petDescription)}. Подберу варианты по жанрам, настроению и тому, что вы уже смотрели.</p></div><div class="mood-row" role="group" aria-label="Настроение">${["уютно", "романтично", "смеяться", "напряжённо"].map((mood) => `<button class="mood-button ${state.mood === mood ? "is-active" : ""}" data-mood="${mood}" type="button">${escapeHtml(moodDefinition(mood)?.shortLabel || mood)}</button>`).join("")}</div></div></section>${continueItems.length ? `<section class="section"><div class="section-header"><div><div class="section-kicker">Не потерять место</div><h2>Продолжить просмотр</h2></div><button class="text-button" data-view="history" type="button">Вся история</button></div><div class="poster-grid">${continueItems.slice(0, 4).map(({ item, progress }) => resumePoster(item, progress)).join("")}</div></section>` : ""}${shelves}`;
+    page.innerHTML = `${homeFeatureMarkup(picks)}<section class="home-mood-strip" aria-label="Настроение"><span class="home-mood-label">Настроение вечера</span><div class="mood-row" role="group" aria-label="Настроение">${["уютно", "романтично", "смеяться", "напряжённо"].map((mood) => `<button class="mood-button ${state.mood === mood ? "is-active" : ""}" data-mood="${mood}" type="button" aria-pressed="${state.mood === mood}">${escapeHtml(moodDefinition(mood)?.shortLabel || mood)}</button>`).join("")}</div></section>${continueItems.length ? `<section class="section"><div class="section-header"><div><div class="section-kicker">Не потерять место</div><h2>Продолжить просмотр</h2></div><button class="text-button" data-view="history" type="button">Вся история</button></div><div class="discovery-rail continue-rail">${continueItems.slice(0, 12).map(({ item, progress }) => resumePoster(item, progress)).join("")}</div></section>` : ""}${shelves}`;
     bindPageActions();
   }
 
@@ -6056,6 +6100,8 @@
       if (item) refreshDetailPlayback(item, { force: true });
     }));
     $$('[data-open-source-import]').forEach((button) => button.addEventListener("click", () => { const item = getTitle(button.dataset.openSourceImport); if (item) openCatalogSourceImport(item); }));
+    $$('[data-feature-pick]').forEach((button) => button.addEventListener("click", () => { homeFeatureIndex = Number(button.dataset.featurePick) || 0; render(); }));
+    $('[data-feature-shuffle]')?.addEventListener("click", () => { const total = homeFeaturePicks().length || 1; homeFeatureIndex = (homeFeatureIndex + 1) % total; render(); });
     $$('[data-alternative-player]').forEach((button) => button.addEventListener("click", () => { const item = getTitle(button.dataset.alternativePlayer); if (item) openAlternativePlayer(item, { resume: button.dataset.alternativeResume === "1" }); }));
     // Opening a title must not enter fullscreen by itself: a pending source refresh
     // or resume seek can otherwise make the browser exit fullscreen and reset the UI.
