@@ -1,0 +1,11 @@
+[Unit]
+Description=CineVault one-off import of the whole Alloha (player 2) library
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=infinity
+WorkingDirectory=/srv/cinevault
+# Resumes from its checkpoint; about 3000 pages at one request per 3 seconds.
+ExecStart=/usr/bin/docker compose --profile maintenance run --rm --entrypoint python kinopoisk-catalog-sync tools/sync_alloha_catalog.py --full --pages 4000 --delay-seconds 3

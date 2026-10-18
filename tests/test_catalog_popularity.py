@@ -267,3 +267,31 @@ class CatalogIndexTest(unittest.TestCase):
         self.index._checked_at = float("inf")  # no rebuild checks in tests
         self.assertEqual(server.catalog_page({"sort": ["title"]})["total"], 4)
         self.assertEqual(server.imported_catalog_item("a")["title"], "Альфа")
+
+
+class AllohaLibraryTest(unittest.TestCase):
+    def test_alloha_rows_become_cards_and_merge_into_the_index(self):
+        from tools.sync_alloha_catalog import card_from_alloha
+        from tools.catalog_index import CatalogIndex, build_index
+        card = card_from_alloha({"id_kp": "301", "name": "Матрица", "original_name": "The Matrix", "year": "1999",
+                                 "category": "Фильм", "genre": "фантастика, боевик", "time": "02:16", "rating_kp": "8.5",
+                                 "translation_iframe": {"1": {"name": "Дубляж"}}, "tagline": "None"})
+        self.assertEqual((card["kind"], card["runtime"], card["voices"], card["genres"]), ("movie", 136, ["Дубляж"], ["фантастика", "боевик"]))
+        self.assertNotIn("tagline", card)
+        series = card_from_alloha({"id_kp": "7", "name": "Сериал", "category": "Аниме сериал"})
+        self.assertEqual((series["kind"], series["genres"]), ("series", ["аниме"]))
+        self.assertIsNone(card_from_alloha({"id_kp": "None", "name": "Без ID"}))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            catalog = root / "catalog_imports.json"
+            catalog.write_text(json.dumps([{"id": "the-matrix", "kinopoiskId": 301, "title": "Матрица", "kind": "movie"}]), encoding="utf-8")
+            (root / "catalog_alloha.jsonl").write_text(json.dumps(card, ensure_ascii=False) + "\n" + json.dumps(series, ensure_ascii=False) + "\n", encoding="utf-8")
+            server._catalog_cache.update({"path": None, "mtime_ns": None, "items": []})
+            index_path = root / "index.sqlite3"
+            self.assertEqual(build_index(catalog, index_path), 2)
+            index = CatalogIndex(catalog, index_path)
+            visibility = (frozenset(), frozenset({7}))  # Alloha listing beats an old failed check
+            page = index.page({}, visibility)
+            self.assertEqual(page["total"], 2)
+            self.assertEqual(index.item("301", visibility)["voices"], ["Дубляж"])
+            self.assertTrue(index.item("7", visibility)["playbackVerified"])

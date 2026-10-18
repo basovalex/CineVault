@@ -9,6 +9,8 @@ TimeoutStartSec=90min
 WorkingDirectory=/srv/cinevault
 # Steps share one lock with the manual backfills. A leading "-" keeps a failed
 # step from skipping the next one; each step resumes from its own checkpoint.
+# 0. New titles in the Alloha (player 2) library, newest pages until known ones.
+ExecStart=-/usr/bin/docker compose --profile maintenance run --rm --entrypoint python kinopoisk-catalog-sync tools/sync_alloha_catalog.py --pages 40
 # 1. Kinopoisk's "popular films" and "popular series" lists from the last two
 #    years: ranking for the "Популярное сейчас" shelf plus any missing cards.
 ExecStart=-/usr/bin/flock -w 1800 /run/cinevault-kinopoisk-dev-sync.lock /usr/bin/docker compose --profile maintenance run --rm kinopoisk-catalog-sync --mode popular --pages 6 --limit 250

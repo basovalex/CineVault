@@ -67,6 +67,8 @@ services:
       - ${CINEVAULT_KINOPOISK_CATALOG_LOOKBACK_DAYS:-7}
     environment:
       CINEVAULT_KINOPOISK_DEV_TOKEN: ${CINEVAULT_KINOPOISK_DEV_TOKEN:-}
+      # tools/sync_alloha_catalog.py lists the player 2 library with it.
+      CINEVAULT_APBUGALL_TOKEN: ${CINEVAULT_APBUGALL_TOKEN:-}
     volumes:
       - ./app/data:/opt/cinevault/app/data
       - ${CINEVAULT_DATA_DIR:-./data/media-library}:/opt/cinevault/data/media-library

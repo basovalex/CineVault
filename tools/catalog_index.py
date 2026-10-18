@@ -29,7 +29,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 INDEX_FILENAME = "catalog_index.sqlite3"
-SCHEMA_VERSION = 4
+ALLOHA_FILENAME = "catalog_alloha.jsonl"
+SCHEMA_VERSION = 5
 EDITORIAL_TAGS = {"уютно", "для нас", "на вечер", "напряжённо", "атмосферно", "классика"}
 EVENING_GENRES = ("уютно", "на вечер", "комедия", "драма", "мелодрама", "приключения", "семейный")
 TENSE_GENRES = ("триллер", "детектив", "ужасы", "криминал")
@@ -73,7 +74,7 @@ def search_text(item: Dict[str, Any]) -> str:
     return " ".join(str(value or "") for value in fields).casefold().replace("ё", "е")
 
 
-def _row(item: Dict[str, Any], source: str, index_fields: Iterable[str]) -> tuple:
+def _row(item: Dict[str, Any], source: str, index_fields: Iterable[str], alloha: int = 0) -> tuple:
     kp_id = _int(item.get("kinopoiskId"))
     summary = {key: item[key] for key in index_fields if key in item and key != "playbackVerified"}
     return (
@@ -81,7 +82,7 @@ def _row(item: Dict[str, Any], source: str, index_fields: Iterable[str]) -> tupl
         str(item.get("title") or ""), str(item.get("title") or "").casefold(), _int(item.get("year")),
         _int(item.get("voteCount")), confidence_rating(item), _int(item.get("popularRank")) or None,
         1 if item.get("posterImage") else 0, len(str(item.get("description") or "")),
-        search_text(item), json.dumps(summary, ensure_ascii=False),
+        search_text(item), json.dumps(summary, ensure_ascii=False), int(bool(alloha)),
     ), (str(item.get("id") or ""), json.dumps(item, ensure_ascii=False))
 
 
@@ -89,7 +90,8 @@ SCHEMA = """
 CREATE TABLE cards (
     id TEXT PRIMARY KEY, kinopoisk_id INTEGER, source TEXT NOT NULL, kind TEXT, title TEXT,
     title_sort TEXT, year INTEGER, votes INTEGER, confidence REAL, popular_rank INTEGER,
-    has_poster INTEGER, description_length INTEGER, search_text TEXT, summary_json TEXT
+    has_poster INTEGER, description_length INTEGER, search_text TEXT, summary_json TEXT,
+    alloha INTEGER NOT NULL DEFAULT 0  -- listed in the Alloha (player 2) library
 );
 -- Full cards live apart so list scans only read the small rows above.
 CREATE TABLE card_payloads (id TEXT PRIMARY KEY, payload_json TEXT NOT NULL);
@@ -106,7 +108,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 
 def source_mtimes(catalog_path: Path) -> Dict[str, int]:
     result = {}
-    for name in ("catalog_imports.json", "catalog_metadata.json", "catalog_popular.json"):
+    for name in ("catalog_imports.json", "catalog_metadata.json", "catalog_popular.json", ALLOHA_FILENAME):
         try:
             result[name] = (catalog_path.parent / name).stat().st_mtime_ns
         except OSError:
@@ -149,15 +151,55 @@ def build_index(catalog_path: Path, out_path: Path) -> int:
         rows.append(row)
         payloads.append(payload)
         genres.extend((identifier, genre) for genre in item_genres(item))
-    db.executemany("INSERT INTO cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    db.executemany("INSERT INTO cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
     db.executemany("INSERT INTO card_payloads VALUES (?, ?)", payloads)
     db.executemany("INSERT INTO card_search (id, text) VALUES (?, ?)", ((row[0], row[12]) for row in rows))
+    count = len(rows) + merge_alloha(db, catalog_path.with_name(ALLOHA_FILENAME), server.CATALOG_INDEX_FIELDS)
     db.executemany("INSERT INTO card_genres VALUES (?, ?)", genres)
     db.executemany("INSERT INTO meta VALUES (?, ?)", [("schema", str(SCHEMA_VERSION)), ("mtimes", json.dumps(mtimes)), ("built_at", str(time.time()))])
     db.commit()
     db.close()
     os.replace(temporary, out_path)
-    return len(rows)
+    return count
+
+
+def merge_alloha(db: sqlite3.Connection, path: Path, index_fields: Iterable[str]) -> int:
+    """Stream the Alloha library: flag known cards, add the rest."""
+    if not path.is_file():
+        return 0
+    index_fields = tuple(index_fields)
+    known = {kp: identifier for identifier, kp in db.execute("SELECT id, kinopoisk_id FROM cards WHERE kinopoisk_id IS NOT NULL")}
+    added = 0
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                card = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            kp_id = _int(card.get("kinopoiskId")) if isinstance(card, dict) else 0
+            if not kp_id or not card.get("id"):
+                continue
+            identifier = known.get(kp_id)
+            if identifier:
+                row = db.execute("SELECT payload_json FROM card_payloads WHERE id = ?", (identifier,)).fetchone()
+                payload = json.loads(row[0]) if row else {}
+                changed = False
+                for key in ("voices", "description", "posterImage", "actors", "directors", "countries", "imdbId", "tmdbId", "quality"):
+                    if payload.get(key) in (None, "", [], 0) and card.get(key) not in (None, "", [], 0):
+                        payload[key] = card[key]
+                        changed = True
+                if changed:
+                    db.execute("UPDATE card_payloads SET payload_json = ? WHERE id = ?", (json.dumps(payload, ensure_ascii=False), identifier))
+                db.execute("UPDATE cards SET alloha = 1 WHERE id = ?", (identifier,))
+                continue
+            row, payload = _row(card, "alloha", index_fields, alloha=1)
+            db.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", row)
+            db.execute("INSERT OR IGNORE INTO card_payloads VALUES (?, ?)", payload)
+            db.execute("INSERT INTO card_search (id, text) VALUES (?, ?)", (row[0], row[12]))
+            db.executemany("INSERT INTO card_genres VALUES (?, ?)", [(row[0], genre) for genre in item_genres(card)])
+            known[kp_id] = row[0]
+            added += 1
+    return added
 
 
 def upsert_entry(index_path: Path, entry: Dict[str, Any], catalog_path: Optional[Path] = None) -> None:
@@ -178,14 +220,16 @@ def upsert_entry(index_path: Path, entry: Dict[str, Any], catalog_path: Optional
             for key, value in previous.items():
                 if merged.get(key) in (None, "", [], 0) and value not in (None, "", [], 0):
                     merged[key] = value
-        old_ids = [value for (value,) in db.execute("SELECT id FROM cards WHERE id = ? OR (kinopoisk_id = ? AND ? > 0)", (entry["id"], kp_id, kp_id))]
+        old_rows = db.execute("SELECT id, alloha FROM cards WHERE id = ? OR (kinopoisk_id = ? AND ? > 0)", (entry["id"], kp_id, kp_id)).fetchall()
+        old_ids = [value for value, _ in old_rows]
+        alloha = max([flag for _, flag in old_rows] or [0])
         for old_id in set(old_ids) | {entry["id"]}:
             db.execute("DELETE FROM cards WHERE id = ?", (old_id,))
             db.execute("DELETE FROM card_payloads WHERE id = ?", (old_id,))
             db.execute("DELETE FROM card_genres WHERE card_id = ?", (old_id,))
             db.execute("DELETE FROM card_search WHERE id = ?", (old_id,))
-        row, payload = _row(merged, "imports", server.CATALOG_INDEX_FIELDS)
-        db.execute("INSERT INTO cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", row)
+        row, payload = _row(merged, "imports", server.CATALOG_INDEX_FIELDS, alloha=alloha)
+        db.execute("INSERT INTO cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", row)
         db.execute("INSERT INTO card_search (id, text) VALUES (?, ?)", (row[0], row[12]))
         db.execute("INSERT INTO card_payloads VALUES (?, ?)", payload)
         db.executemany("INSERT INTO card_genres VALUES (?, ?)", [(entry["id"], genre) for genre in item_genres(merged)])
@@ -298,12 +342,12 @@ class CatalogIndex:
         self._has_visibility = visibility is not None
 
     # -- queries ---------------------------------------------------------
-    VISIBLE = "(c.source = 'imports' OR c.kinopoisk_id IS NULL OR c.kinopoisk_id NOT IN (SELECT kp FROM hidden_ids))"
-    VERIFIED = "(c.source = 'imports' OR c.kinopoisk_id IN (SELECT kp FROM verified_ids))"
+    VISIBLE = "(c.source = 'imports' OR c.alloha = 1 OR c.kinopoisk_id IS NULL OR c.kinopoisk_id NOT IN (SELECT kp FROM hidden_ids))"
+    VERIFIED = "(c.source = 'imports' OR c.alloha = 1 OR c.kinopoisk_id IN (SELECT kp FROM verified_ids))"
 
     def _summary(self, row: sqlite3.Row) -> Dict[str, Any]:
         summary = json.loads(row["summary_json"])
-        if row["source"] == "metadata" and self._has_visibility:
+        if row["source"] != "imports" and self._has_visibility:
             summary["playbackVerified"] = bool(row["verified"])
         return summary
 
@@ -431,7 +475,7 @@ class CatalogIndex:
         if row is None:
             raise KeyError("Карточка каталога не найдена")
         item = json.loads(row["payload_json"])
-        if row["source"] == "metadata" and self._has_visibility:
+        if row["source"] != "imports" and self._has_visibility:
             item["playbackVerified"] = bool(row["verified"])
         return item
 
