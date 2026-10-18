@@ -27,6 +27,14 @@ def write_audit(data_dir, statuses):
     db.close()
 
 
+def write_alloha(data_dir, statuses):
+    db = sqlite3.connect(str(data_dir / "kinopoisk_stream_audit.sqlite3"))
+    db.execute("CREATE TABLE IF NOT EXISTS alloha_cards (kinopoisk_id INTEGER PRIMARY KEY, available INTEGER)")
+    db.executemany("INSERT OR REPLACE INTO alloha_cards VALUES (?, ?)", statuses.items())
+    db.commit()
+    db.close()
+
+
 class CatalogPopularityTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -49,13 +57,16 @@ class CatalogPopularityTest(unittest.TestCase):
     def test_tombstones_combine_file_and_audit(self):
         add_tombstone(self.data_dir, 5)
         add_tombstone(self.data_dir, 5)
-        write_audit(self.data_dir, {6: "deleted", 7: "missing", 8: "available"})
+        write_audit(self.data_dir, {6: "deleted", 7: "missing", 8: "available", 9: "deleted"})
+        # Dead only when player 2 (Alloha) was checked and lacks it too.
+        write_alloha(self.data_dir, {5: 0, 6: 0, 7: 1})
         self.assertEqual(deleted_ids(self.data_dir), {5, 6})
-        self.assertEqual(unplayable_ids(self.data_dir), {5, 6, 7})
+        self.assertEqual(unplayable_ids(self.data_dir), {5, 6})
 
     def test_daily_sync_does_not_bring_back_deleted_cards(self):
         self.metadata.write_text(json.dumps([{"id": "kinopoisk-5", "kinopoiskId": 5, "title": "Старое"}]), encoding="utf-8")
         add_tombstone(self.data_dir, 5)
+        write_alloha(self.data_dir, {5: 0})
         with patch("tools.sync_kinopoisk_dev_catalog.fetch_page", return_value={"docs": [provider_row(5), provider_row(9)], "pages": 1}):
             sync_kinopoisk_dev("token", self.catalog, self.metadata, self.state, 0, 1, 10, 0, mode="daily")
         ids = [item["kinopoiskId"] for item in json.loads(self.metadata.read_text(encoding="utf-8"))]
@@ -64,6 +75,7 @@ class CatalogPopularityTest(unittest.TestCase):
     def test_popular_sync_ranks_by_votes_and_skips_deleted(self):
         self.catalog.write_text(json.dumps([{"id": "kinopoisk-1", "kinopoiskId": 1, "title": "Готовый", "videoSources": [{"url": "x"}]}]), encoding="utf-8")
         add_tombstone(self.data_dir, 3)
+        write_alloha(self.data_dir, {3: 0})
         pages = {
             "popular-films": [provider_row(1, votes=10), provider_row(2, votes=5000), provider_row(3, votes=9000)],
             "popular-series": [provider_row(4, votes=700, kind="tv-series")],
@@ -77,7 +89,7 @@ class CatalogPopularityTest(unittest.TestCase):
         self.assertEqual(metadata_ids, [2, 4])  # the playable legacy card stays in catalog_imports only
         self.assertEqual(result["ranked"], 3)
 
-    def test_server_hides_unverified_metadata_cards_unless_popular(self):
+    def test_server_lists_unverified_cards_and_hides_only_dead_ones(self):
         self.catalog.write_text(json.dumps([{"id": "kinopoisk-1", "kinopoiskId": 1, "title": "Готовый"}]), encoding="utf-8")
         self.metadata.write_text(json.dumps([
             {"id": "kinopoisk-{}".format(kp_id), "kinopoiskId": kp_id, "title": str(kp_id)} for kp_id in (2, 3, 4, 5)
@@ -85,10 +97,13 @@ class CatalogPopularityTest(unittest.TestCase):
         self.popular.write_text(json.dumps({"items": [{"kinopoiskId": 1, "rank": 2}, {"kinopoiskId": 4, "rank": 1},
                                                       {"kinopoiskId": 5, "rank": 3}]}), encoding="utf-8")
         write_audit(self.data_dir, {2: "available", 3: "pending", 5: "missing"})
+        write_alloha(self.data_dir, {5: 0})
         server.CATALOG_STATE_DIR = self.data_dir
         items = {item["kinopoiskId"]: item for item in server.imported_catalog_entries(self.catalog)}
-        # 3 is unverified and not popular; 5 is popular but its stream check failed.
-        self.assertEqual(sorted(items), [1, 2, 4])
+        # 5 failed in both players; 3 is unverified but still listed.
+        self.assertEqual(sorted(items), [1, 2, 3, 4])
+        self.assertTrue(items[2]["playbackVerified"])
+        self.assertFalse(items[3]["playbackVerified"])
         self.assertEqual(items[4]["popularRank"], 1)
         self.assertEqual(items[1]["popularRank"], 2)
         self.assertNotIn("popularRank", items[2])
@@ -184,7 +199,8 @@ class HiddenCardRefreshTest(unittest.TestCase):
             catalog = root / "catalog_imports.json"
             catalog.write_text("[]", encoding="utf-8")
             (root / "catalog_metadata.json").write_text(json.dumps([{"id": "kinopoisk-7", "kinopoiskId": 7, "title": "Новый"}]), encoding="utf-8")
-            write_audit(root / "state", {7: "pending"})
+            write_audit(root / "state", {7: "deleted"})
+            write_alloha(root / "state", {7: 0})
             server._catalog_cache.update({"path": None, "mtime_ns": None, "items": []})
             server._catalog_hidden_cache.update({"loaded_at": 0.0, "dir": None, "value": None})
             server.CATALOG_STATE_DIR = root / "state"
@@ -195,3 +211,59 @@ class HiddenCardRefreshTest(unittest.TestCase):
                 self.assertEqual(server.imported_catalog_item("7", catalog, include_hidden=True)["title"], "Новый")
             finally:
                 server.CATALOG_STATE_DIR = None
+
+
+class CatalogIndexTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        (self.root / "state").mkdir()
+        self.catalog = self.root / "catalog_imports.json"
+        self.catalog.write_text(json.dumps([
+            {"id": "a", "kinopoiskId": 1, "title": "Альфа", "kind": "movie", "year": 2025, "genres": ["драма"], "voteCount": 5000, "rating": 8.0, "videoSources": [{"url": "x"}]},
+        ]), encoding="utf-8")
+        (self.root / "catalog_metadata.json").write_text(json.dumps([
+            {"id": "kinopoisk-2", "kinopoiskId": 2, "title": "Бета", "kind": "series", "year": 2024, "genres": ["комедия"], "voteCount": 9000, "rating": 7.0},
+            {"id": "kinopoisk-3", "kinopoiskId": 3, "title": "Гамма", "kind": "movie", "year": 2020, "genres": ["драма"], "voteCount": 100000, "rating": 9.0},
+            {"id": "kinopoisk-4", "kinopoiskId": 4, "title": "Дельта", "kind": "movie", "year": 2019, "genres": ["ужасы"], "voteCount": 10, "rating": 5.0},
+        ]), encoding="utf-8")
+        server._catalog_cache.update({"path": None, "mtime_ns": None, "items": []})
+        from tools.catalog_index import CatalogIndex, build_index
+        self.index_path = self.root / "state" / "catalog_index.sqlite3"
+        build_index(self.catalog, self.index_path)
+        self.index = CatalogIndex(self.catalog, self.index_path)
+
+    def tearDown(self):
+        server.CATALOG_INDEX = None
+        self.temp.cleanup()
+
+    def test_page_filters_sorts_and_hides_dead_cards(self):
+        visibility = (frozenset({2}), frozenset({4}))
+        page = self.index.page({"genre": ["драма"]}, visibility)
+        self.assertEqual([item["id"] for item in page["items"]], ["a", "kinopoisk-3"])  # verified first
+        self.assertFalse(page["items"][1]["playbackVerified"])
+        everything = self.index.page({}, visibility)
+        self.assertEqual(everything["total"], 3)  # Дельта is dead in both players
+        search = self.index.page({"search": ["гамм"]}, visibility)
+        self.assertEqual([item["id"] for item in search["items"]], ["kinopoisk-3"])
+        facets = self.index.facets(visibility)
+        self.assertEqual((facets["total"], facets["movies"], facets["series"]), (3, 2, 1))
+        self.assertEqual(facets["genres"]["драма"], 2)
+
+    def test_item_lookup_and_upsert_after_refresh(self):
+        from tools.catalog_index import upsert_entry
+        visibility = (frozenset(), frozenset({4}))
+        self.assertEqual(self.index.item("3", visibility)["title"], "Гамма")
+        with self.assertRaises(KeyError):
+            self.index.item("4", visibility)
+        self.assertEqual(self.index.item("4", visibility, include_hidden=True)["title"], "Дельта")
+        upsert_entry(self.index_path, {"id": "kinopoisk-3", "kinopoiskId": 3, "title": "Гамма", "videoSources": [{"url": "fresh"}]})
+        refreshed = self.index.item("kinopoisk-3", visibility)
+        self.assertEqual(refreshed["videoSources"], [{"url": "fresh"}])
+        self.assertEqual(refreshed["genres"], ["драма"])  # enrichment kept
+
+    def test_server_functions_use_the_index(self):
+        server.CATALOG_INDEX = self.index
+        self.index._checked_at = float("inf")  # no rebuild checks in tests
+        self.assertEqual(server.catalog_page({"sort": ["title"]})["total"], 4)
+        self.assertEqual(server.imported_catalog_item("a")["title"], "Альфа")

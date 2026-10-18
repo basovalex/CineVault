@@ -43,7 +43,7 @@ from urllib.parse import unquote, urlparse
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.catalog_tombstones import AUDIT_FILENAME, add_tombstone, alloha_available_ids, read_audit_ids, unplayable_ids  # noqa: E402
+from tools.catalog_tombstones import AUDIT_FILENAME, add_tombstone, alloha_available_ids, read_audit_ids, record_alloha_result, unplayable_ids  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +57,9 @@ CATALOG_POPULAR_FILENAME = "catalog_popular.json"
 # the server data directory; None keeps every metadata card visible (tests).
 CATALOG_STATE_DIR: Optional[Path] = None
 CATALOG_HIDDEN_REFRESH_SECONDS = 300
+# SQLite index of the merged catalog (tools/catalog_index.py). main() opens it;
+# without it (tests, tools) the JSON files are merged in memory as before.
+CATALOG_INDEX: Any = None
 CATALOG_INDEX_FIELDS = (
     "id", "kind", "title", "originalTitle", "year", "description", "tags", "genres",
     "rating", "ratingKinopoisk", "imdbRating", "voteCount", "imdbVoteCount",
@@ -64,7 +67,7 @@ CATALOG_INDEX_FIELDS = (
     "seasons", "runtime", "kinopoiskId", "tmdbId",
     "catalogId", "poster", "posterImage", "providerUrl", "providerName", "providerNote", "tagline",
     "episodeDataFile", "episodeDataProvider", "episodePosterPolicy",
-    "popularRank", "popularList", "backdropImage", "logoImage",
+    "popularRank", "popularList", "backdropImage", "logoImage", "playbackVerified",
 )
 
 _catalog_cache_lock = threading.Lock()
@@ -341,7 +344,7 @@ def sitemap_title_ids(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[str]:
     """Return stable public card IDs from seed data and the current catalog."""
     title_ids = set(SITEMAP_SEED_TITLE_IDS)
     try:
-        payload = imported_catalog_entries(catalog_path)
+        payload = [{"id": identifier} for identifier in CATALOG_INDEX.ids()] if CATALOG_INDEX is not None else imported_catalog_entries(catalog_path)
     except RuntimeError:
         payload = []
     for entry in payload if isinstance(payload, list) else []:
@@ -634,6 +637,9 @@ class KinopoiskOnDemandUpdater:
         # Syncs in other containers rewrite catalog_metadata.json from their
         # own copy; the tombstone keeps them from adding this ID back.
         add_tombstone(self.failure_state_path.parent, kinopoisk_id)
+        if CATALOG_INDEX is not None:
+            from tools.catalog_index import delete_entry
+            delete_entry(CATALOG_INDEX.index_path, kinopoisk_id)
         if deleted:
             self._unregister_source(kinopoisk_id)
         return deleted
@@ -1135,18 +1141,18 @@ def imported_catalog_entries(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[
                 continue
             if identifier in known_ids or kinopoisk_id in known_kinopoisk_ids:
                 continue
-            # Metadata-only cards have no verified stream. Most bulk-synced
-            # titles turn out unplayable, so show one only after the stream
-            # audit confirmed it, or while it is in Kinopoisk's popular lists
-            # (the audit checks those first) and not known to be broken.
+            # Metadata-only cards are listed unless both players are known
+            # to lack the title; unverified ones are checked when opened and
+            # sort after verified ones while browsing.
             if visibility is not None:
                 available_ids, unplayable = visibility
                 kp_number = int(kinopoisk_id) if kinopoisk_id.isdigit() else 0
-                if kp_number in unplayable or (kp_number not in available_ids and kinopoisk_id not in popular):
+                if kp_number in unplayable:
                     # Not listed, but the stream audit and playback refresh
                     # must still find the card to verify it.
                     hidden_items[kinopoisk_id] = item
                     continue
+                item["playbackVerified"] = kp_number in available_ids
             items.append(item)
             known_ids.add(identifier)
             known_kinopoisk_ids.add(kinopoisk_id)
@@ -1208,6 +1214,9 @@ def apply_catalog_popularity(items: list[Dict[str, Any]], ranking: Dict[str, Dic
 
 def imported_catalog_index(catalog_path: Path = CATALOG_IMPORTS_PATH, limit: int = 500) -> list[Dict[str, Any]]:
     """Return a bounded discovery set; full browsing uses /api/catalog pages."""
+    if CATALOG_INDEX is not None:
+        CATALOG_INDEX.maybe_refresh()
+        return CATALOG_INDEX.discovery(limit, catalog_metadata_visibility())
     items = imported_catalog_entries(catalog_path)
 
     def score(item: Dict[str, Any]) -> tuple[float, int]:
@@ -1224,6 +1233,8 @@ def imported_catalog_index(catalog_path: Path = CATALOG_IMPORTS_PATH, limit: int
 
 def imported_catalog_item(identifier: str, catalog_path: Path = CATALOG_IMPORTS_PATH, include_hidden: bool = False) -> Dict[str, Any]:
     needle = str(identifier).strip()
+    if CATALOG_INDEX is not None:
+        return CATALOG_INDEX.item(needle, catalog_metadata_visibility(), include_hidden=include_hidden)
     for item in imported_catalog_entries(catalog_path):
         if str(item.get("id", "")) == needle or str(item.get("kinopoiskId", "")) == needle:
             return dict(item)
@@ -1249,6 +1260,9 @@ def catalog_confidence_rating(item: Dict[str, Any]) -> float:
 
 def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
     """Return a small, server-filtered page of catalog cards."""
+    if CATALOG_INDEX is not None:
+        CATALOG_INDEX.maybe_refresh()
+        return CATALOG_INDEX.page(params, catalog_metadata_visibility())
     items = imported_catalog_entries()
     requested_ids = {
         value.strip()
@@ -1325,6 +1339,8 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
         return True
 
     filtered = [item for item in items if matches(item)]
+    def unverified(item: Dict[str, Any]) -> bool:
+        return item.get("playbackVerified") is False
     def rating(item: Dict[str, Any]) -> float:
         return catalog_confidence_rating(item)
     def year(item: Dict[str, Any]) -> int:
@@ -1338,17 +1354,17 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
         except (TypeError, ValueError):
             return 10 ** 9
     if sort in {"popular", "trending"}:
-        filtered.sort(key=lambda item: (-popular_rank(item), votes(item), rating(item), year(item)), reverse=True)
+        filtered.sort(key=lambda item: (bool(query) or not unverified(item), -popular_rank(item), votes(item), rating(item), year(item)), reverse=True)
     elif sort == "votes":
-        filtered.sort(key=lambda item: (votes(item), rating(item), year(item)), reverse=True)
+        filtered.sort(key=lambda item: (bool(query) or not unverified(item), votes(item), rating(item), year(item)), reverse=True)
     elif sort == "new":
-        filtered.sort(key=lambda item: (year(item), -popular_rank(item), votes(item), rating(item)), reverse=True)
+        filtered.sort(key=lambda item: (bool(query) or not unverified(item), year(item), -popular_rank(item), votes(item), rating(item)), reverse=True)
     elif sort in {"year", "year_desc"}:
-        filtered.sort(key=lambda item: (year(item), rating(item)), reverse=True)
+        filtered.sort(key=lambda item: (bool(query) or not unverified(item), year(item), rating(item)), reverse=True)
     elif sort in {"title", "alphabetical"}:
         filtered.sort(key=lambda item: str(item.get("title") or "").casefold())
     else:
-        filtered.sort(key=lambda item: (rating(item), year(item)), reverse=True)
+        filtered.sort(key=lambda item: (bool(query) or not unverified(item), rating(item), year(item)), reverse=True)
 
     try:
         page = max(1, int(params.get("page", ["1"])[0]))
@@ -1366,6 +1382,9 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
 
 
 def catalog_facets(params: Dict[str, list[str]]) -> Dict[str, Any]:
+    if CATALOG_INDEX is not None:
+        CATALOG_INDEX.maybe_refresh()
+        return CATALOG_INDEX.facets(catalog_metadata_visibility())
     items = imported_catalog_entries()
     counts: Dict[str, int] = {}
     for item in items:
@@ -2986,8 +3005,13 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                 kinopoisk_id = int(params.get("kinopoisk", [""])[0])
                 if kinopoisk_id < 1:
                     raise ValueError
-                imported_catalog_item(str(kinopoisk_id))
-                self.send_json(200, fetch_player_options(kinopoisk_id))
+                imported_catalog_item(str(kinopoisk_id), include_hidden=True)
+                options = fetch_player_options(kinopoisk_id)
+                # Every viewer check also teaches the catalog which titles
+                # player 2 can show, without extra calls to the players API.
+                if CATALOG_STATE_DIR is not None:
+                    record_alloha_result(CATALOG_STATE_DIR, kinopoisk_id, sum(len(p.get("translations") or []) for p in options.get("providers") or []))
+                self.send_json(200, options)
             except ValueError:
                 self.send_json(400, {"error": "Kinopoisk ID должен быть положительным числом"})
             except KeyError:
@@ -3522,8 +3546,15 @@ def main() -> None:
         parser.error("--kinopoisk-update-delay-seconds must not be negative")
     tmdb_token = os.environ.get("CINEVAULT_TMDB_API_TOKEN", "").strip() or load_local_tmdb_token()
     library = MediaLibrary(args.data_dir, ffmpeg_path=args.ffmpeg, transcode=not args.no_transcode, tmdb_api_token=tmdb_token)
-    global CATALOG_STATE_DIR
+    global CATALOG_STATE_DIR, CATALOG_INDEX
     CATALOG_STATE_DIR = library.root
+    from tools.catalog_index import INDEX_FILENAME, CatalogIndex
+    CATALOG_INDEX = CatalogIndex(CATALOG_IMPORTS_PATH, library.root / INDEX_FILENAME)
+    # Refreshes run sync tools in child processes; they update this index.
+    os.environ["CINEVAULT_CATALOG_INDEX"] = str(CATALOG_INDEX.index_path)
+    if CATALOG_INDEX.stale():
+        print("Catalog index: building…", flush=True)
+        CATALOG_INDEX.build_in_child(wait=True)
     handler = lambda *a, **kw: MediaLibraryHandler(*a, directory=str(APP_DIR), **kw)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     server.library = library  # type: ignore[attr-defined]

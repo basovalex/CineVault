@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,9 +39,29 @@ def read_json(path: Path, fallback: Any) -> Any:
         return fallback
 
 
+def update_catalog_index(entry: Dict[str, Any], catalog_path: Path) -> None:
+    """Keep the server's SQLite catalog index in step with this one card."""
+    index_path = os.environ.get("CINEVAULT_CATALOG_INDEX", "").strip()
+    if not index_path:
+        return
+    try:
+        import sys
+        root = str(Path(__file__).resolve().parents[1])
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from tools.catalog_index import upsert_entry
+        upsert_entry(Path(index_path), entry, catalog_path)
+    except Exception as exc:  # the next full rebuild picks the card up anyway
+        print("⚠ Индекс каталога не обновлён: {}".format(exc))
+
+
 def write_json(path: Path, payload: Any) -> None:
+    # Write beside the target and swap: the server and other jobs read these
+    # files while refreshes rewrite them.
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary = path.with_name(".{}.{}.tmp".format(path.name, os.getpid()))
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def slugify(value: str) -> str:
@@ -228,6 +249,7 @@ def update_catalog(entry: Dict[str, Any]) -> None:
     if not replaced:
         updated.append(entry)
     write_json(catalog_path, updated)
+    update_catalog_index(entry, catalog_path)
 
 
 def main() -> int:

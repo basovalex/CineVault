@@ -61,8 +61,8 @@ def read_audit_ids(data_dir: Path, statuses: Iterable[str]) -> Set[int]:
     return _positive_ids(row[0] for row in rows)
 
 
-def alloha_available_ids(data_dir: Path) -> Set[int]:
-    """IDs that player 2 (Alloha) can show, from audit_alloha_catalog.py."""
+def alloha_ids(data_dir: Path, available: int) -> Set[int]:
+    """IDs Alloha (player 2) has (1) or was checked and lacks (0)."""
     path = Path(data_dir) / AUDIT_FILENAME
     if not path.is_file():
         return set()
@@ -71,7 +71,7 @@ def alloha_available_ids(data_dir: Path) -> Set[int]:
     except sqlite3.Error:
         return set()
     try:
-        rows = connection.execute("SELECT kinopoisk_id FROM {} WHERE available = 1".format(ALLOHA_TABLE)).fetchall()
+        rows = connection.execute("SELECT kinopoisk_id FROM {} WHERE available = ?".format(ALLOHA_TABLE), (int(available),)).fetchall()
     except sqlite3.Error:
         return set()
     finally:
@@ -79,18 +79,48 @@ def alloha_available_ids(data_dir: Path) -> Set[int]:
     return _positive_ids(row[0] for row in rows)
 
 
-def deleted_ids(data_dir: Path) -> Set[int]:
-    """IDs confirmed as having no stream: never add or show them again.
+def alloha_available_ids(data_dir: Path) -> Set[int]:
+    return alloha_ids(data_dir, 1)
 
-    Player 1's audit only knows its own source; a title that player 2
-    (Alloha) can show is not dead and may come back.
+
+def player1_failed_ids(data_dir: Path) -> Set[int]:
+    return read_tombstones(data_dir) | read_audit_ids(data_dir, ("deleted", "missing"))
+
+
+def deleted_ids(data_dir: Path) -> Set[int]:
+    """IDs with no stream in either player: never add or show them again.
+
+    Player 1 failing alone is not enough; until Alloha was checked too the
+    title stays in the catalog and is verified when someone opens it.
     """
-    return (read_tombstones(data_dir) | read_audit_ids(data_dir, ("deleted",))) - alloha_available_ids(data_dir)
+    return player1_failed_ids(data_dir) & alloha_ids(data_dir, 0)
 
 
 def unplayable_ids(data_dir: Path) -> Set[int]:
-    """Deleted IDs plus those whose last stream check failed."""
-    return deleted_ids(data_dir) | read_audit_ids(data_dir, ("missing",))
+    return deleted_ids(data_dir)
+
+
+def record_alloha_result(data_dir: Path, kinopoisk_id: int, translations: int) -> None:
+    """Store a player 2 check made while a viewer opened a title."""
+    path = Path(data_dir) / AUDIT_FILENAME
+    try:
+        connection = sqlite3.connect(str(path), timeout=5)
+    except sqlite3.Error:
+        return
+    try:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS {} (kinopoisk_id INTEGER PRIMARY KEY, available INTEGER, translations INTEGER NOT NULL DEFAULT 0, "
+            "failures INTEGER NOT NULL DEFAULT 0, checked_at TEXT, priority INTEGER NOT NULL DEFAULT 0)".format(ALLOHA_TABLE))
+        connection.execute(
+            "INSERT INTO {0} (kinopoisk_id, available, translations, checked_at) VALUES (?, ?, ?, datetime('now')) "
+            "ON CONFLICT(kinopoisk_id) DO UPDATE SET available = excluded.available, translations = excluded.translations, "
+            "failures = 0, checked_at = excluded.checked_at".format(ALLOHA_TABLE),
+            (int(kinopoisk_id), 1 if translations else 0, int(translations)))
+        connection.commit()
+    except sqlite3.Error:
+        pass
+    finally:
+        connection.close()
 
 
 def add_tombstone(data_dir: Path, kinopoisk_id: int) -> None:
