@@ -262,6 +262,9 @@ class CatalogIndex:
     """Read side used by the server; rebuilds itself in a child process."""
 
     CHECK_SECONDS = 60
+    # A full rebuild takes tens of seconds and a lot of memory in the child;
+    # long imports touch the source files constantly, so space rebuilds out.
+    MIN_REBUILD_SECONDS = 20 * 60
 
     def __init__(self, catalog_path: Path, index_path: Path):
         self.catalog_path = Path(catalog_path)
@@ -271,6 +274,7 @@ class CatalogIndex:
         self._db_inode = None
         self._checked_at = 0.0
         self._building: Optional[Any] = None
+        self._built_at = time.monotonic()
         self._sets_key = None
         self._has_visibility = False
 
@@ -307,7 +311,10 @@ class CatalogIndex:
         if now - self._checked_at < self.CHECK_SECONDS:
             return
         self._checked_at = now
+        if now - self._built_at < self.MIN_REBUILD_SECONDS:
+            return
         if self.stale():
+            self._built_at = now
             self.build_in_child()
 
     def _connection(self) -> sqlite3.Connection:
