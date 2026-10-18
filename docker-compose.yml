@@ -15,6 +15,9 @@ services:
       # exposing the app to the public internet.
       CINEVAULT_VIEWER_TOKEN: ${CINEVAULT_VIEWER_TOKEN:-}
       CINEVAULT_TMDB_API_TOKEN: ${CINEVAULT_TMDB_API_TOKEN:-}
+      # Opt-in: a read-only TMDB token handed to the browser for YouTube
+      # trailers (TMDB is unreachable from the server itself).
+      CINEVAULT_TMDB_BROWSER_TOKEN: ${CINEVAULT_TMDB_BROWSER_TOKEN:-}
       CINEVAULT_SERVICE_DIR: /opt/cinevault
       CINEVAULT_KINOPOISK_UPDATER_DIR: /opt/cinevault/kinopoisk_media_system_fixed
       CINEVAULT_APBUGALL_TOKEN: ${CINEVAULT_APBUGALL_TOKEN:-}

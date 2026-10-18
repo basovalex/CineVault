@@ -2920,6 +2920,9 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                 "apiBaseUrl": str(getattr(self.server, "api_base_url", "") or ""),
                 "publicBaseUrl": str(getattr(self.server, "public_base_url", "") or ""),
             }
+            browser_tmdb_token = os.environ.get("CINEVAULT_TMDB_BROWSER_TOKEN", "").strip()
+            if browser_tmdb_token:
+                config["tmdbApiKey"] = browser_tmdb_token
             body = f"window.CINEVAULT_CONFIG = {json.dumps(config, ensure_ascii=False)};".encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/javascript; charset=utf-8")

@@ -3315,6 +3315,26 @@
     }));
   }
   function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char])); }
+  // Small renditions for blurred placeholders and card grids.
+  function previewImageUrl(value) {
+    return String(value || "")
+      .replace(/\/1344x756([?#].*)?$/i, "/678x380$1")
+      .replace(/^(https?:\/\/avatars\.mds\.yandex\.net\/get-kinopoisk-image\/[^/]+\/[^/]+\/)(?:\d+x\d+|orig)([?#].*)?$/i, (_match, prefix, suffix = "") => `${prefix}300x450${suffix}`)
+      .replace(/(image\.tmdb\.org\/t\/p\/)(?:w\d+|original)\//i, "$1w300/");
+  }
+  // Show a blurred small copy at once, then sharpen when the full image loads.
+  function progressiveBackground(element, property, fullUrl) {
+    if (!element || !fullUrl) return;
+    const preview = previewImageUrl(fullUrl);
+    const apply = (url) => element.style.setProperty(property, `url('${url.replace(/'/g, "%27")}')`);
+    const full = new Image();
+    full.decoding = "async";
+    full.src = fullUrl;
+    if (full.complete && full.naturalWidth) { apply(fullUrl); element.classList.add("is-sharp"); return; }
+    if (preview !== fullUrl) apply(preview);
+    element.classList.add("is-blurred");
+    full.onload = () => { apply(fullUrl); element.classList.remove("is-blurred"); element.classList.add("is-sharp"); };
+  }
   function highResolutionPosterUrl(value) {
     return String(value || "").replace(
       /^(https?:\/\/avatars\.mds\.yandex\.net\/get-kinopoisk-image\/[^/]+\/[^/]+\/)\d+x\d+([?#].*)?$/i,
@@ -4398,41 +4418,109 @@
     $(`[data-player-choice="${lastPlayer || "main"}"]`)?.focus();
   }
 
-  async function openTrailer(item) {
+  // Rutube trailers come from the server (works without VPN); YouTube ones
+  // come from TMDB in the browser, which needs a VPN in Russia.
+  async function rutubeTrailers(item) {
+    const params = new URLSearchParams({ title: item.title || "", original: item.originalTitle || "", year: String(item.year || "") });
+    const response = await apiFetch(`/api/trailers?${params}`, { headers: { accept: "application/json" } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    return (payload.items || []).map((trailer) => ({ ...trailer, label: trailer.author || "Rutube" }));
+  }
+  async function tmdbRequest(path) {
+    if (!tmdbCredential) throw new Error("нет ключа TMDB");
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 8000);
+    try {
+      const bearer = tmdbCredential.startsWith("eyJ");
+      const url = new URL(`https://api.themoviedb.org/3/${path}`);
+      if (!bearer) url.searchParams.set("api_key", tmdbCredential);
+      const response = await fetch(url, { headers: bearer ? { Authorization: `Bearer ${tmdbCredential}`, accept: "application/json" } : { accept: "application/json" }, signal: controller.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json();
+    } finally { window.clearTimeout(timer); }
+  }
+  async function youtubeTrailers(item) {
+    const kind = item.kind === "series" ? "tv" : "movie";
+    let tmdbId = Number(item.tmdbId || 0);
+    if (!tmdbId) {
+      const query = encodeURIComponent(item.originalTitle || item.title || "");
+      const yearParam = item.year ? `&${kind === "tv" ? "first_air_date_year" : "year"}=${Number(item.year)}` : "";
+      const found = await tmdbRequest(`search/${kind}?query=${query}${yearParam}&language=ru-RU`);
+      tmdbId = Number(found.results?.[0]?.id || 0);
+    }
+    if (!tmdbId) return [];
+    const [ru, en] = await Promise.all([
+      tmdbRequest(`${kind}/${tmdbId}/videos?language=ru-RU`).catch(() => ({})),
+      tmdbRequest(`${kind}/${tmdbId}/videos?language=en-US`).catch(() => ({})),
+    ]);
+    const seen = new Set();
+    return [...(ru.results || []), ...(en.results || [])]
+      .filter((video) => video.site === "YouTube" && /^(Trailer|Teaser)$/.test(video.type) && /^[\w-]{6,20}$/.test(video.key) && !seen.has(video.key) && seen.add(video.key))
+      .sort((a, b) => (b.official === true) - (a.official === true))
+      .slice(0, 4)
+      .map((video) => ({ id: video.key, title: video.name, label: video.iso_639_1 === "ru" ? "YouTube · русский" : "YouTube · оригинал", embedUrl: `https://www.youtube-nocookie.com/embed/${video.key}?autoplay=1&rel=0&modestbranding=1` }));
+  }
+
+  async function openTrailer(item, source = state.trailerSource === "youtube" ? "youtube" : "rutube") {
     if (!item) return;
-    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal trailer-modal" role="dialog" aria-modal="true" aria-labelledby="trailer-title"><div class="modal-head"><div><div class="eyebrow">Трейлер</div><h2 id="trailer-title">${escapeHtml(item.title)}</h2></div><button class="icon-button" id="trailer-close" type="button" aria-label="Закрыть">×</button></div><div class="provider-frame external-embed-frame trailer-frame" id="trailer-frame"><div class="trailer-status"><span class="loading-spinner" aria-hidden="true"></span> Ищу трейлер…</div></div><div class="trailer-alternatives" id="trailer-alternatives"></div></section></div>`;
+    state.trailerSource = source;
+    saveState();
+    const tab = (id, label) => `<button class="${source === id ? "is-active" : ""}" data-trailer-source="${id}" type="button" role="tab" aria-selected="${source === id}">${label}</button>`;
+    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal trailer-modal" role="dialog" aria-modal="true" aria-labelledby="trailer-title"><div class="modal-head"><div><div class="eyebrow">Трейлер</div><h2 id="trailer-title">${escapeHtml(item.title)}</h2></div><div class="trailer-head-actions"><div class="trailer-sources" role="tablist" aria-label="Источник трейлера">${tab("rutube", "Rutube")}${tab("youtube", "YouTube")}</div><button class="icon-button" id="trailer-close" type="button" aria-label="Закрыть">×</button></div></div><div class="provider-frame external-embed-frame trailer-frame" id="trailer-frame"><div class="trailer-status"><span class="loading-spinner" aria-hidden="true"></span> Ищу трейлер…</div></div><div class="trailer-alternatives" id="trailer-alternatives"></div></section></div>`;
     let closed = false;
     const close = () => { closed = true; modalRoot.innerHTML = ""; };
     $("#trailer-close").addEventListener("click", close);
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
+    $$("[data-trailer-source]").forEach((button) => button.addEventListener("click", () => {
+      if (button.dataset.trailerSource === source) return;
+      closed = true;
+      openTrailer(item, button.dataset.trailerSource);
+    }));
     const searchQuery = encodeURIComponent(`${item.title} ${item.year || ""} трейлер`.trim());
-    const fallback = `<div class="trailer-status"><p>Трейлер не нашёлся автоматически.</p><div class="hero-actions"><a class="secondary-button" href="https://rutube.ru/search/?query=${searchQuery}" target="_blank" rel="noopener noreferrer">Искать на Rutube ↗</a><a class="secondary-button" href="https://www.youtube.com/results?search_query=${searchQuery}" target="_blank" rel="noopener noreferrer">Искать на YouTube ↗</a></div></div>`;
+    const fallback = (note) => `<div class="trailer-status"><p>${note}</p><div class="hero-actions"><a class="secondary-button" href="https://rutube.ru/search/?query=${searchQuery}" target="_blank" rel="noopener noreferrer">Искать на Rutube ↗</a><a class="secondary-button" href="https://www.youtube.com/results?search_query=${searchQuery}" target="_blank" rel="noopener noreferrer">Искать на YouTube ↗</a></div></div>`;
+    let trailers = [];
     try {
-      const params = new URLSearchParams({ title: item.title || "", original: item.originalTitle || "", year: String(item.year || "") });
-      const response = await apiFetch(`/api/trailers?${params}`, { headers: { accept: "application/json" } });
-      const payload = await response.json();
-      if (closed) return;
-      const trailers = Array.isArray(payload.items) ? payload.items : [];
-      if (!response.ok || !trailers.length) { $("#trailer-frame").innerHTML = fallback; return; }
-      const show = (index) => {
-        const trailer = trailers[index];
-        $("#trailer-frame").innerHTML = `<iframe title="Трейлер: ${escapeHtml(item.title)}" src="${escapeHtml(trailer.embedUrl)}" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
-        $$("[data-trailer-index]").forEach((button) => button.classList.toggle("is-active", Number(button.dataset.trailerIndex) === index));
-      };
-      $("#trailer-alternatives").innerHTML = trailers.length > 1 ? trailers.map((trailer, index) => `<button class="trailer-option" data-trailer-index="${index}" type="button"><strong>${escapeHtml(trailer.title)}</strong><small>${escapeHtml(trailer.author || "Rutube")} · ${formatTime(trailer.duration)}</small></button>`).join("") : "";
-      $$("[data-trailer-index]").forEach((button) => button.addEventListener("click", () => show(Number(button.dataset.trailerIndex))));
-      show(0);
+      trailers = source === "youtube" ? await youtubeTrailers(item) : await rutubeTrailers(item);
     } catch {
-      if (!closed) $("#trailer-frame").innerHTML = fallback;
+      if (!closed) $("#trailer-frame").innerHTML = fallback(source === "youtube" ? "YouTube недоступен. Включите VPN или выберите Rutube." : "Не удалось найти трейлер.");
+      return;
     }
+    if (closed) return;
+    if (!trailers.length) {
+      $("#trailer-frame").innerHTML = fallback("Трейлер не нашёлся автоматически.");
+      return;
+    }
+    const show = (index) => {
+      $("#trailer-frame").innerHTML = `<iframe title="Трейлер: ${escapeHtml(item.title)}" src="${escapeHtml(trailers[index].embedUrl)}" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+      $$("[data-trailer-index]").forEach((button) => button.classList.toggle("is-active", Number(button.dataset.trailerIndex) === index));
+    };
+    $("#trailer-alternatives").innerHTML = trailers.length > 1 ? trailers.map((trailer, index) => `<button class="trailer-option" data-trailer-index="${index}" type="button"><strong>${escapeHtml(trailer.title)}</strong><small>${escapeHtml(trailer.label)}${trailer.duration ? ` · ${formatTime(trailer.duration)}` : ""}</small></button>`).join("") : "";
+    $$("[data-trailer-index]").forEach((button) => button.addEventListener("click", () => show(Number(button.dataset.trailerIndex))));
+    show(0);
+  }
+
+  // The player frame opens immediately; a stream refresh shows inside it
+  // instead of sending the viewer back to the title page while it runs.
+  let playerOpenToken = 0;
+  function showPlayerConnecting(item, episodeNumber, token) {
+    const episode = episodeNumber ? ` · S${String(selectedSeason || 1).padStart(2, "0")}E${String(episodeNumber).padStart(2, "0")}` : "";
+    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal player-cinematic" role="dialog" aria-modal="true" aria-labelledby="player-connecting-title"><div class="modal-head"><div><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"}</div><h2 id="player-connecting-title">${escapeHtml(item.title)}${episode}</h2></div><button class="icon-button" id="player-connecting-close" type="button" aria-label="Закрыть">×</button></div><div class="provider-frame video-frame player-connecting"${item.backdropImage ? ` style="--connecting-image:url('${escapeHtml(item.backdropImage)}')"` : ""}><div class="player-connecting-inner" role="status" aria-live="polite"><span class="player-connecting-ring" aria-hidden="true"></span><strong id="player-connecting-text">Подключаю видеопоток…</strong><small id="player-connecting-note">Получаю свежую ссылку у источника</small></div></div></section></div>`;
+    const notes = [[6000, "Источник отвечает чуть дольше обычного…"], [16000, "Ещё немного — проверяю запасные ссылки…"], [32000, "Почти готово, не закрывайте плеер…"]];
+    notes.forEach(([delay, text]) => window.setTimeout(() => { if (token === playerOpenToken) { const note = $("#player-connecting-note"); if (note) note.textContent = text; } }, delay));
+    $("#player-connecting-close").addEventListener("click", () => { playerOpenToken += 1; modalRoot.innerHTML = ""; });
+    $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) { playerOpenToken += 1; modalRoot.innerHTML = ""; } });
   }
 
   async function openItemPlayer(item, episodeNumber = null, seasonNumber = null, roomId = null, refreshSource = true) {
     if (!item) return;
     rememberTasteInteraction(item, "played");
     stopDetailPrebuffer();
+    const token = ++playerOpenToken;
     if (refreshSource) {
+      if (shouldRefreshKinopoiskPlayback(item)) showPlayerConnecting(item, episodeNumber, token);
       item = await refreshKinopoiskPlayback(item, { force: false });
+      if (token !== playerOpenToken) return;
     }
     if (roomId !== null) activeWatchRoomId = String(roomId || "");
     rememberPlayerContext();
@@ -4761,8 +4849,7 @@
       const art = item.backdropImage || (item.posterImage ? highResolutionPosterUrl(item.posterImage) : "");
       return `<button class="feature-pick${item.id === pick.id ? " is-active" : ""}${item.backdropImage ? "" : " is-poster"}" data-feature-pick="${index}" type="button" role="tab" aria-selected="${item.id === pick.id}">${art ? `<img src="${escapeHtml(art)}" alt="" loading="lazy" decoding="async">` : ""}<span>${escapeHtml(item.title)}</span></button>`;
     }).join("")}</div>` : "";
-    const style = backdrop ? `--feature-image:url('${escapeHtml(backdrop)}')` : poster ? `--feature-image:url('${escapeHtml(poster)}')` : "";
-    return `<section class="home-feature${backdrop ? " has-backdrop" : ""}" aria-labelledby="home-feature-title"${style ? ` style="${style}"` : ""}><div class="feature-backdrop" aria-hidden="true"></div><div class="feature-body"><div class="feature-copy"><span class="feature-chip">${escapeHtml(chip)}</span>${title}<div class="feature-meta">${meta}</div>${pick.description ? `<p class="feature-description">${escapeHtml(pick.description)}</p>` : ""}<div class="hero-actions">${featureWatchAction(pick, resumable)}<button class="secondary-button" data-favorite="${escapeHtml(pick.id)}" type="button">${favorite ? "♥ В избранном" : "＋ В избранное"}</button><a class="secondary-button feature-icon-button" href="${routeForTitle(pick.id)}" data-open-title="${escapeHtml(pick.id)}" aria-label="Подробнее" title="Подробнее">i</a></div></div>${!backdrop && poster ? `<a class="feature-poster" href="${routeForTitle(pick.id)}" data-open-title="${escapeHtml(pick.id)}" aria-hidden="true" tabindex="-1"><img src="${escapeHtml(poster)}" alt="" decoding="async"></a>` : ""}</div>${thumbs}</section>`;
+    return `<section class="home-feature${backdrop ? " has-backdrop" : ""}" aria-labelledby="home-feature-title" data-feature-image="${escapeHtml(backdrop || poster)}"><div class="feature-backdrop" aria-hidden="true"></div><div class="feature-body"><div class="feature-copy"><span class="feature-chip">${escapeHtml(chip)}</span>${title}<div class="feature-meta">${meta}</div>${pick.description ? `<p class="feature-description">${escapeHtml(pick.description)}</p>` : ""}<div class="hero-actions">${featureWatchAction(pick, resumable)}<button class="secondary-button" data-favorite="${escapeHtml(pick.id)}" type="button">${favorite ? "♥ В избранном" : "＋ В избранное"}</button><a class="secondary-button feature-icon-button" href="${routeForTitle(pick.id)}" data-open-title="${escapeHtml(pick.id)}" aria-label="Подробнее" title="Подробнее">i</a></div></div>${!backdrop && poster ? `<a class="feature-poster" href="${routeForTitle(pick.id)}" data-open-title="${escapeHtml(pick.id)}" aria-hidden="true" tabindex="-1"><img src="${escapeHtml(poster)}" alt="" decoding="async"></a>` : ""}</div>${thumbs}</section>`;
   }
 
   function landscapeArt(item) {
@@ -4781,7 +4868,7 @@
 
   function topTenShelf(items) {
     if (items.length < 5) return "";
-    return `<section class="discovery-shelf top-ten-shelf" aria-labelledby="shelf-top10"><div class="section-header discovery-shelf-header"><div><h2 id="shelf-top10">Топ-10 сейчас</h2><p>Что чаще всего смотрят на Кинопоиске в эти дни.</p></div><button class="text-button" data-open-collection="popular" type="button">Смотреть всё ›</button></div><div class="discovery-rail top-ten-rail">${items.slice(0, 10).map((item, index) => `<a class="top-ten-card" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="${index + 1}. ${escapeHtml(item.title)}"><span class="top-ten-number" aria-hidden="true">${index + 1}</span><span class="top-ten-poster">${item.posterImage ? `<img src="${escapeHtml(highResolutionPosterUrl(item.posterImage))}" alt="" loading="lazy" decoding="async">` : `<span style="${posterStyle(item)}"></span>`}</span></a>`).join("")}</div></section>`;
+    return `<section class="discovery-shelf top-ten-shelf" aria-labelledby="shelf-top10"><div class="section-header discovery-shelf-header"><div><h2 id="shelf-top10">Топ-10 сейчас</h2><p>Что чаще всего смотрят на Кинопоиске в эти дни.</p></div><button class="text-button" data-open-collection="popular" type="button">Смотреть всё ›</button></div><div class="discovery-rail top-ten-rail">${items.slice(0, 10).map((item, index) => `<a class="top-ten-card" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="${index + 1}. ${escapeHtml(item.title)}"><span class="top-ten-number" aria-hidden="true">${index + 1}</span><span class="top-ten-poster">${item.posterImage ? `<img src="${escapeHtml(previewImageUrl(highResolutionPosterUrl(item.posterImage)))}" alt="" loading="lazy" decoding="async">` : `<span style="${posterStyle(item)}"></span>`}</span></a>`).join("")}</div></section>`;
   }
 
   const HOME_GENRES = [["драма", "Драма"], ["комедия", "Комедия"], ["триллер", "Триллер"], ["фантастика", "Фантастика"], ["мелодрама", "Мелодрама"], ["ужасы", "Ужасы"], ["мультфильм", "Мультфильмы"], ["детектив", "Детектив"]];
@@ -4843,7 +4930,7 @@
     const meta = [item.year, catalogRatingLabel(item), item.kind === "series" ? `${item.seasons.length} сезонов` : formatRuntime(item.runtime)].filter(Boolean);
     const genres = genresForItem(item).slice(0, 3);
     const posterAttrs = item.posterImage ? ` style="--poster:${escapeHtml(item.poster || "linear-gradient(145deg, #5c3b63, #221b31)")}"` : ` style="${posterStyle(item)}"`;
-    const posterImage = item.posterImage ? `<img class="poster-art-image" src="${escapeHtml(highResolutionPosterUrl(item.posterImage))}" alt="" loading="lazy" decoding="async" aria-hidden="true">` : "";
+    const posterImage = item.posterImage ? `<img class="poster-art-image" src="${escapeHtml(previewImageUrl(highResolutionPosterUrl(item.posterImage)))}" alt="" loading="lazy" decoding="async" aria-hidden="true">` : "";
     return `<a class="poster-card ${extra}" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="Открыть ${escapeHtml(item.title)}"><div class="poster-art"${posterAttrs}>${posterImage}${posterTitleArt(item)}${progress ? `<span class="progress-bar" style="--progress:${progressPct}%"><i></i></span>` : ""}</div><div class="poster-card-copy"><strong>${escapeHtml(item.title)}</strong><div class="poster-card-meta">${meta.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div><p class="poster-card-description">${escapeHtml(item.description || "Подробности появятся после синхронизации каталога.")}</p><div class="poster-card-tags">${genres.map((genre) => `<span>#${escapeHtml(genre)}</span>`).join("")}</div></div></a>`;
   }
 
@@ -4906,6 +4993,8 @@
       discoveryShelf({ id: "anime", eyebrow: "", title: "Аниме", description: "Сериалы и фильмы с жанром «аниме».", items: collectionItems("anime", 12) }),
     ].filter(Boolean).join("");
     page.innerHTML = `${homeFeatureMarkup(picks)}<div class="home-shelves">${shelves}</div>`;
+    const feature = $(".home-feature");
+    progressiveBackground(feature, "--feature-image", feature?.dataset.featureImage);
     bindPageActions();
   }
 
@@ -5280,7 +5369,7 @@
   }
 
   // Opening a player and closing it at once is not "watching".
-  const MIN_WATCHED_SECONDS = 10;
+  const MIN_WATCHED_SECONDS = 3;
   function isRealProgress(progress) { return Boolean(progress) && (progress.completed || Number(progress.position || 0) >= MIN_WATCHED_SECONDS); }
 
   // History as a list: one row per title, newest activity first.
@@ -5626,7 +5715,7 @@
     const progress = progressForTitle(item);
     const favorite = state.favorites.includes(item.id);
     const resumeEpisode = progress?.episodeNumber || null;
-    const watchLabel = progress && !progress.completed && Number(progress.position || 0) >= 10 ? "Продолжить просмотр" : "Смотреть";
+    const watchLabel = progress && !progress.completed && Number(progress.position || 0) >= 3 ? "Продолжить просмотр" : "Смотреть";
     const detailWatch = playbackReady
       ? hasPlayableSource(item)
         ? watchButton(item, watchLabel)
@@ -5659,7 +5748,7 @@
     const ratingImdb = detailRating(item.imdbRating);
     const premiere = String(item.premiere || "").trim();
     const backdropUrl = item.backdropImage || (item.posterImage ? highResolutionPosterUrl(item.posterImage) : "");
-    const backdropStyle = backdropUrl ? ` style="--detail-backdrop: url('${escapeHtml(backdropUrl)}')"` : "";
+    const backdropStyle = "";
     const factMarkup = [
       detailFact("Оригинальное название", item.originalTitle),
       detailFact("Год", item.year),
@@ -5675,6 +5764,7 @@
     const catalogReturnView = ["catalog", "movies", "series", "favorites", "evening", "history", "home"].includes(state.view) ? state.view : "catalog";
     const backLabel = catalogReturnView === "home" ? "← Назад" : "← Назад к списку";
     page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell${item.backdropImage ? " has-backdrop" : ""}"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}<span class="detail-poster-kind">${item.kind === "series" ? "SERIES" : "MOVIE"}</span></div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"} · CineVault</div><h1>${escapeHtml(item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">★</span><strong>${ratingKinopoisk}</strong><small>КиноПоиск</small></div><div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div><div class="detail-status-card"><span class="detail-status-dot ${playbackReady && hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${!playbackReady ? "Обновляю источник" : hasPlayableSource(item) ? "Можно смотреть" : requiresRefresh ? "Поток загрузится при запуске" : "Источник не подключён"}</strong><small>${item.kind === "series" ? `${item.seasons?.length || 0} сезонов` : formatRuntime(item.runtime)}</small></div></div><div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${refreshAction}${detailWatch}${alternativePlayerAction}<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button">▶ Трейлер</button>${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? "♥ В избранном" : "♡ В избранное"}</button></div></div></div>${playbackPreferencesMarkup(item)}<div class="detail-facts"><dl>${factMarkup}</dl></div><div class="detail-description"><div class="section-kicker">О фильме</div><h2>${item.tagline ? escapeHtml(item.tagline) : "История, к которой хочется возвращаться"}</h2><p>${escapeHtml(item.description || "Описание пока не загружено.")}</p></div>${actors.length ? `<section class="detail-cast"><div class="section-kicker">В ролях</div><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}${providerPanel}</section>${item.kind === "series" && playbackReady ? renderSeasons(item) : ""}</div>`;
+    progressiveBackground($(".detail-shell"), "--detail-backdrop", backdropUrl);
     if (refreshState?.status === "error") page.querySelector(".detail-status-card strong").textContent = "Поток не обновлён";
     bindPageActions();
     if (!enteringTitle && preservedScrollY > 0) {
@@ -6200,10 +6290,10 @@
     rememberPlayerContext();
     const progressKey = alternativeProgressKey(item);
     const savedProgress = state.progress[progressKey] || null;
-    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal" role="dialog" aria-modal="true" aria-labelledby="alternative-player-title"><div class="modal-head"><div><div class="eyebrow">Другой плеер · Alloha</div><h2 id="alternative-player-title">${escapeHtml(item.title)}</h2></div><button class="icon-button" id="alternative-player-close" type="button" aria-label="Закрыть">×</button></div><div class="player-toolbar"><div class="player-selects"><label class="player-select"><span>Озвучка</span><select id="alternative-player-voice" disabled aria-label="Озвучка Alloha"></select></label><button class="secondary-button" id="alternative-player-refresh" type="button">Обновить ссылку</button></div></div><div class="provider-frame external-embed-frame"><iframe id="alternative-player-frame" title="${escapeHtml(item.title)} · Alloha" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" hidden></iframe></div><p id="alternative-player-status" class="notice" role="status" aria-live="polite">Ищу доступные озвучки…</p></section></div>`;
+    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal" role="dialog" aria-modal="true" aria-labelledby="alternative-player-title"><div class="modal-head"><div><div class="eyebrow">Другой плеер · Alloha</div><h2 id="alternative-player-title">${escapeHtml(item.title)}</h2></div><button class="icon-button" id="alternative-player-close" type="button" aria-label="Закрыть">×</button></div><div class="player-toolbar"><div class="player-selects"><label class="player-select"><span>Озвучка</span><select id="alternative-player-voice" disabled aria-label="Озвучка Alloha"></select></label></div></div><div class="provider-frame external-embed-frame"><iframe id="alternative-player-frame" title="${escapeHtml(item.title)} · Alloha" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" hidden></iframe></div><p id="alternative-player-status" class="notice" role="status" aria-live="polite">Ищу доступные озвучки…</p></section></div>`;
     const frame = $("#alternative-player-frame");
     const voiceSelect = $("#alternative-player-voice");
-    const refreshButton = $("#alternative-player-refresh");
+    const refreshButton = { disabled: false };
     const status = $("#alternative-player-status");
     let options = [];
     let requestNumber = 0;
@@ -6335,7 +6425,7 @@
       }
     };
     voiceSelect.addEventListener("change", () => showOption(Number(voiceSelect.value)));
-    refreshButton.addEventListener("click", loadOptions);
+
     const close = () => { saveProgress(false); window.removeEventListener("message", onPlayerMessage); window.clearInterval(infoTimer); closed = true; requestNumber += 1; controller?.abort(); frame.removeAttribute("src"); returnFromPlayer(); };
     $("#alternative-player-close").addEventListener("click", close);
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
@@ -6855,6 +6945,8 @@
   $("#assistant-pet")?.addEventListener("click", () => { assistantPaginationDismissed = true; $("#assistant-rail").classList.remove("is-collapsed", "is-pagination-collapsed"); setPetState("happy"); setAssistantCopy("Я выберу вариант по твоему вкусу, настроению и истории просмотра."); });
   $("#assistant-recommend")?.addEventListener("click", () => { setAssistantCopy("Секунду, ищу что-нибудь подходящее…"); const pick = nextRecommendation(); if (!pick) { setAssistantCopy("Пока не нашёл подходящих вариантов."); return; } setPetState("happy"); setAssistantCopy(`${currentPet().pick} «${pick.title}».`); openTitleRoute(pick.id, { recommendation: true }); });
 
+  // Card images fade in once loaded; until then a shimmer placeholder shows.
+  document.addEventListener("load", (event) => { if (event.target instanceof HTMLImageElement) event.target.classList.add("is-loaded"); }, true);
   startPetStates();
   // Solid top bar once the page scrolls past the hero's top edge.
   const syncScrolledHeader = () => app.classList.toggle("is-scrolled", window.scrollY > 24);
