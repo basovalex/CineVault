@@ -443,15 +443,17 @@ class CatalogIndex:
             items = [self._summary(row) for row in rows]
         return {"items": items, "page": page, "limit": limit, "total": total, "pages": pages}
 
-    def facets(self, visibility: Optional[tuple]) -> Dict[str, Any]:
+    def facets(self, visibility: Optional[tuple], kind: str = "") -> Dict[str, Any]:
+        where = self.VISIBLE + (" AND c.kind = ?" if kind else "")
+        args = [kind] if kind else []
         with self._lock:
             db = self._connection()
             self._load_sets(db, visibility)
             total, movies, series = db.execute(
-                f"SELECT COUNT(*), SUM(c.kind = 'movie'), SUM(c.kind = 'series') FROM cards c WHERE {self.VISIBLE}").fetchone()
+                f"SELECT COUNT(*), SUM(c.kind = 'movie'), SUM(c.kind = 'series') FROM cards c WHERE {where}", args).fetchone()
             genres = {
                 genre: count for genre, count in db.execute(
-                    f"SELECT g.genre, COUNT(*) FROM card_genres g JOIN cards c ON c.id = g.card_id WHERE {self.VISIBLE} GROUP BY g.genre")
+                    f"SELECT g.genre, COUNT(*) FROM card_genres g JOIN cards c ON c.id = g.card_id WHERE {where} GROUP BY g.genre", args)
                 if genre not in EDITORIAL_TAGS
             }
         return {"total": total or 0, "movies": movies or 0, "series": series or 0, "genres": genres}

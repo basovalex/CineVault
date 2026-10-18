@@ -249,6 +249,9 @@ class CatalogIndexTest(unittest.TestCase):
         facets = self.index.facets(visibility)
         self.assertEqual((facets["total"], facets["movies"], facets["series"]), (3, 2, 1))
         self.assertEqual(facets["genres"]["драма"], 2)
+        series_facets = self.index.facets(visibility, "series")
+        self.assertEqual((series_facets["total"], series_facets["genres"]), (1, {"комедия": 1}))
+        self.assertEqual(self.index.facets(visibility, "movie")["genres"]["драма"], 2)
 
     def test_item_lookup_and_upsert_after_refresh(self):
         from tools.catalog_index import upsert_entry

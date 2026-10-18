@@ -1432,11 +1432,20 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
     return {"items": [{key: item[key] for key in CATALOG_INDEX_FIELDS if key in item} for item in filtered[start:start + limit]], "page": page, "limit": limit, "total": total, "pages": pages}
 
 
+def _facet_kind(params: Dict[str, list[str]]) -> str:
+    kind = str(params.get("type", params.get("kind", [""]))[0]).strip().casefold()
+    kind = {"movies": "movie", "film": "movie", "films": "movie", "serial": "series", "serials": "series", "tv": "series"}.get(kind, kind)
+    return kind if kind in {"movie", "series"} else ""
+
+
 def catalog_facets(params: Dict[str, list[str]]) -> Dict[str, Any]:
     if CATALOG_INDEX is not None:
         CATALOG_INDEX.maybe_refresh()
-        return CATALOG_INDEX.facets(catalog_metadata_visibility())
+        return CATALOG_INDEX.facets(catalog_metadata_visibility(), _facet_kind(params))
     items = imported_catalog_entries()
+    kind = _facet_kind(params)
+    if kind:
+        items = [item for item in items if str(item.get("kind") or "") == kind]
     counts: Dict[str, int] = {}
     for item in items:
         values = item.get("genres") if isinstance(item.get("genres"), list) else item.get("tags", [])

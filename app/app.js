@@ -2817,11 +2817,20 @@
     }
   }
 
-  async function loadRemoteCatalogFacets() {
+  // Genre counts depend on the tab: "Фильмы" and "Сериалы" count only their kind.
+  const facetsByKind = new Map();
+  function facetsKind() { return state.view === "movies" ? "movie" : state.view === "series" ? "series" : ""; }
+  function currentFacets() { return facetsByKind.get(facetsKind()) || null; }
+  async function loadRemoteCatalogFacets(kind = facetsKind()) {
     try {
-      const response = await apiFetch("/api/catalog/facets", { cache: "no-store", headers: { accept: "application/json" } });
-      if (response.ok) remoteCatalog.facets = await response.json();
+      const query = kind ? `?type=${encodeURIComponent(kind)}` : "";
+      const response = await apiFetch(`/api/catalog/facets${query}`, { cache: "no-store", headers: { accept: "application/json" } });
+      if (response.ok) {
+        facetsByKind.set(kind, await response.json());
+        if (!kind) remoteCatalog.facets = facetsByKind.get("");
+      }
     } catch {}
+    if (kind !== facetsKind()) return;
     const route = readRouteFromLocation();
     if (route.type === "view" && ["catalog", "movies", "series", "evening"].includes(route.view)) {
       const genreList = $(".genre-list");
@@ -5322,9 +5331,14 @@
   }
 
   function catalogGenreOptions() {
-    const remoteGenres = remoteCatalog.facets?.genres;
+    const facets = currentFacets();
+    if (!facets && facetsKind() && !facetsByKind.has(`loading:${facetsKind()}`)) {
+      facetsByKind.set(`loading:${facetsKind()}`, true);
+      loadRemoteCatalogFacets().finally(() => facetsByKind.delete(`loading:${facetsKind()}`));
+    }
+    const remoteGenres = (facets || (facetsKind() ? null : remoteCatalog.facets))?.genres;
     if (remoteGenres && Object.keys(remoteGenres).length) {
-      return Object.entries(remoteCatalog.facets.genres)
+      return Object.entries(remoteGenres)
         .map(([genre, count]) => ({ genre, count }))
         .sort((left, right) => right.count - left.count || left.genre.localeCompare(right.genre, "ru"));
     }
