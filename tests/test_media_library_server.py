@@ -10,6 +10,7 @@ import time
 import urllib.request
 import urllib.error
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,8 +21,11 @@ from tools.media_library_server import (
     KinopoiskOnDemandUpdater,
     MediaLibrary,
     MediaLibraryHandler,
+    alloha_player_options,
     build_sitemap_xml,
     catalog_page,
+    catalog_confidence_rating,
+    imported_catalog_entries,
     kinopoisk_import_command,
     kinopoisk_update_command,
     normalize_catalog_source_json,
@@ -42,6 +46,18 @@ class MediaLibraryTests(unittest.TestCase):
         self.library.close()
         self.temp_dir.cleanup()
 
+    def test_concurrent_catalog_requests_parse_files_once(self):
+        catalog_path = Path(self.temp_dir.name) / "catalog_imports.json"
+        metadata_path = catalog_path.with_name("catalog_metadata.json")
+        catalog_path.write_text('[{"id":"first","kinopoiskId":1,"kind":"movie"}]', encoding="utf-8")
+        metadata_path.write_text('[{"id":"first","kinopoiskId":1,"voteCount":100}]', encoding="utf-8")
+        original_loads = json.loads
+        with patch("tools.media_library_server.json.loads", wraps=original_loads) as decoder:
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                results = list(executor.map(lambda _: imported_catalog_entries(catalog_path), range(8)))
+        self.assertTrue(all(result[0]["voteCount"] == 100 for result in results))
+        self.assertEqual(decoder.call_count, 2)
+
     def test_catalog_page_filters_explicit_card_ids(self):
         cards = [
             {"id": "first", "title": "Первый", "kind": "movie", "rating": 8},
@@ -51,6 +67,52 @@ class MediaLibraryTests(unittest.TestCase):
             payload = catalog_page({"ids": ["second"]})
         self.assertEqual(payload["total"], 1)
         self.assertEqual(payload["items"], [{"id": "second", "title": "Второй", "kind": "series", "rating": 7}])
+
+    def test_five_votes_do_not_outrank_a_well_supported_rating(self):
+        self.assertLess(catalog_confidence_rating({"rating": 10, "voteCount": 5}),
+                        catalog_confidence_rating({"rating": 8, "voteCount": 5000}))
+
+    def test_new_collection_requires_metadata_and_vote_count(self):
+        from datetime import datetime
+        year = datetime.now().year
+        cards = [
+            {"id": "ready", "kind": "series", "title": "Новый сериал", "year": year,
+             "rating": 7.2, "voteCount": 1500, "posterImage": "https://example.org/poster.jpg",
+             "description": "Подробное описание сериала с героями и сюжетом, достаточное для карточки каталога."},
+            {"id": "few-votes", "kind": "series", "title": "Мало оценок", "year": year,
+             "voteCount": 5, "posterImage": "https://example.org/poster.jpg",
+             "description": "Подробное описание сериала с героями и сюжетом, достаточное для карточки каталога."},
+        ]
+        with patch("tools.media_library_server.imported_catalog_entries", return_value=cards):
+            payload = catalog_page({"collection": ["new"]})
+        self.assertEqual([item["id"] for item in payload["items"]], ["ready"])
+
+    def test_alloha_player_options_only_accepts_known_embed_host(self):
+        payload = {"data": [{"type": "Alloha", "translations": [
+            {"name": "LostFilm", "iframeUrl": "https://theatre.stravers.live/?translation=1&token=test"},
+            {"name": "Fake", "iframeUrl": "https://theatre.stravers.live.evil.example/?translation=2"},
+            {"name": "Fake port", "iframeUrl": "https://theatre.stravers.live:444/?translation=3"},
+        ]}]}
+        options = alloha_player_options(payload)
+        self.assertEqual([option["name"] for option in options], ["LostFilm"])
+
+    def test_player_options_endpoint_requires_catalog_card(self):
+        handler = lambda *args, **kwargs: MediaLibraryHandler(*args, directory=self.temp_dir.name, **kwargs)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.library = self.library  # type: ignore[attr-defined]
+        server.viewer_token = ""  # type: ignore[attr-defined]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with patch("tools.media_library_server.imported_catalog_item", side_effect=KeyError("missing")):
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    opener.open(f"http://127.0.0.1:{server.server_port}/api/player-options?kinopoisk=277537", timeout=3)
+            self.assertEqual(caught.exception.code, 404)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
 
     def test_upload_is_stored_and_listed_without_network(self):
         result = self.library.create_upload(

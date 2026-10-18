@@ -2795,6 +2795,11 @@
       const response = await apiFetch("/api/catalog/facets", { cache: "no-store", headers: { accept: "application/json" } });
       if (response.ok) remoteCatalog.facets = await response.json();
     } catch {}
+    const route = readRouteFromLocation();
+    if (route.type === "view" && ["catalog", "movies", "series", "evening"].includes(route.view)) {
+      const genreList = $(".genre-list");
+      if (genreList) genreList.innerHTML = catalogGenreButtonsMarkup(catalogGenreOptions());
+    }
   }
 
   function mergeCachedImportedDetails(item) {
@@ -3013,7 +3018,6 @@
   async function loadOnlineEpisodeAssets(item) {
     if ((!item?.episodeDataProvider && !item?.episodeDataFile) || episodeAssetStates[item.id]?.loading || episodeAssetStates[item.id]?.loaded) return;
     const assetState = episodeAssetStates[item.id] = { loading: true, error: "", loaded: false };
-    if (activeTitleId === item.id) renderDetails(item.id);
     try {
       const metadataFile = item.episodeDataFile || "";
       let localRows = [];
@@ -4846,18 +4850,25 @@
   }
 
   function catalogGenreOptions() {
-    if (remoteCatalog.facets?.genres) {
+    const remoteGenres = remoteCatalog.facets?.genres;
+    if (remoteGenres && Object.keys(remoteGenres).length) {
       return Object.entries(remoteCatalog.facets.genres)
         .map(([genre, count]) => ({ genre, count }))
         .sort((left, right) => right.count - left.count || left.genre.localeCompare(right.genre, "ru"));
     }
     const counts = new Map();
-    catalog.filter((item) => catalogViewMatches(item) && matchesCollection(item)).forEach((item) => genresForItem(item).forEach((genre) => counts.set(genre, (counts.get(genre) || 0) + 1)));
+    const sourceItems = discoveryCatalog.length ? discoveryCatalog : catalog;
+    sourceItems.filter((item) => catalogViewMatches(item) && matchesCollection(item)).forEach((item) => genresForItem(item).forEach((genre) => counts.set(genre, (counts.get(genre) || 0) + 1)));
     const selectedGenre = normalizeCatalogGenre(state.catalogGenre);
     if (selectedGenre && !counts.has(selectedGenre)) counts.set(selectedGenre, 0);
     return [...counts.entries()]
       .map(([genre, count]) => ({ genre, count }))
       .sort((left, right) => right.count - left.count || left.genre.localeCompare(right.genre, "ru"));
+  }
+
+  function catalogGenreButtonsMarkup(genreOptions) {
+    const selectedGenre = normalizeCatalogGenre(state.catalogGenre);
+    return [`<button class="genre-chip ${selectedGenre ? "" : "is-active"}" data-catalog-genre="" type="button" aria-pressed="${selectedGenre ? "false" : "true"}"><span>Все жанры</span></button>`, ...genreOptions.map(({ genre }) => `<button class="genre-chip ${selectedGenre === genre ? "is-active" : ""}" data-catalog-genre="${escapeHtml(genre)}" type="button" aria-pressed="${selectedGenre === genre ? "true" : "false"}"><span>${escapeHtml(genre.charAt(0).toLocaleUpperCase("ru-RU") + genre.slice(1))}</span></button>`)].join("");
   }
 
   function catalogRatingValue(item) {
@@ -4996,7 +5007,7 @@
     const hasFilters = Boolean(state.query || selectedGenre || collection || state.view !== "catalog");
     const title = state.view === "favorites" ? "Избранное" : state.view === "evening" ? "Наш вечер" : state.view === "history" ? "История просмотра" : state.view === "movies" ? "Фильмы" : state.view === "series" ? "Сериалы" : state.query ? `Результаты для «${escapeHtml(state.query)}»` : collection ? collection.title : "Каталог";
     const subtitle = state.view === "evening" ? "То, что хочется посмотреть вместе." : state.view === "history" ? "То, к чему можно вернуться в любой момент." : collection?.id === "mood" ? moodDefinition().description : collection ? collection.description : "Ищи по названию, актёрам и жанрам или выбери готовую подборку.";
-    const genreButtons = [`<button class="genre-chip ${selectedGenre ? "" : "is-active"}" data-catalog-genre="" type="button" aria-pressed="${selectedGenre ? "false" : "true"}"><span>Все жанры</span></button>`, ...genreOptions.map(({ genre }) => `<button class="genre-chip ${selectedGenre === genre ? "is-active" : ""}" data-catalog-genre="${escapeHtml(genre)}" type="button" aria-pressed="${selectedGenre === genre ? "true" : "false"}"><span>${escapeHtml(genre.charAt(0).toLocaleUpperCase("ru-RU") + genre.slice(1))}</span></button>`)].join("");
+    const genreButtons = catalogGenreButtonsMarkup(genreOptions);
     const collectionButtons = [`<button class="collection-chip ${collection ? "" : "is-active"}" data-catalog-collection="" type="button" aria-pressed="${collection ? "false" : "true"}"><strong>Весь каталог</strong><small>Все фильмы и сериалы</small></button>`, ...catalogCollections.map((entry) => `<button class="collection-chip ${collection?.id === entry.id ? "is-active" : ""}" data-catalog-collection="${escapeHtml(entry.id)}" type="button" aria-pressed="${collection?.id === entry.id ? "true" : "false"}"><strong>${escapeHtml(entry.title)}</strong><small>${escapeHtml(entry.id === "mood" ? moodDefinition().description : entry.description)}</small></button>`)].join("");
     const activeFilters = [collection ? `Подборка: ${collection.title}` : "", selectedGenre ? `Жанр: ${selectedGenre}` : ""].filter(Boolean).join(" · ");
     const emptyCopy = state.query ? `По запросу «${escapeHtml(state.query)}» ничего не найдено. Измени запрос или сбрось фильтры.` : "Попробуй другой жанр или сбрось фильтры, чтобы снова увидеть весь каталог.";
@@ -5205,6 +5216,9 @@
     }
     stopDetailPrebuffer();
     const enteringTitle = activeTitleId !== id;
+    // Loading metadata and episodes finishes after the page is already open.
+    // Rebuilding the detail DOM must not throw the reader back to the top.
+    const preservedScrollY = enteringTitle ? 0 : window.scrollY;
     if (enteringTitle) selectedSeason = 1;
     activeTitleId = id;
     const kinopoiskId = Number(item.kinopoiskId || item.kinopoisk_id || 0);
@@ -5270,6 +5284,15 @@
     page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}<span class="detail-poster-kind">${item.kind === "series" ? "SERIES" : "MOVIE"}</span></div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"} · CineVault</div><h1>${escapeHtml(item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">★</span><strong>${ratingKinopoisk}</strong><small>КиноПоиск</small></div><div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div><div class="detail-status-card"><span class="detail-status-dot ${playbackReady && hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${!playbackReady ? "Обновляю источник" : hasPlayableSource(item) ? "Можно смотреть" : requiresRefresh ? "Поток загрузится при запуске" : "Источник не подключён"}</strong><small>${item.kind === "series" ? `${item.seasons?.length || 0} сезонов` : formatRuntime(item.runtime)}</small></div></div><div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${refreshAction}${detailWatch}${alternativePlayerAction}${item.trailerUrl ? `<a class="secondary-button" href="${escapeHtml(item.trailerUrl)}" target="_blank" rel="noopener noreferrer">Трейлер ↗</a>` : ""}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? "♥ В избранном" : "♡ В избранное"}</button></div></div></div>${playbackPreferencesMarkup(item)}<div class="detail-facts"><dl>${factMarkup}</dl></div><div class="detail-description"><div class="section-kicker">О фильме</div><h2>${item.tagline ? escapeHtml(item.tagline) : "История, к которой хочется возвращаться"}</h2><p>${escapeHtml(item.description || "Описание пока не загружено.")}</p></div>${actors.length ? `<section class="detail-cast"><div class="section-kicker">В ролях</div><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}${providerPanel}</section>${item.kind === "series" && playbackReady ? renderSeasons(item) : ""}</div>`;
     if (refreshState?.status === "error") page.querySelector(".detail-status-card strong").textContent = "Поток не обновлён";
     bindPageActions();
+    if (!enteringTitle && preservedScrollY > 0) {
+      const restoreDetailScroll = () => {
+        const route = readRouteFromLocation();
+        if (activeTitleId !== id || route.type !== "title" || route.id !== id) return;
+        window.scrollTo({ top: preservedScrollY, left: 0, behavior: "auto" });
+      };
+      window.requestAnimationFrame(() => window.requestAnimationFrame(restoreDetailScroll));
+      window.setTimeout(restoreDetailScroll, 150);
+    }
   }
 
   function episodeTitle(item, season, episode) {
