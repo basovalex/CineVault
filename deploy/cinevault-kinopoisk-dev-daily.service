@@ -14,9 +14,9 @@ WorkingDirectory=/srv/cinevault
 ExecStart=-/usr/bin/flock -w 1800 /run/cinevault-kinopoisk-dev-sync.lock /usr/bin/docker compose --profile maintenance run --rm kinopoisk-catalog-sync --mode popular --pages 6 --limit 250
 # 2. Cards changed on Kinopoisk during the last week.
 ExecStart=-/usr/bin/flock -w 1800 /run/cinevault-kinopoisk-dev-sync.lock /usr/bin/docker compose --profile maintenance run --rm kinopoisk-catalog-sync --mode daily --kind all --pages 5 --limit 100 --lookback-days 7 --min-votes 50 --require-complete
-# 3. Backfill every known title (at least 1000 Kinopoisk votes), up to 80
+# 3. Backfill every known title (at least 1000 Kinopoisk votes), up to 120
 #    requests a day in year slices (the demo API plan serves 10 pages a query).
-ExecStart=-/usr/bin/flock -w 1800 /run/cinevault-kinopoisk-dev-sync.lock /usr/bin/docker compose --profile maintenance run --rm kinopoisk-catalog-sync --mode slices --pages 80 --limit 250 --min-votes 1000
+ExecStart=-/usr/bin/flock -w 1800 /run/cinevault-kinopoisk-dev-sync.lock /usr/bin/docker compose --profile maintenance run --rm kinopoisk-catalog-sync --mode slices --pages 120 --limit 250 --min-votes 1000
 # 4. Fill in posters and descriptions of older cards within the daily API
 #    quota; stops cleanly when the quota is spent.
-ExecStart=-/usr/bin/flock -w 1800 /run/cinevault-kinopoisk-dev-sync.lock /usr/bin/docker compose --profile maintenance run --rm --entrypoint python kinopoisk-catalog-sync tools/enrich_kinopoisk_catalog.py --batch-size 100 --batches 40 --delay-seconds 1 --resume
+ExecStart=-/usr/bin/flock -w 1800 /run/cinevault-kinopoisk-dev-sync.lock /usr/bin/docker compose --profile maintenance run --rm --entrypoint python kinopoisk-catalog-sync tools/enrich_kinopoisk_catalog.py --batch-size 100 --batches 20 --delay-seconds 1 --resume
