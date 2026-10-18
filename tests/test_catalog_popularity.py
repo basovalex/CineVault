@@ -143,3 +143,14 @@ class SharedStateTest(unittest.TestCase):
                     library.put_shared_state("pets", {"updatedAt": 300, "value": "x"})
             finally:
                 library.close()
+
+
+class TrailerScoreTest(unittest.TestCase):
+    def test_official_trailer_beats_reviews_and_full_films(self):
+        score = server.score_trailer_candidate
+        official = score({"title": "Кракен — Официальный трейлер (2025)", "duration": 124, "hits": 15000}, ["Кракен"], 2025)
+        review = score({"title": "Кракен обзор фильма и трейлер", "duration": 124}, ["Кракен"], 2025)
+        self.assertGreater(official, 15)
+        self.assertLess(review, 6)
+        self.assertEqual(score({"title": "Кракен полный фильм", "duration": 5000}, ["Кракен"], 2025), 0)
+        self.assertEqual(score({"title": "Другое кино трейлер", "duration": 90}, ["Кракен"], 2025), 0)

@@ -161,6 +161,77 @@ def alloha_player_options(payload: Any) -> list[Dict[str, Any]]:
     return []
 
 
+RUTUBE_SEARCH_URL = "https://rutube.ru/api/search/video/"
+TRAILER_CACHE_SECONDS = 14 * 24 * 3600
+TRAILER_WORDS = ("трейлер", "тизер", "trailer", "teaser")
+
+
+def _trailer_text(value: Any) -> str:
+    return re.sub(r"[^0-9a-zа-яё]+", " ", str(value or "").casefold().replace("ё", "е")).strip()
+
+
+def score_trailer_candidate(candidate: Dict[str, Any], titles: Iterable[str], year: int) -> float:
+    """Rank a Rutube search hit as the trailer of a given title."""
+    name = _trailer_text(candidate.get("title"))
+    try:
+        duration = int(candidate.get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0
+    if not name or not any(word in name for word in TRAILER_WORDS) or not 20 <= duration <= 420:
+        return 0.0
+    wanted = [text for text in (_trailer_text(title) for title in titles) if len(text) >= 2]
+    if not any(text in name for text in wanted):
+        return 0.0
+    score = 10.0
+    if year and str(year) in name:
+        score += 4
+    if "русск" in name or "дубляж" in name:
+        score += 2
+    if "официальн" in name:
+        score += 2
+    if any(bad in name for bad in ("обзор", "реакция", "разбор", "пародия", "фанатский", "fan made", "концепт")):
+        score -= 8
+    try:
+        score += min(4.0, max(0, int(candidate.get("hits") or 0)) ** 0.25 / 3)
+    except (TypeError, ValueError):
+        pass
+    return score
+
+
+def search_rutube_trailers(title: str, original_title: str = "", year: int = 0, limit: int = 3) -> list[Dict[str, Any]]:
+    titles = [title] + ([original_title] if original_title and original_title != title else [])
+    found: Dict[str, Dict[str, Any]] = {}
+    queries = ["{} {} трейлер".format(title, year or "").replace("  ", " ").strip()]
+    if original_title and original_title != title:
+        queries.append("{} {} trailer".format(original_title, year or "").replace("  ", " ").strip())
+    for query in queries:
+        try:
+            response = requests.get(RUTUBE_SEARCH_URL, params={"query": query}, timeout=12,
+                                    headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0 CineVault/1.0"})
+            response.raise_for_status()
+            results = response.json().get("results") or []
+        except (requests.RequestException, ValueError, AttributeError):
+            continue
+        for candidate in results[:20]:
+            if not isinstance(candidate, dict) or not re.fullmatch(r"[0-9a-f]{32}", str(candidate.get("id") or "")):
+                continue
+            score = score_trailer_candidate(candidate, titles, year)
+            if score < 6:
+                continue
+            video_id = candidate["id"]
+            if video_id not in found or found[video_id]["score"] < score:
+                found[video_id] = {
+                    "id": video_id, "provider": "rutube", "score": round(score, 2),
+                    "title": str(candidate.get("title") or "")[:200],
+                    "duration": int(candidate.get("duration") or 0),
+                    "author": str((candidate.get("author") or {}).get("name") or "")[:120],
+                    "embedUrl": "https://rutube.ru/play/embed/{}".format(video_id),
+                }
+        if len(found) >= limit:
+            break
+    return sorted(found.values(), key=lambda item: item["score"], reverse=True)[:limit]
+
+
 def fetch_player_options(kinopoisk_id: Any) -> Dict[str, Any]:
     try:
         resolved_id = int(str(kinopoisk_id).strip())
@@ -1359,6 +1430,11 @@ class MediaLibrary:
                     updated_at TEXT NOT NULL,
                     UNIQUE(catalog_id, kind)
                 );
+                CREATE TABLE IF NOT EXISTS trailer_cache (
+                    cache_key TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    fetched_at INTEGER NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS shared_state (
                     key TEXT PRIMARY KEY,
                     payload_json TEXT NOT NULL,
@@ -2131,6 +2207,27 @@ class MediaLibrary:
             self._db.commit()
         return clean
 
+    def find_trailers(self, title: str, original_title: str = "", year: Any = 0) -> Dict[str, Any]:
+        title = str(title or "").strip()[:200]
+        original_title = str(original_title or "").strip()[:200]
+        try:
+            year_value = int(year or 0)
+        except (TypeError, ValueError):
+            year_value = 0
+        if not title:
+            raise ValueError("Нужно название")
+        key = "{}|{}|{}".format(title.casefold(), original_title.casefold(), year_value)
+        row = self._db.execute("SELECT payload_json, fetched_at FROM trailer_cache WHERE cache_key = ?", (key,)).fetchone()
+        if row and time.time() - int(row["fetched_at"]) < TRAILER_CACHE_SECONDS:
+            return {"items": json.loads(row["payload_json"]), "cached": True}
+        items = search_rutube_trailers(title, original_title, year_value)
+        self._execute(
+            "INSERT INTO trailer_cache(cache_key, payload_json, fetched_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(cache_key) DO UPDATE SET payload_json=excluded.payload_json, fetched_at=excluded.fetched_at",
+            (key, json.dumps(items, ensure_ascii=False), int(time.time())),
+        )
+        return {"items": items, "cached": False}
+
     SHARED_STATE_KEYS = {"pets"}
     MAX_SHARED_STATE_BYTES = 64 * 1024
 
@@ -2164,6 +2261,9 @@ class MediaLibrary:
                 )
                 self._db.commit()
         return self.get_shared_state(key)
+
+    def delete_catalog_progress(self, content_id: str) -> None:
+        self._execute("DELETE FROM catalog_progress WHERE content_id = ?", (str(content_id or "")[:200],))
 
     def clear_catalog_progress(self) -> None:
         self._execute("DELETE FROM catalog_progress")
@@ -2915,6 +3015,13 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
             self.send_json(200, {"items": self.library.list_history()})
         elif parsed.path == "/api/catalog-progress":
             self.send_json(200, {"items": self.library.list_catalog_progress()})
+        elif parsed.path == "/api/trailers":
+            params = urllib.parse.parse_qs(parsed.query)
+            try:
+                self.send_json(200, self.library.find_trailers(
+                    params.get("title", [""])[0], params.get("original", [""])[0], params.get("year", ["0"])[0]))
+            except ValueError as exc:
+                self.send_json(400, {"error": str(exc)})
         elif parsed.path.startswith("/api/shared/"):
             try:
                 self.send_json(200, self.library.get_shared_state(parsed.path[len("/api/shared/"):]))
@@ -3136,6 +3243,12 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/catalog-progress/"):
+            if not self.require_viewer():
+                return
+            self.library.delete_catalog_progress(unquote(parsed.path[len("/api/catalog-progress/"):]))
+            self.send_json(200, {"deleted": True})
+            return
         if parsed.path == "/api/catalog-progress":
             if not self.require_viewer():
                 return
