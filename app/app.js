@@ -5258,10 +5258,42 @@
       .sort((left, right) => right.count - left.count || left.genre.localeCompare(right.genre, "ru"));
   }
 
+  const GENRE_ICONS = Object.freeze({
+    "драма": "🎭", "комедия": "😂", "боевик": "💥", "триллер": "🔪", "ужасы": "👻", "фантастика": "🚀", "фэнтези": "🐉",
+    "мелодрама": "💞", "детектив": "🔍", "криминал": "🕶️", "приключения": "🧭", "мультфильм": "🎨", "аниме": "⛩️",
+    "семейный": "🏡", "военный": "🎖️", "история": "📜", "биография": "👤", "документальный": "🎥", "музыка": "🎵",
+    "мюзикл": "🎤", "спорт": "⚽", "детский": "🧸", "вестерн": "🤠", "короткометражка": "⏱️", "фильм-нуар": "🌒",
+    "реальное тв": "📺", "игра": "🎲", "ток-шоу": "🎙️", "новости": "📰", "концерт": "🎸", "церемония": "🏆",
+  });
+  function genreHue(genre) { let hash = 0; for (const char of genre) hash = (hash * 31 + char.codePointAt(0)) % 360; return hash; }
+  // Genre tiles take a still from a popular title of that genre.
+  function genreCoverMap(genres) {
+    const pool = [...trendingCatalog, ...discoveryItems(), ...catalog];
+    const used = new Set();
+    const covers = new Map();
+    const pick = (genre, field) => pool.find((item) => !used.has(item.id) && item[field] && genresForItem(item).includes(genre));
+    genres.forEach((genre) => {
+      const item = pick(genre, "backdropImage") || pick(genre, "posterImage");
+      if (!item) return;
+      used.add(item.id);
+      covers.set(genre, item.backdropImage ? { url: previewImageUrl(item.backdropImage), poster: false } : { url: previewImageUrl(highResolutionPosterUrl(item.posterImage)), poster: true });
+    });
+    return covers;
+  }
   function catalogGenreButtonsMarkup(genreOptions) {
     const selectedGenre = normalizeCatalogGenre(state.catalogGenre);
-    return [`<button class="genre-chip ${selectedGenre ? "" : "is-active"}" data-catalog-genre="" type="button" aria-pressed="${selectedGenre ? "false" : "true"}"><span>Все жанры</span></button>`, ...genreOptions.map(({ genre }) => `<button class="genre-chip ${selectedGenre === genre ? "is-active" : ""}" data-catalog-genre="${escapeHtml(genre)}" type="button" aria-pressed="${selectedGenre === genre ? "true" : "false"}"><span>${escapeHtml(genre.charAt(0).toLocaleUpperCase("ru-RU") + genre.slice(1))}</span></button>`)].join("");
+    const total = Number(remoteCatalog.facets?.total || 0);
+    const covers = genreCoverMap(genreOptions.map(({ genre }) => genre));
+    const label = (genre) => genre.charAt(0).toLocaleUpperCase("ru-RU") + genre.slice(1);
+    const count = (value) => value ? Number(value).toLocaleString("ru-RU") : "";
+    const allTile = `<button class="genre-card genre-card-all ${selectedGenre ? "" : "is-active"}" data-catalog-genre="" type="button" aria-pressed="${selectedGenre ? "false" : "true"}"><span class="genre-card-icon" aria-hidden="true">✦</span><span class="genre-card-copy"><strong>Все жанры</strong><small>${count(total)}</small></span><span class="genre-card-check" aria-hidden="true">✓</span></button>`;
+    return allTile + genreOptions.map(({ genre, count: genreCount }) => {
+      const cover = covers.get(genre);
+      const active = selectedGenre === genre;
+      return `<button class="genre-card ${active ? "is-active" : ""}" data-catalog-genre="${escapeHtml(genre)}" type="button" aria-pressed="${active}" style="--genre-hue:${genreHue(genre)}">${cover ? `<img class="${cover.poster ? "is-poster" : ""}" src="${escapeHtml(cover.url)}" alt="" loading="lazy" decoding="async">` : ""}<span class="genre-card-icon" aria-hidden="true">${GENRE_ICONS[genre] || "🎬"}</span><span class="genre-card-copy"><strong>${escapeHtml(label(genre))}</strong><small>${count(genreCount)}</small></span><span class="genre-card-check" aria-hidden="true">✓</span></button>`;
+    }).join("");
   }
+
 
   function catalogRatingValue(item) {
     const value = Number(item?.ratingKinopoisk ?? item?.rating ?? item?.imdbRating ?? 0);
@@ -5467,7 +5499,8 @@
     const title = state.view === "favorites" ? "Избранное" : state.view === "evening" ? "Наш вечер" : state.view === "history" ? "История просмотра" : state.view === "movies" ? "Фильмы" : state.view === "series" ? "Сериалы" : state.query ? `Результаты для «${escapeHtml(state.query)}»` : collection ? collection.title : "Каталог";
     const subtitle = state.view === "evening" ? "То, что хочется посмотреть вместе." : state.view === "history" ? "То, к чему можно вернуться в любой момент." : collection?.id === "mood" ? moodDefinition().description : collection ? collection.description : "Ищи по названию, актёрам и жанрам или выбери готовую подборку.";
     const genreButtons = catalogGenreButtonsMarkup(genreOptions);
-    const collectionButtons = [`<button class="collection-chip ${collection ? "" : "is-active"}" data-catalog-collection="" type="button" aria-pressed="${collection ? "false" : "true"}"><strong>Весь каталог</strong><small>Все фильмы и сериалы</small></button>`, ...catalogCollections.map((entry) => `<button class="collection-chip ${collection?.id === entry.id ? "is-active" : ""}" data-catalog-collection="${escapeHtml(entry.id)}" type="button" aria-pressed="${collection?.id === entry.id ? "true" : "false"}"><strong>${escapeHtml(entry.title)}</strong><small>${escapeHtml(entry.id === "mood" ? moodDefinition().description : entry.description)}</small></button>`)].join("");
+    const collectionIcons = { new: "✨", popular: "🔥", evening: "🌙", romance: "💞", thrill: "⚡", anime: "⛩️" };
+    const collectionButtons = [`<button class="studio-tab ${collection ? "" : "is-active"}" data-catalog-collection="" type="button" aria-pressed="${collection ? "false" : "true"}" title="Все фильмы и сериалы"><span aria-hidden="true">🎬</span>Весь каталог</button>`, ...catalogCollections.map((entry) => `<button class="studio-tab ${collection?.id === entry.id ? "is-active" : ""}" data-catalog-collection="${escapeHtml(entry.id)}" type="button" aria-pressed="${collection?.id === entry.id ? "true" : "false"}" title="${escapeHtml(entry.description)}"><span aria-hidden="true">${collectionIcons[entry.id] || "🎞️"}</span>${escapeHtml(entry.title)}</button>`)].join("");
     const activeFilters = [collection ? `Подборка: ${collection.title}` : "", selectedGenre ? `Жанр: ${selectedGenre}` : ""].filter(Boolean).join(" · ");
     const emptyCopy = state.query ? `По запросу «${escapeHtml(state.query)}» ничего не найдено. Измени запрос или сбрось фильтры.` : "Попробуй другой жанр или сбрось фильтры, чтобы снова увидеть весь каталог.";
     const savedView = state.view === "favorites" || state.view === "history";
@@ -5483,10 +5516,10 @@
     const paginationMarkup = items.length && pagination.totalPages > 1
       ? `<nav class="catalog-pagination" aria-label="Листать каталог">${previousPageButton}${nextPageButton}</nav>`
       : "";
-    const genreFilterMarkup = `<div class="catalog-genre-heading"><h3>Жанры</h3></div><div class="genre-list" role="group" aria-label="Фильтр по жанру">${genreButtons}</div>`;
+    const genreFilterMarkup = `<div class="genre-rail-wrap"><div class="genre-rail-head"><h3>Жанры</h3><div class="genre-rail-arrows"><button class="genre-rail-arrow" data-genre-scroll="-1" type="button" aria-label="Прокрутить жанры назад">‹</button><button class="genre-rail-arrow" data-genre-scroll="1" type="button" aria-label="Прокрутить жанры вперёд">›</button></div></div><div class="genre-list genre-rail" role="group" aria-label="Фильтр по жанру">${genreButtons}</div></div>`;
     const catalogMarkup = items.length ? `<div class="poster-grid" id="catalog-results" tabindex="-1">${pageItems.slice(0, 16).map((item) => poster(item)).join("")}${pageItems.length > 16 ? `<div id="catalog-lazy-sentinel" class="catalog-lazy-sentinel" aria-hidden="true"></div>` : ""}</div>${paginationMarkup}` : `<div class="empty-state"><div class="empty-pet">${petVisual()}</div><h2>${savedView ? savedViewEmpty.title : "Ничего не подошло"}</h2><p>${savedView ? savedViewEmpty.copy : emptyCopy}</p>${savedView ? `<a class="primary-button" href="${routeForView("catalog")}" data-view="catalog">${savedViewEmpty.action}</a>` : '<button class="primary-button" data-catalog-reset type="button">Сбросить фильтры</button>'}</div>`;
     const savedViewMarkup = `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div>${catalogMarkup}`;
-    page.innerHTML = savedView ? savedViewMarkup : `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls" aria-labelledby="catalog-filters-title"><div class="catalog-control-top"><div><h2 id="catalog-filters-title">Подобрать фильм</h2><p>Начни с готовой подборки или уточни жанр.</p></div><div class="catalog-control-actions"><label class="catalog-sort"><span>Сортировка</span><select data-catalog-sort><option value="rating"${state.catalogSort === "rating" ? " selected" : ""}>С высоким рейтингом</option><option value="year"${state.catalogSort === "year" ? " selected" : ""}>Сначала новые</option><option value="title"${state.catalogSort === "title" ? " selected" : ""}>По алфавиту</option></select></label><button class="secondary-button catalog-random-button" data-catalog-random type="button"${items.length ? "" : " disabled"}>Выбрать случайно</button></div></div><div class="catalog-collection-heading"><h3>Подборки</h3><span>Автоматически по жанрам, рейтингу и вашей истории</span></div><div class="collection-list" role="group" aria-label="Подборки каталога">${collectionButtons}</div>${genreFilterMarkup}<div class="catalog-result-row">${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}${remoteCatalogLoading ? `<span class="catalog-loading-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span> Обновляю карточки…</span>` : ""}${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${catalogMarkup}`;
+    page.innerHTML = savedView ? savedViewMarkup : `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls catalog-studio" aria-label="Подобрать фильм"><div class="studio-top"><div class="studio-tabs" role="group" aria-label="Подборки каталога">${collectionButtons}</div><div class="studio-actions"><label class="studio-sort"><span class="sr-only">Сортировка</span><select data-catalog-sort><option value="rating"${state.catalogSort === "rating" ? " selected" : ""}>★ С высоким рейтингом</option><option value="year"${state.catalogSort === "year" ? " selected" : ""}>🆕 Сначала новые</option><option value="title"${state.catalogSort === "title" ? " selected" : ""}>🔤 По алфавиту</option></select></label><button class="secondary-button studio-random" data-catalog-random type="button"${items.length ? "" : " disabled"} title="Открыть случайный фильм из выдачи"><span aria-hidden="true">🎲</span> Случайный</button></div></div>${genreFilterMarkup}<div class="catalog-result-row">${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}${remoteCatalogLoading ? `<span class="catalog-loading-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span> Обновляю карточки…</span>` : ""}${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${catalogMarkup}`;
     const liveStatus = $("#catalog-live-status");
     if (liveStatus) window.requestAnimationFrame(() => { liveStatus.textContent = "Каталог обновлён."; });
     bindPageActions();
@@ -6875,6 +6908,10 @@
       });
     }));
     $$('[data-catalog-reset]').forEach((button) => button.addEventListener("click", resetCatalogFilters));
+    const genreRail = $(".genre-rail");
+    $$('[data-genre-scroll]').forEach((button) => button.addEventListener("click", () => genreRail?.scrollBy({ left: Number(button.dataset.genreScroll) * genreRail.clientWidth * .8, behavior: "smooth" })));
+    const activeGenre = genreRail?.querySelector(".genre-card.is-active:not(.genre-card-all)");
+    if (activeGenre) genreRail.scrollLeft = Math.max(0, activeGenre.offsetLeft - (genreRail.clientWidth - activeGenre.offsetWidth) / 2);
     $('[data-catalog-random]')?.addEventListener("click", () => {
       const items = filteredCatalog();
       const item = items[Math.floor(Math.random() * items.length)];
