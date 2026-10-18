@@ -126,3 +126,20 @@ class CatalogProgressTest(unittest.TestCase):
                 self.assertEqual(library.list_catalog_progress(), {})
             finally:
                 library.close()
+
+
+class SharedStateTest(unittest.TestCase):
+    def test_pets_keep_newest_write_and_reject_unknown_keys(self):
+        with tempfile.TemporaryDirectory() as temp:
+            library = server.MediaLibrary(Path(temp), transcode=False)
+            try:
+                self.assertEqual(library.get_shared_state("pets"), {"value": None, "updatedAt": 0})
+                library.put_shared_state("pets", {"updatedAt": 200, "value": {"fox": {"xp": 25}}})
+                stale = library.put_shared_state("pets", {"updatedAt": 100, "value": {"fox": {"xp": 0}}})
+                self.assertEqual(stale["value"], {"fox": {"xp": 25}})
+                with self.assertRaises(KeyError):
+                    library.put_shared_state("secrets", {"updatedAt": 1, "value": {}})
+                with self.assertRaises(ValueError):
+                    library.put_shared_state("pets", {"updatedAt": 300, "value": "x"})
+            finally:
+                library.close()

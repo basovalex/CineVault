@@ -2324,11 +2324,20 @@
 }
   };
 
-  const defaultState = { view: "home", theme: "graphite", companion: "plush", mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "rating", catalogPage: 1, favorites: [], watchlist: [], progress: {}, ratings: {}, history: [], recommendationHistory: [], tasteMemory: [], offline: {}, voiceSelections: {}, playbackSelections: {}, playerVolume: 1, playerMuted: false, rutubeUrl: "", skipSegments: true };
+  const defaultState = { view: "home", theme: "cinema", companion: "plush", pets: {}, mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "rating", catalogPage: 1, favorites: [], watchlist: [], progress: {}, ratings: {}, history: [], recommendationHistory: [], tasteMemory: [], offline: {}, voiceSelections: {}, playbackSelections: {}, playerVolume: 1, playerMuted: false, rutubeUrl: "", skipSegments: true };
   const ROUTE_PATHS = Object.freeze({ home: "/", catalog: "/catalog/", movies: "/movies/", series: "/series/", library: "/library/", favorites: "/favorites/", evening: "/evening/", history: "/history/", settings: "/settings/" });
   const ROUTE_VIEWS = Object.freeze(Object.fromEntries(Object.entries(ROUTE_PATHS).map(([view, path]) => [path, view])));
   let state = loadState();
-  if (state.theme !== "graphite") { state.theme = "graphite"; saveState(); }
+  const THEMES = Object.freeze([
+    { id: "cinema", name: "Кинотеатр", note: "Чёрный зал и зелёный акцент", swatch: ["#0d0c0f", "#28262d", "#00925d"] },
+    { id: "midnight", name: "Полночь", note: "Глубокий синий для ночного просмотра", swatch: ["#070b16", "#18213a", "#4c8dff"] },
+    { id: "duo", name: "Кино на двоих", note: "Тёплый бордо и розовый свет", swatch: ["#120a0d", "#2e1820", "#ff5c8a"] },
+    { id: "popcorn", name: "Попкорн", note: "Графит и янтарь старого кинозала", swatch: ["#100e0b", "#2a251d", "#f5a524"] },
+    { id: "light", name: "Светлая", note: "Для дневного просмотра", swatch: ["#f4f4f6", "#ffffff", "#00925d"] },
+  ]);
+  // Older builds stored "graphite" / "night"; both map to the default theme.
+  if (!THEMES.some((theme) => theme.id === state.theme)) { state.theme = "cinema"; saveState(); }
+  if (!state.pets || typeof state.pets !== "object") state.pets = {};
   const initialRoute = readRouteFromLocation();
   if (initialRoute.type === "view") state.view = initialRoute.view;
   // The catalog is populated only from the current imported/backend data.
@@ -2341,6 +2350,8 @@
   let freshCatalog = [];
   // Cards behind "Продолжить просмотр" that are not on any loaded page.
   let progressCatalog = [];
+  let lastRenderedView = "";
+  let enteringTimer = null;
   // Kinopoisk "popular now" cards, ranked; feeds the hero and the top 10.
   let trendingCatalog = [];
   const importedDetailsLoading = new Set();
@@ -2580,7 +2591,9 @@
     renderRoute(route, { preserveCatalogFilters });
   }
 
+  let assistantCopyAt = 0;
   function setAssistantCopy(text) {
+    assistantCopyAt = Date.now();
     const copy = $("#assistant-copy");
     if (copy) copy.textContent = text;
   }
@@ -2875,6 +2888,7 @@
     if (!progressSyncReady || progressSyncTimer) return;
     progressSyncTimer = window.setTimeout(() => {
       progressSyncTimer = null;
+      awardPetWatchXp();
       Object.entries(state.progress || {}).forEach(([contentId, progress]) => {
         const updatedAt = Number(progress?.updatedAt || 0);
         if (!updatedAt || pushedProgressAt.get(contentId) >= updatedAt) return;
@@ -2919,6 +2933,27 @@
     }
     await loadProgressTitles();
   }
+  function pushSharedState(key, value) {
+    const updatedAt = Number(value?.updatedAt) || Date.now();
+    apiFetch(`/api/shared/${encodeURIComponent(key)}`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ updatedAt, value }), keepalive: true,
+    }).catch(() => {});
+  }
+  async function loadSharedPets() {
+    try {
+      const response = await apiFetch("/api/shared/pets", { cache: "no-store", headers: { accept: "application/json" } });
+      if (!response.ok) return;
+      const payload = await response.json();
+      const remote = payload.value;
+      if (remote && typeof remote === "object" && Number(remote.updatedAt || 0) > Number(state.pets?.updatedAt || 0)) {
+        state.pets = remote;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } else if (Number(state.pets?.updatedAt || 0) > Number(payload.updatedAt || 0)) {
+        pushSharedState("pets", state.pets);
+      }
+    } catch {}
+  }
+
   async function loadProgressTitles() {
     const ids = [...new Set(Object.values(state.progress).filter((progress) => !progress?.completed).map((progress) => String(progress?.titleId || "")).filter(Boolean))]
       .filter((id) => !getTitle(id)).slice(0, 50);
@@ -4390,17 +4425,141 @@
     if (!titleId) return;
     state.history = [titleId, ...state.history.filter((entry) => entry !== titleId)].slice(0, 100);
   }
-  function getPet() { return ({ plush: ["🐶", "Мопс", "уютный помощник по выбору кино"], noir: ["🐈‍⬛", "Нуар", "спокойный советчик"], pixie: ["🐰", "Пикси", "нежный романтик"], moti: ["🐻", "Моти", "любит комедии"] })[state.companion] || ["🐶", "Мопс", "уютный помощник по выбору кино"]; }
-  function petVisual(className = "") { const [emoji, name] = getPet(); return state.companion === "plush" ? `<img class="pet-avatar ${className}" src="./assets/pug-mascot.png" alt="${escapeHtml(name)}">` : `<span class="pet-emoji ${className}" aria-label="${escapeHtml(name)}">${emoji}</span>`; }
-  function syncAssistant() { const [, petName, description] = getPet(); $("#header-pet") && ($("#header-pet").innerHTML = petVisual("header-pet-visual")); $("#header-pet-name") && ($("#header-pet-name").textContent = petName); $("#assistant-name") && ($("#assistant-name").textContent = petName); $("#assistant-pet img")?.setAttribute("alt", petName); $("#assistant-copy") && ($("#assistant-copy").textContent = state.companion === "plush" ? "Я рядом. Иногда ем, иногда сплю, но рекомендации держу под контролем." : `${description}. Подберу фильм под ваше настроение.`); $$(".pet-choice").forEach((button) => button.classList.toggle("is-selected", button.dataset.pet === state.companion)); }
+  // Each pet recommends in its own taste, eats its own food and grows with
+  // the films you finish. Pet progress is shared through the backend.
+  const PETS = Object.freeze({
+    plush: { name: "Мопс", emoji: "🐶", image: "./assets/pug-mascot.webp", role: "Уютный", taste: "комедии, семейное и мультфильмы", genres: ["комедия", "семейный", "мультфильм", "приключения"], avoid: ["ужасы"], food: "печенька", foodEmoji: "🍪", pick: "Мопс принёс в зубах", love: "Мопс виляет хвостом — это его любимое!", fear: "Мопс прячет нос под лапу…", hungry: "Мопс голодно смотрит на печеньки." },
+    noir: { name: "Нуар", emoji: "🐈‍⬛", role: "Загадочный", taste: "триллеры, детективы и криминал", genres: ["триллер", "детектив", "криминал", "фильм-нуар"], avoid: ["мультфильм", "семейный"], food: "рыбка", foodEmoji: "🐟", pick: "Нуар молча подвинул лапой", love: "Нуар довольно щурится.", fear: "Нуар фыркает и уходит спать.", hungry: "Нуар выразительно смотрит на пустую миску." },
+    pixie: { name: "Пикси", emoji: "🐰", role: "Романтик", taste: "мелодрамы и истории о любви", genres: ["мелодрама", "драма", "комедия", "музыка"], avoid: ["ужасы", "боевик"], food: "морковка", foodEmoji: "🥕", pick: "Пикси принесла", love: "Пикси прыгает от счастья!", fear: "Пикси спряталась в норку…", hungry: "Пикси грызёт пустую морковную ботву." },
+    moti: { name: "Моти", emoji: "🐻", role: "Весельчак", taste: "комедии, экшен и приключения", genres: ["боевик", "комедия", "приключения", "фантастика"], avoid: ["документальный"], food: "мёд", foodEmoji: "🍯", pick: "Моти радостно топает с", love: "Моти хохочет и хлопает лапами!", fear: "Моти зевает — скучновато…", hungry: "Моти ищет бочонок мёда." },
+    owl: { name: "Сова", emoji: "🦉", role: "Эрудит", taste: "классика с высоким рейтингом и документальное", genres: ["документальный", "биография", "история", "драма"], avoid: [], food: "ягоды", foodEmoji: "🫐", pick: "Сова рекомендует к просмотру", love: "Сова одобрительно ухает.", fear: "Сова скептически поднимает бровь.", hungry: "Сова задумчиво считает ягоды. Их ноль." },
+    fox: { name: "Лис", emoji: "🦊", role: "Хитрец", taste: "свежие новинки и скрытые жемчужины", genres: ["фантастика", "триллер", "комедия", "детектив"], avoid: [], food: "виноград", foodEmoji: "🍇", pick: "Лис раскопал", love: "Лис хитро улыбается — отличный выбор.", fear: "Лис пожимает плечами.", hungry: "Лис намекает, что виноград закончился." },
+  });
+  const PET_ACCESSORIES = Object.freeze([[2, "🧣", "Шарфик"], [4, "🕶️", "Очки"], [6, "🎩", "Шляпа"], [8, "👑", "Корона"]]);
+  const PET_HUNGER_PER_HOUR = 4;
+  const PET_WATCH_XP = 20;
+  const PET_FEED_XP = 5;
+
+  function currentPetId() { return PETS[state.companion] ? state.companion : "plush"; }
+  function currentPet() { return PETS[currentPetId()]; }
+  function getPet() { const pet = currentPet(); return [pet.emoji, pet.name, `${pet.role.toLowerCase()} советчик: ${pet.taste}`]; }
+  function petProgress(id = currentPetId()) {
+    const entry = state.pets?.[id];
+    return { xp: Math.max(0, Number(entry?.xp) || 0), fedAt: Number(entry?.fedAt) || 0, awarded: Array.isArray(entry?.awarded) ? entry.awarded : [] };
+  }
+  function petFullness(id = currentPetId()) {
+    const { fedAt } = petProgress(id);
+    if (!fedAt) return 40;
+    return Math.max(0, Math.min(100, Math.round(100 - (Date.now() - fedAt) / 3_600_000 * PET_HUNGER_PER_HOUR)));
+  }
+  function petLevel(xp) { return Math.floor(Math.sqrt(Math.max(0, xp) / 25)) + 1; }
+  function petLevelBounds(level) { return [25 * (level - 1) ** 2, 25 * level ** 2]; }
+  function petAccessories(id = currentPetId()) { const level = petLevel(petProgress(id).xp); return PET_ACCESSORIES.filter(([unlock]) => level >= unlock); }
+  function updatePetProgress(id, change) {
+    const next = { ...petProgress(id), ...change };
+    state.pets = { ...(state.pets || {}), [id]: next, updatedAt: Date.now() };
+    saveState();
+    pushSharedState("pets", state.pets);
+  }
+  function feedPet() {
+    const id = currentPetId();
+    const pet = PETS[id];
+    if (petFullness(id) >= 90) return `${pet.name} уже сыт и довольно дремлет.`;
+    updatePetProgress(id, { fedAt: Date.now(), xp: petProgress(id).xp + PET_FEED_XP });
+    setPetState("snack");
+    return `${pet.name} съел ${pet.food} ${pet.foodEmoji} и стал внимательнее к рекомендациям.`;
+  }
+  // A finished film or episode gives the current pet experience once.
+  function awardPetWatchXp() {
+    const id = currentPetId();
+    const progress = petProgress(id);
+    const awarded = new Set(progress.awarded);
+    let gained = 0;
+    Object.entries(state.progress || {}).forEach(([contentId, entry]) => {
+      const finished = entry?.completed || (Number(entry?.duration) > 0 && Number(entry?.position) / Number(entry.duration) >= .9);
+      if (!finished || awarded.has(contentId)) return;
+      awarded.add(contentId);
+      gained += PET_WATCH_XP;
+    });
+    if (!gained) return;
+    const before = petLevel(progress.xp);
+    const xp = progress.xp + gained;
+    state.pets = { ...(state.pets || {}), [id]: { ...progress, xp, awarded: [...awarded].slice(-300) }, updatedAt: Date.now() };
+    pushSharedState("pets", state.pets);
+    if (petLevel(xp) > before) setAssistantCopy(`${PETS[id].name} получил ${petLevel(xp)} уровень! Загляните в настройки — там новый аксессуар.`);
+  }
+  // How much the current pet likes a title; scaled by how well fed it is.
+  function petAffinity(item, id = currentPetId()) {
+    const pet = PETS[id];
+    const tags = new Set(genresForItem(item).map(normalizeCatalogGenre));
+    let score = pet.genres.filter((genre) => tags.has(genre)).length * 1.5 - pet.avoid.filter((genre) => tags.has(genre)).length * 3;
+    const rating = catalogRatingValue(item);
+    if (id === "owl") score += rating >= 8 ? 2.5 : rating >= 7.5 ? 1 : 0;
+    if (id === "fox") {
+      if (Number(item.year) >= new Date().getFullYear() - 1) score += 2;
+      const votes = Number(item.voteCount || 0);
+      if (votes > 0 && votes < 30000 && rating >= 7.2) score += 1.5;
+    }
+    return score * (.5 + petFullness(id) / 200);
+  }
+  function petReaction(item) {
+    const pet = currentPet();
+    const affinity = petAffinity(item);
+    if (affinity >= 2.5) { setAssistantCopy(pet.love); setPetState("happy"); }
+    else if (affinity <= -2) { setAssistantCopy(pet.fear); setPetState("sleep"); }
+  }
+  function petVisual(className = "") {
+    const pet = currentPet();
+    const accessory = petAccessories().slice(-1)[0];
+    const badge = accessory ? `<span class="pet-accessory" aria-hidden="true">${accessory[1]}</span>` : "";
+    const body = pet.image ? `<img class="pet-avatar ${className}" src="${pet.image}" alt="${escapeHtml(pet.name)}">` : `<span class="pet-emoji ${className}" aria-label="${escapeHtml(pet.name)}">${pet.emoji}</span>`;
+    return badge ? `<span class="pet-with-accessory">${body}${badge}</span>` : body;
+  }
+  function syncAssistant() {
+    const pet = currentPet();
+    $("#assistant-name") && ($("#assistant-name").textContent = pet.name);
+    $(".pet-state-snack")?.setAttribute("data-food", pet.foodEmoji);
+    const holder = $("#assistant-pet");
+    if (holder && holder.dataset.pet !== `${currentPetId()}:${petAccessories().length}`) {
+      holder.querySelectorAll(":scope > img, :scope > .pet-emoji, :scope > .pet-with-accessory").forEach((node) => node.remove());
+      holder.insertAdjacentHTML("afterbegin", petVisual("assistant-pet-visual"));
+      holder.dataset.pet = `${currentPetId()}:${petAccessories().length}`;
+      holder.setAttribute("aria-label", `Открыть помощника: ${pet.name}`);
+    }
+    // Reactions and level-ups stay visible for a while instead of being
+    // replaced by the idle line on the next render.
+    if (Date.now() - assistantCopyAt < 12_000) return;
+    const fullness = petFullness();
+    const idle = fullness < 30 ? `${pet.hungry} Покормить можно в настройках.` : `${pet.name} рядом. Любит ${pet.taste} — нажмите, и подберу фильм.`;
+    const copy = $("#assistant-copy");
+    if (copy) copy.textContent = idle;
+  }
   function setPetState(mode = "idle") { const rail = $("#assistant-rail"); const pet = $("#assistant-pet"); if (!rail || !pet) return; rail.classList.remove("is-sleeping", "is-snacking"); pet.classList.remove("is-sleeping", "is-eating", "is-falling", "is-happy"); if (mode === "sleep") { rail.classList.add("is-sleeping"); pet.classList.add("is-sleeping"); } if (mode === "snack") { rail.classList.add("is-snacking"); pet.classList.add("is-eating"); } if (mode === "fall") pet.classList.add("is-falling"); if (mode === "happy") pet.classList.add("is-happy"); }
   function startPetStates() { const modes = ["idle", "snack", "idle", "sleep", "idle", "fall", "happy"]; let index = 0; setPetState(modes[index]); window.setInterval(() => { index = (index + 1) % modes.length; setPetState(modes[index]); }, 5200); }
   function persistAndRender() { saveState(); render(); }
+  // First launch: the raccoon "picks films" while the catalog loads. Later
+  // loads (filters, tabs) show a shimmering skeleton of the page instead.
+  const RACCOON_LINES = ["Выбираем фильмы…", "Енот листает каталог…", "Готовим попкорн…", "Ищем, что посмотреть вдвоём…"];
+  let raccoonTimer = null;
   function renderCatalogLoading() {
-    const viewLabels = { home: "Для вас", catalog: "Каталог", movies: "Фильмы", series: "Сериалы", favorites: "Избранное", evening: "Наш вечер", history: "История просмотра" };
-    const label = viewLabels[state.view] || "Каталог";
-    page.innerHTML = `<section class="catalog-loading-shell" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><div><div class="eyebrow">CineVault</div><h1>${label}</h1><p>Загружаю страницу…</p></div></section>`;
+    window.clearInterval(raccoonTimer);
+    if (catalogHydrating) {
+      const lines = [...RACCOON_LINES, `${currentPet().name} помогает выбирать…`];
+      page.innerHTML = `<section class="raccoon-loader" role="status" aria-live="polite"><div class="raccoon-stage"><img class="raccoon-head" src="./assets/raccoon-loader.webp" alt="" aria-hidden="true"><span class="raccoon-shadow" aria-hidden="true"></span></div><p class="raccoon-text" id="raccoon-text">${escapeHtml(lines[0])}</p><span class="raccoon-bar" aria-hidden="true"><i></i></span></section>`;
+      let index = 0;
+      raccoonTimer = window.setInterval(() => {
+        const label = $("#raccoon-text");
+        if (!label) { window.clearInterval(raccoonTimer); return; }
+        index = (index + 1) % lines.length;
+        label.classList.remove("is-swapping"); void label.offsetWidth; label.classList.add("is-swapping");
+        label.textContent = lines[index];
+      }, 1800);
+      return;
+    }
+    const posters = Array.from({ length: 12 }, () => `<span class="skeleton skeleton-poster"></span>`).join("");
+    page.innerHTML = `<section class="page-skeleton" role="status" aria-live="polite"><span class="sr-only">Загружаю страницу…</span><span class="skeleton skeleton-title"></span><span class="skeleton skeleton-line"></span><div class="skeleton-chips">${Array.from({ length: 6 }, () => `<span class="skeleton skeleton-chip"></span>`).join("")}</div><div class="skeleton-grid">${posters}</div></section>`;
   }
+
 
   function hydrateLazyPosters() {
     if (lazyPosterObserver) lazyPosterObserver.disconnect();
@@ -4662,6 +4821,16 @@
       renderCatalogLoading();
       return;
     }
+    window.clearInterval(raccoonTimer);
+    const viewChanged = lastRenderedView !== state.view;
+    lastRenderedView = state.view;
+    if (viewChanged) {
+      page.classList.remove("is-entering");
+      void page.offsetWidth;
+      page.classList.add("is-entering");
+      window.clearTimeout(enteringTimer);
+      enteringTimer = window.setTimeout(() => page.classList.remove("is-entering"), 1200);
+    }
     if (state.view === "home") renderHome();
     else if (["catalog", "movies", "series", "favorites", "evening", "history"].includes(state.view)) renderCatalogView();
     else if (state.view === "library") renderLibraryView();
@@ -4851,7 +5020,8 @@
     const childInterest = ["мультфильм", "детский", "аниме", "семейный"].reduce((sum, tag) => sum + (profile.genres.get(tag) || 0), 0);
     const adultInterest = [...profile.genres.entries()].filter(([tag]) => !["мультфильм", "детский", "аниме", "семейный"].includes(tag)).reduce((sum, [, value]) => sum + value, 0);
     const childBiasCorrection = isChildLike && adultInterest > childInterest * 1.25 ? -8 : 0;
-    return genreScore + actorScore + directorScore + countryScore + kindScore + yearScore + runtimeScore + moodScoreValue + qualityScore + childBiasCorrection;
+    const petScore = petAffinity(item) * 1.6;
+    return genreScore + actorScore + directorScore + countryScore + kindScore + yearScore + runtimeScore + moodScoreValue + qualityScore + childBiasCorrection + petScore;
   }
 
   function sortPersonalRecommendations(items) {
@@ -5253,12 +5423,46 @@
   }
 
   function renderSettings() {
-    const [, petName] = getPet();
-    const petEmoji = petVisual("settings-pet-visual");
-    page.innerHTML = `<div class="page-heading"><div><div class="eyebrow">Настройки</div><h1>Под себя и для нас</h1><p class="muted">Всё важное хранится на общем backend-сервере.</p></div></div><div class="settings-grid"><section class="settings-card"><h3>Оформление</h3><p>Графитовая тема теперь собрана на серых и угольных поверхностях: спокойный контраст, серебристые акценты и аккуратные фоновые детали. Тёмная тема остаётся полностью спокойной, без бабочек и облачков.</p><div class="setting-actions"><button class="filter-button ${state.theme === "night" ? "is-active" : ""}" data-set-theme="night" type="button">Тёмная без декора</button><button class="filter-button ${state.theme === "graphite" ? "is-active" : ""}" data-set-theme="graphite" type="button">Серый + графит</button></div></section><section class="settings-card"><h3>Питомец</h3><p class="settings-pet-preview">${petEmoji} ${escapeHtml(petName)} сейчас отвечает за подсказки и настроение рекомендаций.</p><button class="primary-button" id="settings-pet" type="button">Выбрать питомца</button></section><section class="settings-card"><h3>TMDB-каталог</h3><p>${escapeHtml(tmdbStatus)}</p><small class="muted">TMDB добавляет реальные постеры, описания, рейтинги, сезоны и трейлеры. Ключ хранится только локально.</small><p class="attribution">This product uses the TMDB API but is not endorsed or certified by TMDB.</p></section><section class="settings-card"><h3>RUTUBE-плеер</h3><p>Вставь ссылку на разрешённое видео RUTUBE, чтобы открыть его встроенным плеером и сохранять позицию просмотра.</p><div class="provider-input"><input id="rutube-url" type="url" value="${escapeHtml(state.rutubeUrl || "")}" placeholder="https://rutube.ru/video/..." autocomplete="off"><button class="primary-button" id="rutube-open" type="button">Открыть</button></div><button class="secondary-button" id="rutube-test" type="button">Проверить тестовый плеер</button><p id="rutube-feedback" class="muted small" aria-live="polite"></p></section><section class="settings-card"><h3>Продолжение просмотра</h3><p>Прогресс и история серий сохраняются на общем backend и видны всем пользователям. Плееры продолжают с последней сохранённой позиции.</p><button class="secondary-button" data-clear-progress type="button">Очистить локальный кэш прогресса</button></section><section class="settings-card"><h3>Видеоисточники</h3><p>В каталоге остаются только подключённые разрешённые источники: открытые фильмы и официальный RUTUBE. Остальные карточки используются для метаданных и рекомендаций без кнопок внешнего просмотра.</p><small class="muted">Новый источник можно добавить только при наличии права на встраивание или прямого разрешённого потока.</small></section></div>`;
-    $(".settings-grid")?.insertAdjacentHTML("beforeend", `<section class="settings-card settings-card-wide"><h3>Демо: LegalDemoProvider</h3><p>Оффлайн-адаптер для проверки каталога, сезонов, серий и выбора перевода. Он читает только локальные fixtures и не обращается к сайтам, proxy или cookies.</p><div class="provider-input"><input id="hdrezka-query" type="search" value="Тестовый сериал" placeholder="Например, Тестовый сериал" autocomplete="off"><button class="secondary-button" id="hdrezka-search" type="button">Искать</button></div><div class="provider-input hdrezka-episode-inputs"><label>Сезон <input id="hdrezka-season" type="number" min="1" value="1"></label><label>Серия <input id="hdrezka-episode" type="number" min="1" value="1"></label></div><p id="hdrezka-feedback" class="muted small" aria-live="polite"></p><div id="hdrezka-results"></div></section>`);
+    const petId = currentPetId();
+    const pet = PETS[petId];
+    const progress = petProgress(petId);
+    const level = petLevel(progress.xp);
+    const [levelStart, levelEnd] = petLevelBounds(level);
+    const levelPct = Math.round((progress.xp - levelStart) / Math.max(1, levelEnd - levelStart) * 100);
+    const fullness = petFullness(petId);
+    const mood = fullness >= 70 ? "Сыт и в отличном настроении" : fullness >= 30 ? "Немного проголодался" : pet.hungry;
+    const themeCards = THEMES.map((theme) => `<button class="theme-option${state.theme === theme.id ? " is-active" : ""}" data-set-theme="${theme.id}" type="button" aria-pressed="${state.theme === theme.id}"><span class="theme-swatch" aria-hidden="true">${theme.swatch.map((color) => `<i style="background:${color}"></i>`).join("")}</span><strong>${escapeHtml(theme.name)}</strong><small>${escapeHtml(theme.note)}</small></button>`).join("");
+    const petCards = Object.entries(PETS).map(([id, item]) => {
+      const itemLevel = petLevel(petProgress(id).xp);
+      return `<button class="pet-option${id === petId ? " is-active" : ""}" data-choose-pet="${id}" type="button" aria-pressed="${id === petId}"><span class="pet-option-avatar" aria-hidden="true">${item.image ? `<img src="${item.image}" alt="">` : item.emoji}</span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.role)} · ур. ${itemLevel}</small></button>`;
+    }).join("");
+    const accessories = PET_ACCESSORIES.map(([unlock, icon, label]) => `<span class="pet-accessory-chip${level >= unlock ? " is-unlocked" : ""}" title="${escapeHtml(label)} — с ${unlock} уровня">${level >= unlock ? icon : "🔒"} ${escapeHtml(label)}</span>`).join("");
+    page.innerHTML = `<div class="page-heading"><div><h1>Настройки</h1><p class="muted">Тема, питомец и ваша история просмотра.</p></div></div>
+<section class="settings-section"><h2>Питомец</h2><p class="muted">Питомец подбирает фильмы на свой вкус. Чем он сытее, тем точнее советы, а за досмотренные фильмы он растёт и получает аксессуары.</p>
+<div class="pet-options">${petCards}</div>
+<div class="pet-panel"><div class="pet-panel-avatar">${petVisual("settings-pet-visual")}</div><div class="pet-panel-body"><h3>${escapeHtml(pet.name)} · ${escapeHtml(pet.role)}</h3><p>Любит ${escapeHtml(pet.taste)}. Ест: ${escapeHtml(pet.food)} ${pet.foodEmoji}</p>
+<div class="pet-meter"><span>Сытость</span><i style="--value:${fullness}%"></i><b>${fullness}%</b></div>
+<div class="pet-meter"><span>Уровень ${level}</span><i style="--value:${levelPct}%"></i><b>${progress.xp} XP</b></div>
+<p class="pet-mood" id="pet-mood">${escapeHtml(mood)}</p>
+<div class="pet-actions"><button class="primary-button" id="pet-feed" type="button">Покормить ${pet.foodEmoji}</button><button class="secondary-button" id="pet-recommend" type="button">Что посмотреть?</button></div>
+<div class="pet-accessories">${accessories}</div></div></div></section>
+<section class="settings-section"><h2>Тема</h2><div class="theme-options">${themeCards}</div></section>
+<section class="settings-section"><h2>Просмотр</h2>
+<label class="settings-toggle"><input type="checkbox" id="settings-skip"${state.skipSegments !== false ? " checked" : ""}><span><strong>Пропускать заставки автоматически</strong><small>Если для серии известны тайминги вступления и титров.</small></span></label>
+<div class="settings-row"><div><strong>История просмотра</strong><small>Удалит «Продолжить просмотр» и историю на всех устройствах. Питомец свой опыт сохранит.</small></div><button class="secondary-button danger-button" id="settings-clear-history" type="button">Очистить историю</button></div></section>
+<details class="settings-admin"><summary>Для администратора</summary><div class="settings-grid"><section class="settings-card"><h3>TMDB-каталог</h3><p>${escapeHtml(tmdbStatus)}</p><small class="muted">TMDB добавляет реальные постеры, описания, рейтинги, сезоны и трейлеры. Ключ хранится только локально.</small><p class="attribution">This product uses the TMDB API but is not endorsed or certified by TMDB.</p></section><section class="settings-card"><h3>RUTUBE-плеер</h3><p>Вставь ссылку на разрешённое видео RUTUBE, чтобы открыть его встроенным плеером и сохранять позицию просмотра.</p><div class="provider-input"><input id="rutube-url" type="url" value="${escapeHtml(state.rutubeUrl || "")}" placeholder="https://rutube.ru/video/..." autocomplete="off"><button class="primary-button" id="rutube-open" type="button">Открыть</button></div><button class="secondary-button" id="rutube-test" type="button">Проверить тестовый плеер</button><p id="rutube-feedback" class="muted small" aria-live="polite"></p></section><section class="settings-card settings-card-wide"><h3>Демо: LegalDemoProvider</h3><p>Оффлайн-адаптер для проверки каталога, сезонов, серий и выбора перевода. Он читает только локальные fixtures и не обращается к сайтам, proxy или cookies.</p><div class="provider-input"><input id="hdrezka-query" type="search" value="Тестовый сериал" placeholder="Например, Тестовый сериал" autocomplete="off"><button class="secondary-button" id="hdrezka-search" type="button">Искать</button></div><div class="provider-input hdrezka-episode-inputs"><label>Сезон <input id="hdrezka-season" type="number" min="1" value="1"></label><label>Серия <input id="hdrezka-episode" type="number" min="1" value="1"></label></div><p id="hdrezka-feedback" class="muted small" aria-live="polite"></p><div id="hdrezka-results"></div></section></div></details>`;
     bindPageActions();
-    $("#settings-pet")?.addEventListener("click", openCompanion);
+    $$("[data-choose-pet]").forEach((button) => button.addEventListener("click", () => { state.companion = button.dataset.choosePet; saveState(); syncAssistant(); setAssistantCopy(`${currentPet().name} теперь с вами. Любит ${currentPet().taste}.`); setPetState("happy"); renderSettings(); }));
+    $("#pet-feed")?.addEventListener("click", () => { const message = feedPet(); setAssistantCopy(message); renderSettings(); const moodLine = $("#pet-mood"); if (moodLine) moodLine.textContent = message; });
+    $("#pet-recommend")?.addEventListener("click", () => $("#assistant-recommend")?.click());
+    $("#settings-skip")?.addEventListener("change", (event) => { state.skipSegments = event.currentTarget.checked; saveState(); });
+    $("#settings-clear-history")?.addEventListener("click", (event) => {
+      const button = event.currentTarget;
+      if (button.dataset.confirm !== "1") { button.dataset.confirm = "1"; button.textContent = "Точно очистить?"; window.setTimeout(() => { if (button.isConnected) { button.dataset.confirm = ""; button.textContent = "Очистить историю"; } }, 4000); return; }
+      state.progress = {}; state.history = []; pushedProgressAt.clear();
+      apiFetch("/api/catalog-progress", { method: "DELETE" }).catch(() => {});
+      saveState(); button.textContent = "История очищена"; button.disabled = true;
+    });
   }
 
   function detailList(value) {
@@ -5292,6 +5496,7 @@
     }
     stopDetailPrebuffer();
     const enteringTitle = activeTitleId !== id;
+    if (enteringTitle) petReaction(item);
     // Loading metadata and episodes finishes after the page is already open.
     // Rebuilding the detail DOM must not throw the reader back to the top.
     const preservedScrollY = enteringTitle ? 0 : window.scrollY;
@@ -6394,7 +6599,7 @@
         saveState();
       });
     });
-    $$('[data-set-theme]').forEach((button) => button.addEventListener("click", () => { state.theme = "graphite"; persistAndRender(); }));
+    $$('[data-set-theme]').forEach((button) => button.addEventListener("click", () => { state.theme = THEMES.some((theme) => theme.id === button.dataset.setTheme) ? button.dataset.setTheme : "cinema"; persistAndRender(); }));
     $$('[data-clear-progress]').forEach((button) => button.addEventListener("click", () => { state.progress = {}; pushedProgressAt.clear(); apiFetch("/api/catalog-progress", { method: "DELETE" }).catch(() => {}); persistAndRender(); }));
     $$('[data-catalog-genre]').forEach((button) => button.addEventListener("click", () => {
       const genre = normalizeCatalogGenre(button.dataset.catalogGenre);
@@ -6536,7 +6741,7 @@
 
   $("#assistant-collapse")?.addEventListener("click", (event) => { const collapsed = $("#assistant-rail").classList.toggle("is-collapsed"); event.currentTarget.setAttribute("aria-expanded", String(!collapsed)); event.currentTarget.setAttribute("aria-label", collapsed ? "Развернуть помощника" : "Свернуть помощника"); });
   $("#assistant-pet")?.addEventListener("click", () => { assistantPaginationDismissed = true; $("#assistant-rail").classList.remove("is-collapsed", "is-pagination-collapsed"); setPetState("happy"); setAssistantCopy("Я выберу вариант по твоему вкусу, настроению и истории просмотра."); });
-  $("#assistant-recommend")?.addEventListener("click", () => { setAssistantCopy("Секунду, ищу что-нибудь подходящее…"); const pick = nextRecommendation(); if (!pick) { setAssistantCopy("Пока не нашёл подходящих вариантов."); return; } setPetState("happy"); openTitleRoute(pick.id, { recommendation: true }); });
+  $("#assistant-recommend")?.addEventListener("click", () => { setAssistantCopy("Секунду, ищу что-нибудь подходящее…"); const pick = nextRecommendation(); if (!pick) { setAssistantCopy("Пока не нашёл подходящих вариантов."); return; } setPetState("happy"); setAssistantCopy(`${currentPet().pick} «${pick.title}».`); openTitleRoute(pick.id, { recommendation: true }); });
 
   startPetStates();
   // Solid top bar once the page scrolls past the hero's top edge.
@@ -6561,7 +6766,7 @@
     loadLibraryData(false)
       .then(() => render())
       .catch(() => {});
-    Promise.all([importedCatalog, loadCatalogProgress()])
+    Promise.all([importedCatalog, loadCatalogProgress(), loadSharedPets()])
       .then(() => { if (state.view === "home" || state.view === "history") render(); })
       .catch(() => {});
     return importedCatalog;

@@ -1359,6 +1359,11 @@ class MediaLibrary:
                     updated_at TEXT NOT NULL,
                     UNIQUE(catalog_id, kind)
                 );
+                CREATE TABLE IF NOT EXISTS shared_state (
+                    key TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS catalog_progress (
                     content_id TEXT PRIMARY KEY,
                     title_id TEXT NOT NULL,
@@ -2126,6 +2131,40 @@ class MediaLibrary:
             self._db.commit()
         return clean
 
+    SHARED_STATE_KEYS = {"pets"}
+    MAX_SHARED_STATE_BYTES = 64 * 1024
+
+    def get_shared_state(self, key: str) -> Dict[str, Any]:
+        if key not in self.SHARED_STATE_KEYS:
+            raise KeyError("Неизвестный ключ")
+        row = self._db.execute("SELECT payload_json, updated_at FROM shared_state WHERE key = ?", (key,)).fetchone()
+        if not row:
+            return {"value": None, "updatedAt": 0}
+        return {"value": json.loads(row["payload_json"]), "updatedAt": int(row["updated_at"])}
+
+    def put_shared_state(self, key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Small shared JSON documents (pet progress); the newest write wins."""
+        if key not in self.SHARED_STATE_KEYS:
+            raise KeyError("Неизвестный ключ")
+        try:
+            updated_at = int(payload.get("updatedAt") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("updatedAt должен быть числом") from exc
+        value = payload.get("value")
+        encoded = json.dumps(value, ensure_ascii=False)
+        if updated_at <= 0 or not isinstance(value, dict) or len(encoded.encode("utf-8")) > self.MAX_SHARED_STATE_BYTES:
+            raise ValueError("Нужен объект value до 64 КБ и updatedAt")
+        with self._lock:
+            row = self._db.execute("SELECT updated_at FROM shared_state WHERE key = ?", (key,)).fetchone()
+            if not row or int(row["updated_at"]) < updated_at:
+                self._db.execute(
+                    "INSERT INTO shared_state(key, payload_json, updated_at) VALUES (?, ?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=excluded.updated_at",
+                    (key, encoded, updated_at),
+                )
+                self._db.commit()
+        return self.get_shared_state(key)
+
     def clear_catalog_progress(self) -> None:
         self._execute("DELETE FROM catalog_progress")
 
@@ -2876,6 +2915,11 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
             self.send_json(200, {"items": self.library.list_history()})
         elif parsed.path == "/api/catalog-progress":
             self.send_json(200, {"items": self.library.list_catalog_progress()})
+        elif parsed.path.startswith("/api/shared/"):
+            try:
+                self.send_json(200, self.library.get_shared_state(parsed.path[len("/api/shared/"):]))
+            except KeyError as exc:
+                self.send_json(404, {"error": str(exc)})
         elif parsed.path.startswith("/api/library/episodes/") and parsed.path.endswith("/skip-segments"):
             episode_id = parsed.path.split("/")[4]
             try:
@@ -3061,6 +3105,16 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
 
     def do_PUT(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/shared/"):
+            if not self.require_viewer():
+                return
+            try:
+                self.send_json(200, self.library.put_shared_state(parsed.path[len("/api/shared/"):], self.read_json()))
+            except KeyError as exc:
+                self.send_json(404, {"error": str(exc)})
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+            return
         if parsed.path.startswith("/api/catalog-progress/"):
             if not self.require_viewer():
                 return
