@@ -2763,7 +2763,7 @@
     return item || null;
   }
 
-  async function loadRemoteCatalogPage(pageNumber = 1, { initial = false } = {}) {
+  async function loadRemoteCatalogPage(pageNumber = 1, { initial = false, quiet = false } = {}) {
     const requestId = ++remoteCatalogRequest;
     try {
       const savedIds = state.view === "favorites" ? state.favorites : state.view === "history" ? state.history : null;
@@ -2782,7 +2782,9 @@
       if (state.catalogCollection) params.set("collection", state.catalogCollection);
       remoteCatalogLoading = true;
       remoteCatalogError = false;
-      if (!initial && catalog.length) renderCatalogView();
+      // Paging keeps the current cards on screen (dimmed) until the next
+      // page arrives instead of re-rendering mid-load.
+      if (!initial && !quiet && catalog.length) renderCatalogView();
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 15000);
       let response;
@@ -4731,10 +4733,13 @@
     }), { rootMargin: "300px 0px" });
     nodes.forEach((node) => lazyPosterObserver.observe(node));
   }
+  let catalogPaging = false;
   function scrollToCatalogResults() {
     const results = $("#catalog-results");
     if (!results) return;
-    const top = Math.max(0, results.getBoundingClientRect().top + window.scrollY - 24);
+    // Leave room for the fixed top bar on desktop.
+    const headerOffset = window.matchMedia("(min-width: 1051px)").matches ? (parseFloat(getComputedStyle(app).getPropertyValue("--header-h")) || 0) : 0;
+    const top = Math.max(0, results.getBoundingClientRect().top + window.scrollY - headerOffset - 24);
     window.scrollTo({ top, behavior: "smooth" });
     results.focus({ preventScroll: true });
   }
@@ -6847,13 +6852,25 @@
     $$('[data-catalog-page]').forEach((button) => button.addEventListener("click", () => {
       const nextPage = Number(button.dataset.catalogPage);
       const pagination = catalogPagination(filteredCatalog());
-      if (!Number.isInteger(nextPage) || nextPage < 1 || nextPage > pagination.totalPages) return;
-      scrollToCatalogResults();
+      if (catalogPaging || !Number.isInteger(nextPage) || nextPage < 1 || nextPage > pagination.totalPages) return;
+      catalogPaging = true;
+      const results = $("#catalog-results");
+      results?.classList.add("is-paging");
+      results?.setAttribute("aria-busy", "true");
+      results?.insertAdjacentHTML("beforebegin", `<div class="catalog-paging-indicator" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span>Загружаю страницу ${nextPage}…</div>`);
+      $$(".catalog-page-arrow").forEach((arrow) => { arrow.disabled = true; });
+      button.classList.add("is-loading");
+      button.innerHTML = `<span class="loading-spinner" aria-hidden="true"></span>`;
       state.catalogPage = nextPage;
       saveState();
-      loadRemoteCatalogPage(nextPage).then(() => {
+      loadRemoteCatalogPage(nextPage, { quiet: true }).finally(() => {
+        catalogPaging = false;
         window.requestAnimationFrame(() => {
-          scrollToCatalogResults();
+          const fresh = $("#catalog-results");
+          if (!fresh) return;
+          fresh.classList.add("is-paged-in");
+          const headerOffset = (parseFloat(getComputedStyle(app).getPropertyValue("--header-h")) || 0) + 16;
+          if (fresh.getBoundingClientRect().top < headerOffset) scrollToCatalogResults();
         });
       });
     }));

@@ -1225,3 +1225,13 @@ html:has(.app-shell[data-theme="light"]), html:has(.app-shell[data-theme="light"
 .trailer-sources { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
 .trailer-sources button { min-height: 34px; padding: 6px 14px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-weight: 500; cursor: pointer; }
 .trailer-sources button.is-active { background: var(--accent); color: #fff; }
+
+/* ===== Catalog paging ===== */
+.poster-grid.is-paging > * { opacity: .35; filter: saturate(.6); pointer-events: none; transition: opacity .2s ease, filter .2s ease; }
+.catalog-paging-indicator { position: sticky; top: calc(var(--header-h, 0px) + 14px); z-index: 6; display: flex; align-items: center; gap: 10px; width: max-content; margin: 0 auto 14px; padding: 9px 16px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--surface) 92%, transparent); color: var(--text); font-size: 14px; box-shadow: var(--shadow); backdrop-filter: blur(10px); animation: fade-up .2s ease both; }
+.catalog-paging-indicator .loading-spinner, .catalog-page-arrow.is-loading .loading-spinner { width: 16px; height: 16px; border-width: 2px; }
+.catalog-page-arrow.is-loading { pointer-events: none; }
+.poster-grid.is-paged-in > * { animation: fade-up .4s ease both; }
+.poster-grid.is-paged-in > :nth-child(2) { animation-delay: .03s; } .poster-grid.is-paged-in > :nth-child(3) { animation-delay: .06s; } .poster-grid.is-paged-in > :nth-child(4) { animation-delay: .09s; }
+.poster-grid.is-paged-in > :nth-child(5) { animation-delay: .12s; } .poster-grid.is-paged-in > :nth-child(6) { animation-delay: .15s; } .poster-grid.is-paged-in > :nth-child(7) { animation-delay: .18s; }
+.poster-grid.is-paged-in > :nth-child(n+8) { animation-delay: .21s; }
