@@ -120,7 +120,7 @@ def catalog_entry(row: Dict[str, Any]) -> Dict[str, Any]:
 def fetch_page(session: requests.Session, token: str, page: int, limit: int,
                updated_since: Optional[date] = None, kind: str = "all",
                year: Any = None, min_votes: int = 0,
-               sort_votes: bool = False, list_slug: str = "") -> Dict[str, Any]:
+               sort_votes: bool = False, list_slug: str = "", max_votes: int = 0) -> Dict[str, Any]:
     params: list[tuple[str, Any]] = [
         ("page", page), ("limit", limit),
         ("sortField", "votes.kp" if sort_votes else "updatedAt" if updated_since else "id"),
@@ -136,7 +136,7 @@ def fetch_page(session: requests.Session, token: str, page: int, limit: int,
     if year is not None:
         params.append(("year", year))
     if min_votes:
-        params.append(("votes.kp", "{}-99999999".format(min_votes)))
+        params.append(("votes.kp", "{}-{}".format(min_votes, max_votes or 99999999)))
     if kind == "series":
         params.append(("isSeries", "true"))
     elif kind == "movie":
@@ -357,9 +357,89 @@ def sync_popular(token: str, catalog_path: Path, metadata_path: Path, state_path
     return totals
 
 
+# The demo API plan serves only pages 1-10 (2500 cards) of any query, so the
+# full backfill walks small slices: one year and kind, split by vote ranges
+# when a year still has more than 2500 known titles.
+DEMO_PAGE_LIMIT = 10
+VOTE_SPLITS = ((1000, 3000), (3000, 10000), (10000, 40000), (40000, 0))
+
+
+def sync_slices(token: str, catalog_path: Path, metadata_path: Path, state_path: Path,
+                max_requests: int, limit: int, delay_seconds: float, min_votes: int,
+                dry_run: bool = False) -> Dict[str, int]:
+    legacy = read_json(catalog_path, [])
+    existing = read_json(metadata_path, [])
+    if not isinstance(legacy, list) or not isinstance(existing, list):
+        raise ValueError("Файлы каталога должны содержать массивы")
+    hidden = deleted_ids(state_path.parent)
+    legacy_ids = {positive_int(item.get("kinopoiskId")) for item in legacy if isinstance(item, dict)} | hidden
+    cards = {positive_int(item.get("kinopoiskId")): item for item in existing
+             if isinstance(item, dict) and positive_int(item.get("kinopoiskId"))}
+    for kp_id in hidden & cards.keys():
+        cards.pop(kp_id)
+    state = read_json(state_path, {})
+    state = dict(state) if isinstance(state, dict) else {}
+    done = set(state.get("slices_done") or [])
+    split = set(state.get("slices_split") or [])
+    this_year = date.today().year
+    slices = []
+    for year in range(this_year + 1, 1899, -1):
+        for kind in ("movie", "series"):
+            key = "{}:{}:{}-0".format(year, kind, min_votes)
+            if key in split:
+                slices.extend("{}:{}:{}-{}".format(year, kind, low, high) for low, high in VOTE_SPLITS if low >= min_votes)
+            else:
+                slices.append(key)
+    totals = {"requests": 0, "slices": 0, "seen": 0, "created": 0, "updated": 0, "skipped": 0, "remaining": 0}
+    with requests.Session() as session:
+        for key in slices:
+            if key in done:
+                continue
+            if totals["requests"] >= max_requests:
+                totals["remaining"] += 1
+                continue
+            year_text, kind, votes = key.split(":")
+            low, high = (int(value) for value in votes.split("-"))
+            page = 1
+            finished = False
+            while totals["requests"] < max_requests:
+                payload = fetch_page(session, token, page, limit, kind=kind, year=int(year_text),
+                                     min_votes=low, max_votes=high, sort_votes=True)
+                totals["requests"] += 1
+                pages = positive_int(payload.get("pages"))
+                if page == 1 and pages > DEMO_PAGE_LIMIT and high == 0 and low == min_votes and key not in split:
+                    # Too big for the demo plan: replace with vote-range slices.
+                    split.add(key)
+                    slices.extend("{}:{}:{}-{}".format(year_text, kind, a, b) for a, b in VOTE_SPLITS if a >= min_votes)
+                    finished = True
+                    break
+                result = merge_page(payload["docs"], cards, legacy_ids, require_complete=True)
+                for name in ("seen", "created", "updated", "skipped"):
+                    totals[name] += result[name]
+                if page >= min(pages, DEMO_PAGE_LIMIT) or not payload["docs"]:
+                    finished = True
+                    if key not in split:
+                        done.add(key)
+                    break
+                page += 1
+                if delay_seconds:
+                    time.sleep(delay_seconds)
+            totals["slices"] += 1 if finished else 0
+            if not finished:
+                totals["remaining"] += 1
+            if not dry_run:
+                save_json_atomic(metadata_path, list(cards.values()))
+                state.update({"provider": "kinopoisk.dev-v1.4", "slices_done": sorted(done), "slices_split": sorted(split),
+                              "slices_last_run": date.today().isoformat()})
+                save_json_atomic(state_path, state)
+            if delay_seconds:
+                time.sleep(delay_seconds)
+    return totals
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Добавить или обновить карточки Kinopoisk.dev без видеопотоков")
-    parser.add_argument("--mode", choices=("backfill", "daily", "popular"), default="backfill",
+    parser.add_argument("--mode", choices=("backfill", "daily", "popular", "slices"), default="backfill",
                         help="backfill постепенно обходит всю базу; daily обновляет последние изменения; "
                              "popular обновляет подборки «Популярные фильмы» и «Популярные сериалы»")
     parser.add_argument("--kind", choices=("all", "movie", "series"), default="all",
@@ -387,6 +467,16 @@ def main() -> int:
     token = api_token()
     if not token:
         parser.error("Задай CINEVAULT_KINOPOISK_DEV_TOKEN в окружении")
+    if args.mode == "slices":
+        try:
+            result = sync_slices(token, args.catalog_path, args.metadata_path, args.state_path,
+                                 args.pages, args.limit, args.delay_seconds, args.min_votes or 1000, args.dry_run)
+        except (OSError, ValueError, requests.RequestException, json.JSONDecodeError) as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", "")
+            parser.exit(1, "Догрузка по годам остановлена: {}{}\n".format(type(exc).__name__, " {}".format(status) if status else ""))
+        print("{}: запросов {requests}, срезов {slices}, просмотрено {seen}, добавлено {created}, обновлено {updated}, "
+              "пропущено {skipped}, осталось срезов {remaining}".format("Проверено" if args.dry_run else "Сохранено", **result))
+        return 0
     if args.mode == "popular":
         try:
             result = sync_popular(token, args.catalog_path, args.metadata_path, args.state_path,
@@ -403,7 +493,8 @@ def main() -> int:
                       mode=args.mode, lookback_days=args.lookback_days, kind=args.kind,
                       min_votes=args.min_votes, require_complete=args.require_complete)
     except (OSError, ValueError, requests.RequestException, json.JSONDecodeError) as exc:
-        parser.exit(1, "Синхронизация остановлена на текущей странице: {}\n".format(type(exc).__name__))
+        status = getattr(getattr(exc, "response", None), "status_code", "")
+        parser.exit(1, "Синхронизация остановлена на текущей странице: {}{}\n".format(type(exc).__name__, " {}".format(status) if status else ""))
     print("{}: режим {}, тип {}, страниц {{pages}}, просмотрено {{seen}}, добавлено {{created}}, обновлено {{updated}}, пропущено {{skipped}}, следующая страница {{next_page}}".format(
         "Проверено" if args.dry_run else "Сохранено", args.mode, args.kind).format(
         **result))

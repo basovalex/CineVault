@@ -47,11 +47,15 @@ class AllohaAuditor:
                 checked_at TEXT
             )"""
         )
+        columns = {row[1] for row in self.db.execute(f"PRAGMA table_info({ALLOHA_TABLE})")}
+        if "priority" not in columns:
+            self.db.execute(f"ALTER TABLE {ALLOHA_TABLE} ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
         self.db.commit()
 
-    def sync_ids(self, ids: list[int]) -> int:
+    def sync_ids(self, ids: list[int], priority: int = 0) -> int:
         before = self.db.total_changes
-        self.db.executemany(f"INSERT OR IGNORE INTO {ALLOHA_TABLE} (kinopoisk_id) VALUES (?)", ((value,) for value in ids))
+        self.db.executemany(f"INSERT OR IGNORE INTO {ALLOHA_TABLE} (kinopoisk_id, priority) VALUES (?, ?)", ((value, priority) for value in ids))
+        self.db.executemany(f"UPDATE {ALLOHA_TABLE} SET priority = ? WHERE kinopoisk_id = ? AND priority < ?", ((priority, value, priority) for value in ids))
         self.db.commit()
         return self.db.total_changes - before
 
@@ -62,7 +66,7 @@ class AllohaAuditor:
             f"""SELECT kinopoisk_id FROM {ALLOHA_TABLE}
                 WHERE (available IS NULL AND failures < 5)
                    OR (available = 0 AND checked_at < ?)
-                ORDER BY available IS NOT NULL, kinopoisk_id DESC LIMIT 1""",
+                ORDER BY available IS NOT NULL, priority DESC, kinopoisk_id DESC LIMIT 1""",
             (datetime.fromtimestamp(time.time() - RECHECK_MISSING_DAYS * 86400, timezone.utc).isoformat(),),
         ).fetchone()
         return int(row[0]) if row else None
@@ -98,8 +102,11 @@ def main() -> int:
     auditor = AllohaAuditor(args.state_path)
     # Cards in the catalog plus titles player 1 gave up on: Alloha may have them.
     data_dir = args.state_path.parent
-    queue_ids = lambda: catalog_ids(args.catalog_path, args.metadata_path) + sorted(read_audit_ids(data_dir, ("deleted", "missing")) | read_tombstones(data_dir))
-    auditor.sync_ids(queue_ids())
+    def queue_ids() -> None:
+        # Catalog cards first; titles player 1 gave up on after them.
+        auditor.sync_ids(sorted(read_audit_ids(data_dir, ("deleted", "missing")) | read_tombstones(data_dir)), priority=1)
+        auditor.sync_ids(catalog_ids(args.catalog_path, args.metadata_path), priority=2)
+    queue_ids()
     if args.status:
         print(json.dumps(auditor.stats(), ensure_ascii=False))
         return 0
@@ -107,7 +114,7 @@ def main() -> int:
     processed = 0
     while not args.max_items or processed < args.max_items:
         if time.monotonic() - synced_at > RESYNC_INTERVAL_SECONDS:
-            auditor.sync_ids(queue_ids())
+            queue_ids()
             synced_at = time.monotonic()
         kinopoisk_id = auditor.next_id()
         if kinopoisk_id is None:
