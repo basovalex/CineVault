@@ -4774,7 +4774,7 @@
     window.clearInterval(raccoonTimer);
     if (catalogHydrating) {
       const lines = [...RACCOON_LINES, `${currentPet().name} помогает выбирать…`];
-      page.innerHTML = `<section class="raccoon-loader" role="status" aria-live="polite"><div class="raccoon-stage"><img class="raccoon-head" src="./assets/raccoon-loader.webp?v=3" alt="" aria-hidden="true" decoding="async"></div><p class="raccoon-text" id="raccoon-text">${escapeHtml(lines[0])}</p><span class="raccoon-bar" aria-hidden="true"><i></i></span></section>`;
+      page.innerHTML = `<section class="raccoon-loader" role="status" aria-live="polite"><div class="raccoon-stage"><img class="raccoon-head" src="./assets/raccoon-loader.webp?v=4" alt="" aria-hidden="true" decoding="async"></div><p class="raccoon-text" id="raccoon-text">${escapeHtml(lines[0])}</p><span class="raccoon-bar" aria-hidden="true"><i></i></span></section>`;
       let index = 0;
       raccoonTimer = window.setInterval(() => {
         const label = $("#raccoon-text");
