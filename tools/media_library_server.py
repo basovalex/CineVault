@@ -43,7 +43,7 @@ from urllib.parse import unquote, urlparse
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.catalog_tombstones import AUDIT_FILENAME, add_tombstone, read_audit_ids, unplayable_ids  # noqa: E402
+from tools.catalog_tombstones import AUDIT_FILENAME, add_tombstone, alloha_available_ids, read_audit_ids, unplayable_ids  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1138,7 +1138,10 @@ def catalog_metadata_visibility() -> Optional[tuple]:
     cached = _catalog_hidden_cache
     if cached["dir"] == str(state_dir) and cached["value"] is not None and now - cached["loaded_at"] < CATALOG_HIDDEN_REFRESH_SECONDS:
         return cached["value"]
-    value = (frozenset(read_audit_ids(state_dir, ("available",))), frozenset(unplayable_ids(state_dir)))
+    # A card is playable when player 1's stream audit or player 2 (Alloha)
+    # confirmed it; Alloha-only titles stay visible even if player 1 failed.
+    alloha = frozenset(alloha_available_ids(state_dir))
+    value = (frozenset(read_audit_ids(state_dir, ("available",))) | alloha, frozenset(unplayable_ids(state_dir)) - alloha)
     if cached["value"] == value:
         value = cached["value"]  # keep the identity so cache keys compare cheaply
     cached.update({"loaded_at": now, "dir": str(state_dir), "value": value})

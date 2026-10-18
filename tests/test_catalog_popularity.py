@@ -154,3 +154,23 @@ class TrailerScoreTest(unittest.TestCase):
         self.assertLess(review, 6)
         self.assertEqual(score({"title": "Кракен полный фильм", "duration": 5000}, ["Кракен"], 2025), 0)
         self.assertEqual(score({"title": "Другое кино трейлер", "duration": 90}, ["Кракен"], 2025), 0)
+
+
+class AllohaVisibilityTest(unittest.TestCase):
+    def test_alloha_titles_are_visible_and_not_dead(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp)
+            write_audit(data_dir, {1: "deleted", 2: "deleted", 3: "pending"})
+            db = sqlite3.connect(str(data_dir / "kinopoisk_stream_audit.sqlite3"))
+            db.execute("CREATE TABLE alloha_cards (kinopoisk_id INTEGER PRIMARY KEY, available INTEGER)")
+            db.executemany("INSERT INTO alloha_cards VALUES (?, ?)", [(1, 1), (3, 1), (2, 0)])
+            db.commit(); db.close()
+            self.assertEqual(deleted_ids(data_dir), {2})
+            server.CATALOG_STATE_DIR = data_dir
+            server._catalog_hidden_cache.update({"loaded_at": 0.0, "dir": None, "value": None})
+            try:
+                available, unplayable = server.catalog_metadata_visibility()
+            finally:
+                server.CATALOG_STATE_DIR = None
+            self.assertTrue({1, 3} <= available)
+            self.assertNotIn(1, unplayable)

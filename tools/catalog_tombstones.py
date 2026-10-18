@@ -17,6 +17,7 @@ from typing import Iterable, Set
 
 TOMBSTONE_FILENAME = "kinopoisk_deleted_ids.json"
 AUDIT_FILENAME = "kinopoisk_stream_audit.sqlite3"
+ALLOHA_TABLE = "alloha_cards"
 
 
 def _positive_ids(values: Iterable) -> Set[int]:
@@ -60,9 +61,31 @@ def read_audit_ids(data_dir: Path, statuses: Iterable[str]) -> Set[int]:
     return _positive_ids(row[0] for row in rows)
 
 
+def alloha_available_ids(data_dir: Path) -> Set[int]:
+    """IDs that player 2 (Alloha) can show, from audit_alloha_catalog.py."""
+    path = Path(data_dir) / AUDIT_FILENAME
+    if not path.is_file():
+        return set()
+    try:
+        connection = sqlite3.connect("file:{}?mode=ro".format(path), uri=True, timeout=5)
+    except sqlite3.Error:
+        return set()
+    try:
+        rows = connection.execute("SELECT kinopoisk_id FROM {} WHERE available = 1".format(ALLOHA_TABLE)).fetchall()
+    except sqlite3.Error:
+        return set()
+    finally:
+        connection.close()
+    return _positive_ids(row[0] for row in rows)
+
+
 def deleted_ids(data_dir: Path) -> Set[int]:
-    """IDs confirmed as having no stream: never add or show them again."""
-    return read_tombstones(data_dir) | read_audit_ids(data_dir, ("deleted",))
+    """IDs confirmed as having no stream: never add or show them again.
+
+    Player 1's audit only knows its own source; a title that player 2
+    (Alloha) can show is not dead and may come back.
+    """
+    return (read_tombstones(data_dir) | read_audit_ids(data_dir, ("deleted",))) - alloha_available_ids(data_dir)
 
 
 def unplayable_ids(data_dir: Path) -> Set[int]:

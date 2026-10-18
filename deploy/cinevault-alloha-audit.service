@@ -1,0 +1,14 @@
+[Unit]
+Description=CineVault fast Alloha (player 2) availability check for catalog cards
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/cinevault
+ExecStart=/usr/bin/docker compose exec -T cinevault python tools/audit_alloha_catalog.py --delay-seconds 0.8
+Restart=always
+RestartSec=5m
+
+[Install]
+WantedBy=multi-user.target
