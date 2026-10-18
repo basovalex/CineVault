@@ -174,3 +174,24 @@ class AllohaVisibilityTest(unittest.TestCase):
                 server.CATALOG_STATE_DIR = None
             self.assertTrue({1, 3} <= available)
             self.assertNotIn(1, unplayable)
+
+
+class HiddenCardRefreshTest(unittest.TestCase):
+    def test_hidden_metadata_card_is_still_found_for_refresh(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "state").mkdir()
+            catalog = root / "catalog_imports.json"
+            catalog.write_text("[]", encoding="utf-8")
+            (root / "catalog_metadata.json").write_text(json.dumps([{"id": "kinopoisk-7", "kinopoiskId": 7, "title": "Новый"}]), encoding="utf-8")
+            write_audit(root / "state", {7: "pending"})
+            server._catalog_cache.update({"path": None, "mtime_ns": None, "items": []})
+            server._catalog_hidden_cache.update({"loaded_at": 0.0, "dir": None, "value": None})
+            server.CATALOG_STATE_DIR = root / "state"
+            try:
+                self.assertEqual(server.imported_catalog_entries(catalog), [])
+                with self.assertRaises(KeyError):
+                    server.imported_catalog_item("7", catalog)
+                self.assertEqual(server.imported_catalog_item("7", catalog, include_hidden=True)["title"], "Новый")
+            finally:
+                server.CATALOG_STATE_DIR = None

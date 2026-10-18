@@ -675,7 +675,7 @@ class KinopoiskOnDemandUpdater:
 
     def catalog_entry(self, kinopoisk_id: int) -> Dict[str, Any]:
         try:
-            return imported_catalog_item(str(kinopoisk_id), self.catalog_path)
+            return imported_catalog_item(str(kinopoisk_id), self.catalog_path, include_hidden=True)
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError("Каталог CineVault временно недоступен") from exc
         except KeyError as exc:
@@ -1111,6 +1111,7 @@ def imported_catalog_entries(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[
             raise RuntimeError("Каталог CineVault временно недоступен") from exc
         items = [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
         popular = load_catalog_popularity(popular_path if popular_mtime_ns is not None else None)
+        hidden_items: Dict[str, Dict[str, Any]] = {}
         known_ids = {str(item.get("id") or "") for item in items}
         known_kinopoisk_ids = {str(item.get("kinopoiskId") or "") for item in items if item.get("kinopoiskId")}
         imported_by_id = {str(item.get("id") or ""): item for item in items}
@@ -1142,12 +1143,15 @@ def imported_catalog_entries(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[
                 available_ids, unplayable = visibility
                 kp_number = int(kinopoisk_id) if kinopoisk_id.isdigit() else 0
                 if kp_number in unplayable or (kp_number not in available_ids and kinopoisk_id not in popular):
+                    # Not listed, but the stream audit and playback refresh
+                    # must still find the card to verify it.
+                    hidden_items[kinopoisk_id] = item
                     continue
             items.append(item)
             known_ids.add(identifier)
             known_kinopoisk_ids.add(kinopoisk_id)
         apply_catalog_popularity(items, popular)
-        _catalog_cache.update({"path": cache_key, "mtime_ns": mtime_ns, "items": items})
+        _catalog_cache.update({"path": cache_key, "mtime_ns": mtime_ns, "items": items, "hidden": hidden_items})
         return items
 
 
@@ -1218,10 +1222,15 @@ def imported_catalog_index(catalog_path: Path = CATALOG_IMPORTS_PATH, limit: int
     return [{key: item[key] for key in CATALOG_INDEX_FIELDS if key in item} for item in selected]
 
 
-def imported_catalog_item(identifier: str, catalog_path: Path = CATALOG_IMPORTS_PATH) -> Dict[str, Any]:
+def imported_catalog_item(identifier: str, catalog_path: Path = CATALOG_IMPORTS_PATH, include_hidden: bool = False) -> Dict[str, Any]:
     needle = str(identifier).strip()
     for item in imported_catalog_entries(catalog_path):
         if str(item.get("id", "")) == needle or str(item.get("kinopoiskId", "")) == needle:
+            return dict(item)
+    if include_hidden:
+        hidden = _catalog_cache.get("hidden") or {}
+        item = hidden.get(needle) or hidden.get(needle.replace("kinopoisk-", ""))
+        if item is not None:
             return dict(item)
     raise KeyError("Карточка каталога не найдена")
 
