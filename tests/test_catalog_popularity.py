@@ -295,3 +295,25 @@ class AllohaLibraryTest(unittest.TestCase):
             self.assertEqual(page["total"], 2)
             self.assertEqual(index.item("301", visibility)["voices"], ["Дубляж"])
             self.assertTrue(index.item("7", visibility)["playbackVerified"])
+
+
+class ExtraPlayersTest(unittest.TestCase):
+    def test_other_balancers_become_single_embed_providers(self):
+        payload = {"data": [
+            {"type": "Collaps", "iframeUrl": "https://api.nextembed.ws/embed/movie/474", "translations": [{"name": "Дубляж"}, {"name": "Дубляж"}, {"name": "None"}]},
+            {"type": "Turbo", "iframeUrl": "http://insecure.example/embed"},
+            {"type": "Unknown", "iframeUrl": "https://x.example/"},
+        ]}
+        providers = server.extra_player_options(payload)
+        self.assertEqual(providers, [{"id": "collaps", "name": "Collaps", "mode": "embed", "embedUrl": "https://api.nextembed.ws/embed/movie/474", "voices": ["Дубляж"]}])
+        counts = server.player_options_counts({"providers": [{"id": "alloha", "translations": [1, 2]}] + providers})
+        self.assertEqual(counts, (2, 1))
+
+    def test_other_players_keep_a_title_alive(self):
+        from tools.catalog_tombstones import record_alloha_result
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp)
+            write_audit(data_dir, {1: "deleted", 2: "deleted"})
+            record_alloha_result(data_dir, 1, 0, others=2)
+            record_alloha_result(data_dir, 2, 0, others=0)
+            self.assertEqual(deleted_ids(data_dir), {2})

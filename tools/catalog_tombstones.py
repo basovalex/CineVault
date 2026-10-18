@@ -62,7 +62,11 @@ def read_audit_ids(data_dir: Path, statuses: Iterable[str]) -> Set[int]:
 
 
 def alloha_ids(data_dir: Path, available: int) -> Set[int]:
-    """IDs Alloha (player 2) has (1) or was checked and lacks (0)."""
+    """IDs some embedded player has (1) or none of them has after a check (0).
+
+    The table started with Alloha only; the "others" column counts the extra
+    balancers (Collaps, Veoveo, Turbo) seen in the same players API answer.
+    """
     path = Path(data_dir) / AUDIT_FILENAME
     if not path.is_file():
         return set()
@@ -71,7 +75,10 @@ def alloha_ids(data_dir: Path, available: int) -> Set[int]:
     except sqlite3.Error:
         return set()
     try:
-        rows = connection.execute("SELECT kinopoisk_id FROM {} WHERE available = ?".format(ALLOHA_TABLE), (int(available),)).fetchall()
+        has_others = "others" in {row[1] for row in connection.execute("PRAGMA table_info({})".format(ALLOHA_TABLE))}
+        any_player = "(available = 1 OR COALESCE(others, 0) > 0)" if has_others else "(available = 1)"
+        condition = any_player if available else "(available = 0 AND NOT {})".format(any_player)
+        rows = connection.execute("SELECT kinopoisk_id FROM {} WHERE {}".format(ALLOHA_TABLE, condition)).fetchall()
     except sqlite3.Error:
         return set()
     finally:
@@ -100,7 +107,12 @@ def unplayable_ids(data_dir: Path) -> Set[int]:
     return deleted_ids(data_dir)
 
 
-def record_alloha_result(data_dir: Path, kinopoisk_id: int, translations: int) -> None:
+def ensure_others_column(connection: sqlite3.Connection) -> None:
+    if "others" not in {row[1] for row in connection.execute("PRAGMA table_info({})".format(ALLOHA_TABLE))}:
+        connection.execute("ALTER TABLE {} ADD COLUMN others INTEGER".format(ALLOHA_TABLE))
+
+
+def record_alloha_result(data_dir: Path, kinopoisk_id: int, translations: int, others: int = 0) -> None:
     """Store a player 2 check made while a viewer opened a title."""
     path = Path(data_dir) / AUDIT_FILENAME
     try:
@@ -111,11 +123,12 @@ def record_alloha_result(data_dir: Path, kinopoisk_id: int, translations: int) -
         connection.execute(
             "CREATE TABLE IF NOT EXISTS {} (kinopoisk_id INTEGER PRIMARY KEY, available INTEGER, translations INTEGER NOT NULL DEFAULT 0, "
             "failures INTEGER NOT NULL DEFAULT 0, checked_at TEXT, priority INTEGER NOT NULL DEFAULT 0)".format(ALLOHA_TABLE))
+        ensure_others_column(connection)
         connection.execute(
-            "INSERT INTO {0} (kinopoisk_id, available, translations, checked_at) VALUES (?, ?, ?, datetime('now')) "
+            "INSERT INTO {0} (kinopoisk_id, available, translations, others, checked_at) VALUES (?, ?, ?, ?, datetime('now')) "
             "ON CONFLICT(kinopoisk_id) DO UPDATE SET available = excluded.available, translations = excluded.translations, "
-            "failures = 0, checked_at = excluded.checked_at".format(ALLOHA_TABLE),
-            (int(kinopoisk_id), 1 if translations else 0, int(translations)))
+            "others = excluded.others, failures = 0, checked_at = excluded.checked_at".format(ALLOHA_TABLE),
+            (int(kinopoisk_id), 1 if translations else 0, int(translations), int(others)))
         connection.commit()
     except sqlite3.Error:
         pass

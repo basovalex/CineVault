@@ -246,6 +246,57 @@ _player_options_cache: Dict[int, tuple] = {}
 _player_options_lock = threading.Lock()
 
 
+# Other balancers the players API returns next to Alloha. Their voice is chosen
+# inside their own player, so each is one embed. Domains rotate, so any plain
+# https URL is accepted for these known types.
+EXTRA_PLAYER_TYPES = {"Collaps": "collaps", "Veoveo": "veoveo", "Turbo": "turbo"}
+
+
+def _plain_https_url(value: Any) -> str:
+    url = str(value or "").strip()
+    if not url or len(url) > MAX_EXTERNAL_EMBED_URL_LENGTH:
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        has_port = parsed.port is not None
+    except ValueError:
+        return ""
+    if parsed.scheme != "https" or not parsed.hostname or has_port or parsed.username or parsed.password:
+        return ""
+    return url
+
+
+def extra_player_options(payload: Any) -> list[Dict[str, Any]]:
+    players = payload.get("data") if isinstance(payload, dict) else None
+    result = []
+    for player in players if isinstance(players, list) else []:
+        if not isinstance(player, dict) or player.get("type") not in EXTRA_PLAYER_TYPES:
+            continue
+        url = _plain_https_url(player.get("iframeUrl"))
+        if not url:
+            continue
+        voices = []
+        for translation in (player.get("translations") or [])[:40]:
+            name = str((translation or {}).get("name") or "").strip()[:80] if isinstance(translation, dict) else ""
+            if name and name != "None" and name not in voices:
+                voices.append(name)
+        result.append({"id": EXTRA_PLAYER_TYPES[player["type"]], "name": player["type"], "mode": "embed", "embedUrl": url, "voices": voices})
+    # Most reliable first; Turbo often shows a bot check before playing.
+    order = {"collaps": 0, "veoveo": 1, "turbo": 2}
+    return sorted(result, key=lambda provider: order.get(provider["id"], 9))
+
+
+def player_options_counts(options: Dict[str, Any]) -> tuple[int, int]:
+    """(Alloha translations, other players) in a fetch_player_options result."""
+    alloha, others = 0, 0
+    for provider in options.get("providers") or []:
+        if provider.get("id") == "alloha":
+            alloha += len(provider.get("translations") or [])
+        else:
+            others += 1
+    return alloha, others
+
+
 def fetch_player_options(kinopoisk_id: Any, use_cache: bool = True) -> Dict[str, Any]:
     try:
         resolved_id = int(str(kinopoisk_id).strip())
@@ -287,7 +338,7 @@ def fetch_player_options(kinopoisk_id: Any, use_cache: bool = True) -> Dict[str,
     except (ValueError, UnicodeDecodeError) as exc:
         raise RuntimeError("Источник вернул некорректный список плееров") from exc
     options = alloha_player_options(payload)
-    result = {"providers": [{"id": "alloha", "name": "Alloha", "mode": "embed", "translations": options}] if options else []}
+    result = {"providers": ([{"id": "alloha", "name": "Alloha", "mode": "embed", "translations": options}] if options else []) + extra_player_options(payload)}
     with _player_options_lock:
         if len(_player_options_cache) > 2000:
             _player_options_cache.clear()
@@ -3010,7 +3061,7 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                 # Every viewer check also teaches the catalog which titles
                 # player 2 can show, without extra calls to the players API.
                 if CATALOG_STATE_DIR is not None:
-                    record_alloha_result(CATALOG_STATE_DIR, kinopoisk_id, sum(len(p.get("translations") or []) for p in options.get("providers") or []))
+                    record_alloha_result(CATALOG_STATE_DIR, kinopoisk_id, *player_options_counts(options))
                 self.send_json(200, options)
             except ValueError:
                 self.send_json(400, {"error": "Kinopoisk ID должен быть положительным числом"})

@@ -4392,32 +4392,111 @@
     update();
   }
   function hasPlayableSource(item) { return Boolean(libraryEpisodeFor(item) || item?.rutubeId || getVideoVariants(item).length || Object.values(item?.episodeSourceTokens || {}).some((source) => source.sourceUrl)); }
-  // One "Смотреть" button: when both players can show a title, ask which one.
+  // Embedded players the API returns for a title: Alloha (voice per link, its
+  // progress is tracked) and Collaps, Veoveo, Turbo (one link each, voice and
+  // position live inside their own player). Server caches answers for 10 min.
+  const playerOptionsCache = new Map();
+  async function loadPlayerOptions(item) {
+    const kinopoiskId = Number(item?.kinopoiskId || item?.kinopoisk_id || 0);
+    if (!kinopoiskId) return [];
+    const cached = playerOptionsCache.get(kinopoiskId);
+    if (cached && Date.now() - cached.at < 5 * 60_000) return cached.providers;
+    const response = await apiFetch(`/api/player-options?kinopoisk=${encodeURIComponent(kinopoiskId)}`, { cache: "no-store", headers: { accept: "application/json" } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    const providers = Array.isArray(payload.providers) ? payload.providers : [];
+    playerOptionsCache.set(kinopoiskId, { at: Date.now(), providers });
+    return providers;
+  }
+  function lastPlayerFor(item) {
+    const progress = progressForTitle(item);
+    if (!progress) return "";
+    if (progress.player === "alternative") return "alloha";
+    if (String(progress.player || "").startsWith("embed:")) return progress.player.slice(6);
+    return "main";
+  }
   function playersFor(item) {
     return {
       main: Boolean(item) && (hasPlayableSource(item) || shouldRefreshKinopoiskPlayback(item)),
       alternative: Number(item?.kinopoiskId || item?.kinopoisk_id || 0) > 0,
     };
   }
+  function openProvider(item, provider, { resume = false } = {}) {
+    if (provider.id === "alloha") return openAlternativePlayer(item, { resume });
+    return openEmbedProviderPlayer(item, provider);
+  }
+
+  // One "Смотреть" button: list every player that has the title.
   function openWatchChooser(item, { episode = null, season = null } = {}) {
     if (!item) return;
-    const players = playersFor(item);
-    if (!players.main && players.alternative) return openAlternativePlayer(item);
-    if (!players.alternative) return openItemPlayer(item, episode, season);
-    const last = progressForTitle(item);
-    const lastPlayer = last ? (last.player === "alternative" ? "alternative" : "main") : "";
+    const main = Boolean(item) && (hasPlayableSource(item) || shouldRefreshKinopoiskPlayback(item));
+    const hasKinopoisk = Number(item?.kinopoiskId || item?.kinopoisk_id || 0) > 0;
+    if (!hasKinopoisk) return openItemPlayer(item, episode, season);
+    const lastPlayer = lastPlayerFor(item);
     const episodeLabel = episode ? ` · S${String(season || selectedSeason || 1).padStart(2, "0")}E${String(episode).padStart(2, "0")}` : "";
-    const option = (id, number, name, note, icon) => `<button class="player-choice${lastPlayer === id ? " is-last" : ""}" data-player-choice="${id}" type="button"><span class="player-choice-icon" aria-hidden="true">${icon}</span><span class="player-choice-copy"><strong>Плеер ${number} · ${name}</strong><small>${note}</small></span>${lastPlayer === id ? `<span class="player-choice-badge">Вы смотрели здесь</span>` : ""}</button>`;
-    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal player-choice-modal" role="dialog" aria-modal="true" aria-labelledby="player-choice-title"><div class="modal-head"><div><div class="eyebrow">Где смотрим</div><h2 id="player-choice-title">${escapeHtml(item.title)}${episodeLabel}</h2></div><button class="icon-button" id="player-choice-close" type="button" aria-label="Закрыть">×</button></div><div class="player-choices">${option("main", 1, "CineVault", "Наш плеер: качество, перемотка, совместный просмотр и продолжение с места.", playerIcon("play"))}${option("alternative", 2, "Alloha", `Много озвучек на выбор${item.kind === "series" ? ", сезон и серию выберете внутри плеера" : ""}.`, "🎧")}</div></section></div>`;
-    const close = () => { modalRoot.innerHTML = ""; };
+    const option = (id, number, name, note, icon) => `<button class="player-choice${lastPlayer === id ? " is-last" : ""}" data-player-choice="${escapeHtml(id)}" type="button"><span class="player-choice-icon" aria-hidden="true">${icon}</span><span class="player-choice-copy"><strong>Плеер ${number} · ${escapeHtml(name)}</strong><small>${escapeHtml(note)}</small></span>${lastPlayer === id ? `<span class="player-choice-badge">Вы смотрели здесь</span>` : ""}</button>`;
+    const mainOption = main ? option("main", 1, "CineVault", "Наш плеер: качество, перемотка, совместный просмотр и продолжение с места.", playerIcon("play")) : "";
+    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal player-choice-modal" role="dialog" aria-modal="true" aria-labelledby="player-choice-title"><div class="modal-head"><div><div class="eyebrow">Где смотрим</div><h2 id="player-choice-title">${escapeHtml(item.title)}${episodeLabel}</h2></div><button class="icon-button" id="player-choice-close" type="button" aria-label="Закрыть">×</button></div><div class="player-choices" id="player-choices">${mainOption}<div class="player-choice-loading" role="status"><span class="loading-spinner" aria-hidden="true"></span> Ищу другие плееры…</div></div></section></div>`;
+    let closed = false;
+    let providers = [];
+    const close = () => { closed = true; modalRoot.innerHTML = ""; };
     $("#player-choice-close").addEventListener("click", close);
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
-    $$("[data-player-choice]").forEach((button) => button.addEventListener("click", () => {
+    const bind = () => $$("[data-player-choice]").forEach((button) => button.addEventListener("click", () => {
+      const choice = button.dataset.playerChoice;
+      closed = true;
       modalRoot.innerHTML = "";
-      if (button.dataset.playerChoice === "alternative") openAlternativePlayer(item, { resume: lastPlayer === "alternative" });
-      else openItemPlayer(item, episode, season);
+      if (choice === "main") return openItemPlayer(item, episode, season);
+      const provider = providers.find((entry) => entry.id === choice);
+      if (provider) openProvider(item, provider, { resume: lastPlayer === choice });
     }));
-    $(`[data-player-choice="${lastPlayer || "main"}"]`)?.focus();
+    bind();
+    loadPlayerOptions(item).then((loaded) => {
+      if (closed) return;
+      providers = loaded;
+      const voicesNote = (provider) => {
+        const count = provider.id === "alloha" ? (provider.translations || []).length : (provider.voices || []).length;
+        const series = item.kind === "series" ? " Сезон и серию выберете в плеере." : "";
+        const bot = provider.id === "turbo" ? " Может попросить подтвердить, что вы не робот." : "";
+        return `${count ? `${count} ${count === 1 ? "озвучка" : count < 5 ? "озвучки" : "озвучек"}` : "Озвучка внутри плеера"}.${provider.id === "alloha" ? " Запоминает, где вы остановились." : ""}${series}${bot}`;
+      };
+      const extra = providers.map((provider, index) => option(provider.id, index + 2, provider.name, voicesNote(provider), provider.id === "alloha" ? "🎧" : "▶")).join("");
+      if (!main && providers.length === 1) {
+        closed = true;
+        modalRoot.innerHTML = "";
+        return openProvider(item, providers[0], { resume: lastPlayer === providers[0].id });
+      }
+      const empty = !main && !providers.length ? `<p class="player-choice-empty">Этот фильм пока не нашёлся ни в одном плеере. Попробуйте позже — источники пополняются каждый день.</p>` : "";
+      $("#player-choices").innerHTML = mainOption + extra + empty;
+      bind();
+      $(`[data-player-choice="${lastPlayer || "main"}"]`)?.focus();
+    }).catch(() => {
+      if (closed) return;
+      $(".player-choice-loading")?.replaceWith(Object.assign(document.createElement("p"), { className: "player-choice-empty", textContent: "Другие плееры сейчас не ответили. Плеер 1 работает." }));
+      if (!main) $("#player-choices").innerHTML = `<p class="player-choice-empty">Плееры сейчас не ответили. Попробуйте через минуту.</p>`;
+    });
+  }
+
+  // Collaps, Veoveo, Turbo: one embed; position is kept by the player itself.
+  function openEmbedProviderPlayer(item, provider) {
+    rememberPlayerContext();
+    const key = `${item.id}-embed`;
+    state.progress[key] = { titleId: item.id, player: `embed:${provider.id}`, providerName: provider.name, untracked: true, position: 0, duration: 0, completed: false, updatedAt: Date.now() };
+    rememberHistory(item.id);
+    saveState();
+    const voices = (provider.voices || []).slice(0, 12).join(", ");
+    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal" role="dialog" aria-modal="true" aria-labelledby="embed-provider-title"><div class="modal-head"><div><div class="eyebrow">Плеер · ${escapeHtml(provider.name)}</div><h2 id="embed-provider-title">${escapeHtml(item.title)}</h2></div><button class="icon-button" id="embed-provider-close" type="button" aria-label="Закрыть">×</button></div><div class="provider-frame external-embed-frame"><iframe title="${escapeHtml(item.title)} · ${escapeHtml(provider.name)}" src="${escapeHtml(provider.embedUrl)}" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div><p class="notice" role="status">${voices ? `Озвучки выбираются внутри плеера: ${escapeHtml(voices)}${(provider.voices || []).length > 12 ? "…" : ""}.` : "Озвучка выбирается внутри плеера."}${item.kind === "series" ? " Сезон и серию — тоже там." : ""}</p></section></div>`;
+    const close = () => { const entry = state.progress[key]; if (entry) { entry.updatedAt = Date.now(); saveState(); } returnFromPlayer(); };
+    $("#embed-provider-close").addEventListener("click", close);
+    $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
+  }
+
+  async function resumeEmbedProvider(item, providerId) {
+    try {
+      const provider = (await loadPlayerOptions(item)).find((entry) => entry.id === providerId);
+      if (provider) return openProvider(item, provider, { resume: true });
+    } catch {}
+    openWatchChooser(item);
   }
 
   // Rutube trailers come from the server (works without VPN); YouTube ones
@@ -4695,7 +4774,7 @@
     window.clearInterval(raccoonTimer);
     if (catalogHydrating) {
       const lines = [...RACCOON_LINES, `${currentPet().name} помогает выбирать…`];
-      page.innerHTML = `<section class="raccoon-loader" role="status" aria-live="polite"><div class="raccoon-stage"><img class="raccoon-head" src="./assets/raccoon-loader.webp?v=2" alt="" aria-hidden="true" decoding="async"></div><p class="raccoon-text" id="raccoon-text">${escapeHtml(lines[0])}</p><span class="raccoon-bar" aria-hidden="true"><i></i></span></section>`;
+      page.innerHTML = `<section class="raccoon-loader" role="status" aria-live="polite"><div class="raccoon-stage"><img class="raccoon-head" src="./assets/raccoon-loader.webp?v=3" alt="" aria-hidden="true" decoding="async"></div><p class="raccoon-text" id="raccoon-text">${escapeHtml(lines[0])}</p><span class="raccoon-bar" aria-hidden="true"><i></i></span></section>`;
       let index = 0;
       raccoonTimer = window.setInterval(() => {
         const label = $("#raccoon-text");
@@ -4869,9 +4948,10 @@
     const ratio = progress.duration > 0 ? Math.min(1, progress.position / progress.duration) : 0;
     const episode = progress.episodeNumber ? `S${String(progress.seasonNumber || 1).padStart(2, "0")}E${String(progress.episodeNumber).padStart(2, "0")} · ` : "";
     const alternative = progress.player === "alternative" && Number(item.kinopoiskId || 0) > 0;
-    const action = alternative ? `data-alternative-player="${escapeHtml(item.id)}" data-alternative-resume="1"` : hasPlayableSource(item) ? `data-play-media="${escapeHtml(item.id)}" data-direct-play="1"` : `data-demo-play="${escapeHtml(item.id)}" data-direct-play="1"`;
+    const embedProvider = String(progress.player || "").startsWith("embed:") ? progress.player.slice(6) : "";
+    const action = embedProvider ? `data-embed-resume="${escapeHtml(item.id)}" data-embed-provider="${escapeHtml(embedProvider)}"` : alternative ? `data-alternative-player="${escapeHtml(item.id)}" data-alternative-resume="1"` : hasPlayableSource(item) ? `data-play-media="${escapeHtml(item.id)}" data-direct-play="1"` : `data-demo-play="${escapeHtml(item.id)}" data-direct-play="1"`;
     const episodeAttrs = progress.episodeNumber && !alternative ? ` data-resume-season="${Number(progress.seasonNumber) || 1}" data-episode="${Number(progress.episodeNumber)}"` : "";
-    return `<button class="landscape-card continue-card" ${action}${episodeAttrs} type="button"><div class="landscape-art">${landscapeArt(item)}<span class="landscape-play" aria-hidden="true">${playerIcon("play")}</span><div class="landscape-overlay"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(episode)}${alternative ? "Другой плеер" : escapeHtml(item.kind === "series" ? "Сериал" : "Фильм")}</small><div class="continue-progress"><span>${formatTime(progress.position)}</span><i style="--progress:${Math.round(ratio * 100)}%"></i><span>${progress.duration ? formatTime(progress.duration) : ""}</span></div></div></div></button>`;
+    return `<button class="landscape-card continue-card" ${action}${episodeAttrs} type="button"><div class="landscape-art">${landscapeArt(item)}<span class="landscape-play" aria-hidden="true">${playerIcon("play")}</span><div class="landscape-overlay"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(episode)}${embedProvider ? escapeHtml(progress.providerName || embedProvider) : alternative ? "Alloha" : escapeHtml(item.kind === "series" ? "Сериал" : "Фильм")}</small>${progress.untracked ? "" : `<div class="continue-progress"><span>${formatTime(progress.position)}</span><i style="--progress:${Math.round(ratio * 100)}%"></i><span>${progress.duration ? formatTime(progress.duration) : ""}</span></div>`}</div></div></button>`;
   }
 
   function topTenShelf(items) {
@@ -5405,7 +5485,7 @@
 
   // Opening a player and closing it at once is not "watching".
   const MIN_WATCHED_SECONDS = 3;
-  function isRealProgress(progress) { return Boolean(progress) && (progress.completed || Number(progress.position || 0) >= MIN_WATCHED_SECONDS); }
+  function isRealProgress(progress) { return Boolean(progress) && (progress.completed || progress.untracked === true || Number(progress.position || 0) >= MIN_WATCHED_SECONDS); }
 
   // History as a list: one row per title, newest activity first.
   function historyEntries() {
@@ -5434,11 +5514,12 @@
     const ratio = duration > 0 ? Math.min(1, position / duration) : 0;
     const done = progress?.completed || ratio >= .95;
     const episode = progress?.episodeNumber ? `S${String(progress.seasonNumber || 1).padStart(2, "0")}E${String(progress.episodeNumber).padStart(2, "0")}` : "";
-    const player = progress ? (alternative ? `Плеер 2 · Alloha${progress.translationName ? ` · ${progress.translationName}` : ""}` : "Плеер 1 · CineVault") : "";
+    const embedProvider = String(progress?.player || "").startsWith("embed:") ? progress.player.slice(6) : "";
+    const player = progress ? (embedProvider ? `${progress.providerName || embedProvider} · позицию помнит сам плеер` : alternative ? `Alloha${progress.translationName ? ` · ${progress.translationName}` : ""}` : "Плеер 1 · CineVault") : "";
     const left = duration > position ? Math.round((duration - position) / 60) : 0;
     const when = progress?.updatedAt ? new Date(progress.updatedAt).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : "";
-    const action = !progress ? `data-play-media="${escapeHtml(item.id)}"` : alternative ? `data-alternative-player="${escapeHtml(item.id)}" data-alternative-resume="1"` : `data-play-media="${escapeHtml(item.id)}" data-direct-play="1"${progress.episodeNumber ? ` data-resume-season="${Number(progress.seasonNumber) || 1}" data-episode="${Number(progress.episodeNumber)}"` : ""}`;
-    const status = !progress ? "" : done ? "Просмотрено" : `${formatTime(position)}${duration ? ` из ${formatTime(duration)}` : ""}${left ? ` · осталось ${left} мин` : ""}`;
+    const action = !progress ? `data-play-media="${escapeHtml(item.id)}"` : embedProvider ? `data-embed-resume="${escapeHtml(item.id)}" data-embed-provider="${escapeHtml(embedProvider)}"` : alternative ? `data-alternative-player="${escapeHtml(item.id)}" data-alternative-resume="1"` : `data-play-media="${escapeHtml(item.id)}" data-direct-play="1"${progress.episodeNumber ? ` data-resume-season="${Number(progress.seasonNumber) || 1}" data-episode="${Number(progress.episodeNumber)}"` : ""}`;
+    const status = !progress || progress.untracked ? "" : done ? "Просмотрено" : `${formatTime(position)}${duration ? ` из ${formatTime(duration)}` : ""}${left ? ` · осталось ${left} мин` : ""}`;
     return `<article class="history-row"><a class="history-art" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)}">${landscapeArt(item)}${progress && !done ? `<span class="history-progress" style="--progress:${Math.round(ratio * 100)}%"><i></i></span>` : ""}</a><div class="history-copy"><a class="history-title" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}">${escapeHtml(item.title)}</a><div class="history-meta">${[episode, item.year, ...genresForItem(item).slice(0, 2)].filter(Boolean).map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div>${player ? `<div class="history-player">${escapeHtml(player)}</div>` : ""}${status ? `<div class="history-status">${escapeHtml(status)}</div>` : ""}</div><div class="history-side">${when ? `<time>${escapeHtml(when)}</time>` : ""}<div class="history-actions"><button class="primary-button" ${action} type="button">${playerIcon("play")}<span>${progress && !done ? "Продолжить" : "Смотреть"}</span></button><button class="secondary-button history-remove" data-history-remove="${escapeHtml(item.id)}" type="button" aria-label="Убрать из истории" title="Убрать из истории">×</button></div></div></article>`;
   }
   function renderHistoryView() {
@@ -6654,6 +6735,7 @@
     $$('[data-home-genre]').forEach((button) => button.addEventListener("click", () => { state.catalogCollection = ""; state.catalogSort = "rating"; state.catalogMoodOnly = false; state.query = ""; searchDraft = ""; state.catalogGenre = normalizeCatalogGenre(button.dataset.homeGenre); resetCatalogPage(); saveState(); navigateToView("catalog", { preserveCatalogFilters: true }); }));
     $$('[data-feature-pick]').forEach((button) => button.addEventListener("click", () => { homeFeatureIndex = Number(button.dataset.featurePick) || 0; render(); }));
     $('[data-feature-shuffle]')?.addEventListener("click", () => { const total = homeFeaturePicks().length || 1; homeFeatureIndex = (homeFeatureIndex + 1) % total; render(); });
+    $$('[data-embed-resume]').forEach((button) => button.addEventListener("click", () => { const item = getTitle(button.dataset.embedResume); if (item) resumeEmbedProvider(item, button.dataset.embedProvider); }));
     $$('[data-alternative-player]').forEach((button) => button.addEventListener("click", () => { const item = getTitle(button.dataset.alternativePlayer); if (item) openAlternativePlayer(item, { resume: button.dataset.alternativeResume === "1" }); }));
     // Opening a title must not enter fullscreen by itself: a pending source refresh
     // or resume seek can otherwise make the browser exit fullscreen and reset the UI.

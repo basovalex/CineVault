@@ -23,7 +23,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.audit_kinopoisk_catalog import DEFAULT_CATALOG, DEFAULT_METADATA, catalog_ids  # noqa: E402
-from tools.catalog_tombstones import ALLOHA_TABLE, AUDIT_FILENAME, read_audit_ids, read_tombstones  # noqa: E402
+from tools.catalog_tombstones import ALLOHA_TABLE, AUDIT_FILENAME, ensure_others_column, read_audit_ids, read_tombstones  # noqa: E402
 
 DEFAULT_STATE = Path("/data/media-library") / AUDIT_FILENAME
 RECHECK_MISSING_DAYS = 30
@@ -50,6 +50,7 @@ class AllohaAuditor:
         columns = {row[1] for row in self.db.execute(f"PRAGMA table_info({ALLOHA_TABLE})")}
         if "priority" not in columns:
             self.db.execute(f"ALTER TABLE {ALLOHA_TABLE} ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
+        ensure_others_column(self.db)
         self.db.commit()
 
     def sync_ids(self, ids: list[int], priority: int = 0) -> int:
@@ -71,10 +72,10 @@ class AllohaAuditor:
         ).fetchone()
         return int(row[0]) if row else None
 
-    def record(self, kinopoisk_id: int, translations: int) -> None:
+    def record(self, kinopoisk_id: int, translations: int, others: int = 0) -> None:
         self.db.execute(
-            f"UPDATE {ALLOHA_TABLE} SET available = ?, translations = ?, failures = 0, checked_at = ? WHERE kinopoisk_id = ?",
-            (1 if translations else 0, translations, now_iso(), kinopoisk_id),
+            f"UPDATE {ALLOHA_TABLE} SET available = ?, translations = ?, others = ?, failures = 0, checked_at = ? WHERE kinopoisk_id = ?",
+            (1 if translations else 0, translations, others, now_iso(), kinopoisk_id),
         )
         self.db.commit()
 
@@ -97,7 +98,7 @@ def main() -> int:
     parser.add_argument("--status", action="store_true")
     args = parser.parse_args()
 
-    from tools.media_library_server import PlayerOptionsRateLimited, fetch_player_options  # noqa: E402
+    from tools.media_library_server import PlayerOptionsRateLimited, fetch_player_options, player_options_counts  # noqa: E402
 
     auditor = AllohaAuditor(args.state_path)
     # Cards in the catalog plus titles player 1 gave up on: Alloha may have them.
@@ -121,9 +122,7 @@ def main() -> int:
             time.sleep(600)
             continue
         try:
-            providers = fetch_player_options(kinopoisk_id, use_cache=False).get("providers") or []
-            translations = sum(len(provider.get("translations") or []) for provider in providers)
-            auditor.record(kinopoisk_id, translations)
+            auditor.record(kinopoisk_id, *player_options_counts(fetch_player_options(kinopoisk_id, use_cache=False)))
         except PlayerOptionsRateLimited:
             # Viewers share this API budget: back off well before retrying.
             print("Alloha: лимит запросов, пауза 10 минут", flush=True)
