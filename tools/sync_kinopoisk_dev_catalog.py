@@ -22,11 +22,16 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tools.catalog_tombstones import deleted_ids  # noqa: E402
 from tools.import_kinopoisk_metadata import DEFAULT_CATALOG, DEFAULT_METADATA, read_json  # noqa: E402
 
 
 DEFAULT_STATE = ROOT / "data" / "media-library" / "kinopoisk_catalog_sync.json"
-API_URL = "https://api.kinopoisk.dev/v1.4/movie"
+# kinopoisk.dev now answers with a 301 to poiskkino.dev; call it directly.
+API_URL = "https://api.poiskkino.dev/v1.4/movie"
+DEFAULT_POPULAR = ROOT / "app" / "data" / "catalog_popular.json"
+# Kinopoisk's own "popular right now" collections.
+POPULAR_LISTS = ("popular-films", "popular-series")
 SERIES_TYPES = {"tv-series", "animated-series", "anime"}
 SELECT_FIELDS = (
     "id", "name", "alternativeName", "enName", "type", "isSeries", "year",
@@ -110,8 +115,8 @@ def catalog_entry(row: Dict[str, Any]) -> Dict[str, Any]:
 
 def fetch_page(session: requests.Session, token: str, page: int, limit: int,
                updated_since: Optional[date] = None, kind: str = "all",
-               year: Optional[int] = None, min_votes: int = 0,
-               sort_votes: bool = False) -> Dict[str, Any]:
+               year: Any = None, min_votes: int = 0,
+               sort_votes: bool = False, list_slug: str = "") -> Dict[str, Any]:
     params: list[tuple[str, Any]] = [
         ("page", page), ("limit", limit),
         ("sortField", "votes.kp" if sort_votes else "updatedAt" if updated_since else "id"),
@@ -122,6 +127,8 @@ def fetch_page(session: requests.Session, token: str, page: int, limit: int,
         # Kinopoisk.dev uses dd.mm.yyyy ranges for date filters. Keep an
         # overlap between daily runs so a delayed provider update is retried.
         params.append(("updatedAt", "{}-{}".format(updated_since.strftime("%d.%m.%Y"), date.today().strftime("%d.%m.%Y"))))
+    if list_slug:
+        params.append(("lists", list_slug))
     if year is not None:
         params.append(("year", year))
     if min_votes:
@@ -229,8 +236,13 @@ def sync(token: str, catalog_path: Path, metadata_path: Path, state_path: Path,
     existing = read_json(metadata_path, [])
     if not isinstance(legacy, list) or not isinstance(existing, list):
         raise ValueError("Файлы каталога должны содержать массивы")
-    legacy_ids = {positive_int(item.get("kinopoiskId")) for item in legacy if isinstance(item, dict)}
+    hidden = deleted_ids(state_path.parent)
+    legacy_ids = {positive_int(item.get("kinopoiskId")) for item in legacy if isinstance(item, dict)} | hidden
     cards = {positive_int(item.get("kinopoiskId")): item for item in existing if isinstance(item, dict) and positive_int(item.get("kinopoiskId"))}
+    # Drop cards the stream audit already deleted; an older copy of this file
+    # may have brought them back.
+    for kp_id in hidden & cards.keys():
+        cards.pop(kp_id)
     state = read_json(state_path, {})
     if mode not in {"backfill", "daily"} or kind not in {"all", "movie", "series"}:
         raise ValueError("Неизвестный режим синхронизации")
@@ -271,10 +283,75 @@ def sync(token: str, catalog_path: Path, metadata_path: Path, state_path: Path,
     return totals
 
 
+def sync_popular(token: str, catalog_path: Path, metadata_path: Path, state_path: Path,
+                 popular_path: Path, max_pages: int, limit: int, delay_seconds: float,
+                 min_year: int, dry_run: bool = False) -> Dict[str, int]:
+    """Rank Kinopoisk's popular films and series and add missing cards.
+
+    The ranking goes to a small separate file; catalog_imports.json (cards
+    with verified streams) is never written here.
+    """
+    legacy = read_json(catalog_path, [])
+    existing = read_json(metadata_path, [])
+    if not isinstance(legacy, list) or not isinstance(existing, list):
+        raise ValueError("Файлы каталога должны содержать массивы")
+    hidden = deleted_ids(state_path.parent)
+    legacy_ids = {positive_int(item.get("kinopoiskId")) for item in legacy if isinstance(item, dict)}
+    cards = {positive_int(item.get("kinopoiskId")): item for item in existing
+             if isinstance(item, dict) and positive_int(item.get("kinopoiskId"))}
+    for kp_id in hidden & cards.keys():
+        cards.pop(kp_id)
+    totals = {"pages": 0, "seen": 0, "created": 0, "updated": 0, "skipped": 0, "ranked": 0}
+    ranked: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    with requests.Session() as session:
+        for slug in POPULAR_LISTS:
+            for page in range(1, max_pages + 1):
+                payload = fetch_page(session, token, page, limit, sort_votes=True, list_slug=slug,
+                                     year="{}-{}".format(min_year, date.today().year + 1))
+                totals["pages"] += 1
+                rows = [row for row in payload["docs"] if isinstance(row, dict)]
+                fresh = [row for row in rows if positive_int(row.get("year")) >= min_year]
+                totals["seen"] += len(rows)
+                for row in fresh:
+                    kp_id = positive_int(row.get("id"))
+                    if not kp_id or kp_id in hidden or kp_id in seen_ids:
+                        continue
+                    if kp_id not in legacy_ids and not has_core_metadata(row):
+                        continue
+                    seen_ids.add(kp_id)
+                    votes = row.get("votes") if isinstance(row.get("votes"), dict) else {}
+                    ranked.append({"kinopoiskId": kp_id, "list": slug, "votes": positive_int(votes.get("kp")),
+                                   "year": positive_int(row.get("year"))})
+                result = merge_page(fresh, cards, legacy_ids | hidden, require_complete=True)
+                for key in ("created", "updated", "skipped"):
+                    totals[key] += result[key]
+                if not rows or page >= positive_int(payload.get("pages")):
+                    break
+                if delay_seconds:
+                    time.sleep(delay_seconds)
+    # Kinopoisk's list order is not a popularity order, so rank by the vote
+    # count: within "popular now" it separates hits from long-tail entries.
+    ranked.sort(key=lambda row: (row["votes"], row["year"]), reverse=True)
+    for index, row in enumerate(ranked, start=1):
+        row["rank"] = index
+    totals["ranked"] = len(ranked)
+    if not dry_run:
+        save_json_atomic(metadata_path, list(cards.values()))
+        save_json_atomic(popular_path, {"provider": "kinopoisk.dev-v1.4", "lists": list(POPULAR_LISTS),
+                                        "syncedAt": date.today().isoformat(), "items": ranked})
+        state = read_json(state_path, {})
+        next_state = dict(state) if isinstance(state, dict) else {}
+        next_state["last_popular_sync"] = date.today().isoformat()
+        save_json_atomic(state_path, next_state)
+    return totals
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Добавить или обновить карточки Kinopoisk.dev без видеопотоков")
-    parser.add_argument("--mode", choices=("backfill", "daily"), default="backfill",
-                        help="backfill постепенно обходит всю базу; daily обновляет последние изменения")
+    parser.add_argument("--mode", choices=("backfill", "daily", "popular"), default="backfill",
+                        help="backfill постепенно обходит всю базу; daily обновляет последние изменения; "
+                             "popular обновляет подборки «Популярные фильмы» и «Популярные сериалы»")
     parser.add_argument("--kind", choices=("all", "movie", "series"), default="all",
                         help="Ограничить обход фильмами или сериалами; контрольные точки хранятся отдельно")
     parser.add_argument("--catalog-path", type=Path, default=DEFAULT_CATALOG)
@@ -290,6 +367,9 @@ def main() -> int:
                         help="Минимальное число оценок Кинопоиска для новых карточек")
     parser.add_argument("--require-complete", action="store_true",
                         help="Добавлять только карточки с описанием, постером и жанром")
+    parser.add_argument("--popular-path", type=Path, default=DEFAULT_POPULAR)
+    parser.add_argument("--min-year", type=int, default=date.today().year - 2,
+                        help="popular: не брать в подборку тайтлы старше этого года")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.start_page < 0 or not 1 <= args.pages <= 100 or not 1 <= args.limit <= 250 or args.delay_seconds < 0 or not 1 <= args.lookback_days <= 31 or args.min_votes < 0:
@@ -297,6 +377,16 @@ def main() -> int:
     token = api_token()
     if not token:
         parser.error("Задай CINEVAULT_KINOPOISK_DEV_TOKEN в окружении")
+    if args.mode == "popular":
+        try:
+            result = sync_popular(token, args.catalog_path, args.metadata_path, args.state_path,
+                                  args.popular_path, args.pages, args.limit, args.delay_seconds,
+                                  args.min_year, args.dry_run)
+        except (OSError, ValueError, requests.RequestException, json.JSONDecodeError) as exc:
+            parser.exit(1, "Подборка популярного не обновлена: {}\n".format(type(exc).__name__))
+        print("{}: популярное, страниц {pages}, просмотрено {seen}, в подборке {ranked}, добавлено {created}, "
+              "обновлено {updated}, пропущено {skipped}".format("Проверено" if args.dry_run else "Сохранено", **result))
+        return 0
     try:
         result = sync(token, args.catalog_path, args.metadata_path, args.state_path,
                       args.start_page, args.pages, args.limit, args.delay_seconds, args.dry_run,

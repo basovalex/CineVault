@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "cinevault-local",
+      "runtimeExecutable": "/Users/aleksandrbasov/Developer_CineVault/.venv/bin/python",
+      "runtimeArgs": ["tools/media_library_server.py", "--port", "8090", "--data-dir", "/private/tmp/claude-501/-Users-aleksandrbasov-Documents-------------------------/8d28b97f-e053-494a-bc45-0ed9512098f8/scratchpad/devdata", "--disable-kinopoisk-playback-refresh", "--no-transcode"],
+      "cwd": "/Users/aleksandrbasov/Developer_CineVault",
+      "port": 8090
+    }
+  ]
+}

@@ -17,6 +17,9 @@ from typing import Any, Dict, Optional
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CATALOG = ROOT / "app" / "data" / "catalog_imports.json"
 DEFAULT_METADATA = ROOT / "app" / "data" / "catalog_metadata.json"
+DEFAULT_POPULAR = ROOT / "app" / "data" / "catalog_popular.json"
+# The audit runs for weeks; pick up cards added by the daily syncs meanwhile.
+RESYNC_INTERVAL_SECONDS = 15 * 60
 DEFAULT_STATE = Path("/data/media-library/kinopoisk_stream_audit.sqlite3")
 DEFAULT_API = "http://127.0.0.1:8081/api/playback/refresh"
 
@@ -46,6 +49,22 @@ def catalog_ids(catalog_path: Path, metadata_path: Path) -> list[int]:
     return sorted(result)
 
 
+def popular_ids(popular_path: Path) -> list[int]:
+    try:
+        payload = json.loads(popular_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+    result = []
+    for row in payload.get("items", []) if isinstance(payload, dict) else []:
+        try:
+            kinopoisk_id = int(row.get("kinopoiskId") or 0) if isinstance(row, dict) else 0
+        except (TypeError, ValueError):
+            continue
+        if kinopoisk_id > 0:
+            result.append(kinopoisk_id)
+    return result
+
+
 class CatalogAuditor:
     def __init__(self, state_path: Path, api_url: str = DEFAULT_API, max_transport_attempts: int = 10):
         self.state_path = state_path.expanduser().resolve()
@@ -67,13 +86,20 @@ class CatalogAuditor:
             )
             """
         )
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(cards)")}
+        if "priority" not in columns:
+            self.db.execute("ALTER TABLE cards ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
         self.db.commit()
 
-    def sync_ids(self, ids: list[int]) -> int:
+    def sync_ids(self, ids: list[int], priority_ids: Optional[list[int]] = None) -> int:
         before = self.db.total_changes
         self.db.executemany("INSERT OR IGNORE INTO cards (kinopoisk_id) VALUES (?)", ((value,) for value in ids))
+        added = self.db.total_changes - before
+        if priority_ids is not None:
+            self.db.execute("UPDATE cards SET priority = 0 WHERE priority != 0")
+            self.db.executemany("UPDATE cards SET priority = 1 WHERE kinopoisk_id = ?", ((value,) for value in priority_ids))
         self.db.commit()
-        return self.db.total_changes - before
+        return added
 
     def next_id(self) -> Optional[int]:
         row = self.db.execute(
@@ -82,7 +108,7 @@ class CatalogAuditor:
             WHERE status IN ('pending', 'missing', 'transient')
               AND transport_failures < ?
             ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END,
-                     COALESCE(checked_at, ''), kinopoisk_id
+                     priority DESC, COALESCE(checked_at, ''), kinopoisk_id
             LIMIT 1
             """,
             (self.max_transport_attempts,),
@@ -144,6 +170,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Фоновая проверка всех Kinopoisk-карточек CineVault")
     parser.add_argument("--catalog-path", type=Path, default=DEFAULT_CATALOG)
     parser.add_argument("--metadata-path", type=Path, default=DEFAULT_METADATA)
+    parser.add_argument("--popular-path", type=Path, default=DEFAULT_POPULAR)
     parser.add_argument("--state-path", type=Path, default=DEFAULT_STATE)
     parser.add_argument("--api-url", default=DEFAULT_API)
     parser.add_argument("--delay-seconds", type=float, default=5.0)
@@ -156,12 +183,18 @@ def main() -> int:
 
     auditor = CatalogAuditor(args.state_path, args.api_url, args.max_transport_attempts)
     try:
-        added = auditor.sync_ids(catalog_ids(args.catalog_path, args.metadata_path))
+        added = auditor.sync_ids(catalog_ids(args.catalog_path, args.metadata_path), popular_ids(args.popular_path))
+        synced_at = time.monotonic()
         if args.status:
             print(json.dumps({"added": added, **auditor.stats()}, ensure_ascii=False))
             return 0
         processed = 0
         while not args.max_items or processed < args.max_items:
+            if time.monotonic() - synced_at > RESYNC_INTERVAL_SECONDS:
+                added = auditor.sync_ids(catalog_ids(args.catalog_path, args.metadata_path), popular_ids(args.popular_path))
+                synced_at = time.monotonic()
+                if added:
+                    print(f"Добавлено в очередь: {added}", flush=True)
             kinopoisk_id = auditor.next_id()
             if kinopoisk_id is None:
                 break

@@ -1,10 +1,19 @@
 [Unit]
-Description=CineVault daily Kinopoisk.dev film and series metadata sync
+Description=CineVault daily Kinopoisk.dev sync: popular now, recent updates, metadata enrichment
 Requires=docker.service
 After=docker.service network-online.target
 
 [Service]
 Type=oneshot
-TimeoutStartSec=30min
+TimeoutStartSec=90min
 WorkingDirectory=/srv/cinevault
-ExecStart=/usr/bin/flock -n /run/cinevault-kinopoisk-dev-sync.lock /usr/bin/docker compose --profile maintenance run --rm kinopoisk-catalog-sync --mode daily --kind all --pages 5 --limit 100 --lookback-days 7 --min-votes 50 --require-complete
+# Steps share one lock with the manual backfills. A leading "-" keeps a failed
+# step from skipping the next one; each step resumes from its own checkpoint.
+# 1. Kinopoisk's "popular films" and "popular series" lists from the last two
+#    years: ranking for the "Популярное сейчас" shelf plus any missing cards.
+ExecStart=-/usr/bin/flock -w 1800 /run/cinevault-kinopoisk-dev-sync.lock /usr/bin/docker compose --profile maintenance run --rm kinopoisk-catalog-sync --mode popular --pages 6 --limit 250
+# 2. Cards changed on Kinopoisk during the last week.
+ExecStart=-/usr/bin/flock -w 1800 /run/cinevault-kinopoisk-dev-sync.lock /usr/bin/docker compose --profile maintenance run --rm kinopoisk-catalog-sync --mode daily --kind all --pages 5 --limit 100 --lookback-days 7 --min-votes 50 --require-complete
+# 3. Fill in posters and descriptions of older cards within the daily API
+#    quota; stops cleanly when the quota is spent.
+ExecStart=-/usr/bin/flock -w 1800 /run/cinevault-kinopoisk-dev-sync.lock /usr/bin/docker compose --profile maintenance run --rm --entrypoint python kinopoisk-catalog-sync tools/enrich_kinopoisk_catalog.py --batch-size 100 --batches 40 --delay-seconds 1 --resume

@@ -41,11 +41,22 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 from urllib.parse import unquote, urlparse
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.catalog_tombstones import AUDIT_FILENAME, add_tombstone, read_audit_ids, unplayable_ids  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT / "app"
 DEFAULT_DATA_DIR = ROOT / "data" / "media-library"
 CATALOG_IMPORTS_PATH = APP_DIR / "data" / "catalog_imports.json"
+# Written by sync_kinopoisk_dev_catalog.py --mode popular: a small ranking file
+# so the daily popularity refresh never rewrites the large catalog JSON files.
+CATALOG_POPULAR_FILENAME = "catalog_popular.json"
+# Directory with the stream audit and deletion tombstones. main() points it to
+# the server data directory; None keeps every metadata card visible (tests).
+CATALOG_STATE_DIR: Optional[Path] = None
+CATALOG_HIDDEN_REFRESH_SECONDS = 300
 CATALOG_INDEX_FIELDS = (
     "id", "kind", "title", "originalTitle", "year", "description", "tags", "genres",
     "rating", "ratingKinopoisk", "imdbRating", "voteCount", "imdbVoteCount",
@@ -53,10 +64,12 @@ CATALOG_INDEX_FIELDS = (
     "seasons", "runtime", "kinopoiskId", "tmdbId",
     "catalogId", "poster", "posterImage", "providerUrl", "providerName", "providerNote", "tagline",
     "episodeDataFile", "episodeDataProvider", "episodePosterPolicy",
+    "popularRank", "popularList",
 )
 
 _catalog_cache_lock = threading.Lock()
 _catalog_cache: Dict[str, Any] = {"mtime_ns": None, "items": []}
+_catalog_hidden_cache: Dict[str, Any] = {"loaded_at": 0.0, "dir": None, "value": None}
 SITEMAP_VIEW_PATHS = ("/", "/catalog/", "/movies/", "/series/")
 SITEMAP_SEED_TITLE_IDS = {
     "sintel-open",
@@ -521,6 +534,9 @@ class KinopoiskOnDemandUpdater:
             if len(filtered) != len(payload):
                 self._write_json_atomic(path, filtered)
                 deleted = True
+        # Syncs in other containers rewrite catalog_metadata.json from their
+        # own copy; the tombstone keeps them from adding this ID back.
+        add_tombstone(self.failure_state_path.parent, kinopoisk_id)
         if deleted:
             self._unregister_source(kinopoisk_id)
         return deleted
@@ -979,7 +995,13 @@ def imported_catalog_entries(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[
         metadata_mtime_ns = metadata_path.stat().st_mtime_ns
     except FileNotFoundError:
         metadata_mtime_ns = None
-    cache_key = (str(catalog_path.resolve()), str(metadata_path.resolve()), metadata_mtime_ns)
+    popular_path = catalog_path.with_name(CATALOG_POPULAR_FILENAME)
+    try:
+        popular_mtime_ns = popular_path.stat().st_mtime_ns
+    except OSError:
+        popular_mtime_ns = None
+    visibility = catalog_metadata_visibility()
+    cache_key = (str(catalog_path.resolve()), str(metadata_path.resolve()), metadata_mtime_ns, popular_mtime_ns, visibility)
     with _catalog_cache_lock:
         if _catalog_cache.get("path") == cache_key and _catalog_cache.get("mtime_ns") == mtime_ns:
             return _catalog_cache["items"]
@@ -991,6 +1013,7 @@ def imported_catalog_entries(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError("Каталог CineVault временно недоступен") from exc
         items = [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+        popular = load_catalog_popularity(popular_path if popular_mtime_ns is not None else None)
         known_ids = {str(item.get("id") or "") for item in items}
         known_kinopoisk_ids = {str(item.get("kinopoiskId") or "") for item in items if item.get("kinopoiskId")}
         imported_by_id = {str(item.get("id") or ""): item for item in items}
@@ -1014,11 +1037,66 @@ def imported_catalog_entries(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[
                 continue
             if identifier in known_ids or kinopoisk_id in known_kinopoisk_ids:
                 continue
+            # Metadata-only cards have no verified stream. Most bulk-synced
+            # titles turn out unplayable, so show one only after the stream
+            # audit confirmed it, or while it is in Kinopoisk's popular lists
+            # (the audit checks those first) and not known to be broken.
+            if visibility is not None:
+                available_ids, unplayable = visibility
+                kp_number = int(kinopoisk_id) if kinopoisk_id.isdigit() else 0
+                if kp_number in unplayable or (kp_number not in available_ids and kinopoisk_id not in popular):
+                    continue
             items.append(item)
             known_ids.add(identifier)
             known_kinopoisk_ids.add(kinopoisk_id)
+        apply_catalog_popularity(items, popular)
         _catalog_cache.update({"path": cache_key, "mtime_ns": mtime_ns, "items": items})
         return items
+
+
+def catalog_metadata_visibility() -> Optional[tuple]:
+    """(audited playable IDs, unplayable IDs), re-read every few minutes.
+
+    None means there is no stream audit to consult; then every metadata card
+    stays visible.
+    """
+    state_dir = CATALOG_STATE_DIR
+    if state_dir is None or not (Path(state_dir) / AUDIT_FILENAME).is_file():
+        return None
+    now = time.monotonic()
+    cached = _catalog_hidden_cache
+    if cached["dir"] == str(state_dir) and cached["value"] is not None and now - cached["loaded_at"] < CATALOG_HIDDEN_REFRESH_SECONDS:
+        return cached["value"]
+    value = (frozenset(read_audit_ids(state_dir, ("available",))), frozenset(unplayable_ids(state_dir)))
+    if cached["value"] == value:
+        value = cached["value"]  # keep the identity so cache keys compare cheaply
+    cached.update({"loaded_at": now, "dir": str(state_dir), "value": value})
+    return value
+
+
+def load_catalog_popularity(popular_path: Optional[Path]) -> Dict[str, Dict[str, Any]]:
+    ranking: Dict[str, Dict[str, Any]] = {}
+    if popular_path is None:
+        return ranking
+    try:
+        payload = json.loads(popular_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ranking
+    for row in payload.get("items", []) if isinstance(payload, dict) else []:
+        if isinstance(row, dict) and row.get("kinopoiskId") and row.get("rank"):
+            ranking[str(row["kinopoiskId"])] = row
+    return ranking
+
+
+def apply_catalog_popularity(items: list[Dict[str, Any]], ranking: Dict[str, Dict[str, Any]]) -> None:
+    for item in items:
+        row = ranking.get(str(item.get("kinopoiskId") or ""))
+        if row:
+            item["popularRank"] = int(row["rank"])
+            item["popularList"] = str(row.get("list") or "")
+        else:
+            item.pop("popularRank", None)
+            item.pop("popularList", None)
 
 
 def imported_catalog_index(catalog_path: Path = CATALOG_IMPORTS_PATH, limit: int = 500) -> list[Dict[str, Any]]:
@@ -1072,7 +1150,7 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
     collection = str(params.get("collection", [""])[0]).strip().casefold()
     collection = {"romance": "together", "thrill": "tense"}.get(collection, collection)
     sort = str(params.get("sort", ["rating"])[0]).strip().casefold()
-    if collection == "popular" and sort == "rating":
+    if collection in {"popular", "trending"} and sort == "rating":
         sort = "popular"
     if kind in {"movies", "film", "films"}:
         kind = "movie"
@@ -1104,7 +1182,9 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
             return False
         if genre and genre not in genres(item):
             return False
-        if collection == "popular" and votes(item) <= 0:
+        if collection == "popular" and not item.get("popularRank") and votes(item) <= 0:
+            return False
+        if collection == "trending" and not item.get("popularRank"):
             return False
         if collection == "new":
             try:
@@ -1112,7 +1192,10 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
                 vote_count = int(item.get("voteCount") or 0)
             except (TypeError, ValueError):
                 return False
-            if item_year < datetime.now().year - 1 or item_year > datetime.now().year or vote_count < 1000:
+            # Kinopoisk's own "popular now" lists vouch for a fresh title before
+            # it has collected many votes.
+            min_votes = 100 if item.get("popularRank") else 1000
+            if item_year < datetime.now().year - 1 or item_year > datetime.now().year or vote_count < min_votes:
                 return False
             if not item.get("posterImage") or len(str(item.get("description") or "")) < 60:
                 return False
@@ -1137,10 +1220,17 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
             return int(item.get("year") or 0)
         except (TypeError, ValueError):
             return 0
-    if sort in {"popular", "votes"}:
+    def popular_rank(item: Dict[str, Any]) -> int:
+        try:
+            return int(item.get("popularRank") or 0) or 10 ** 9
+        except (TypeError, ValueError):
+            return 10 ** 9
+    if sort in {"popular", "trending"}:
+        filtered.sort(key=lambda item: (-popular_rank(item), votes(item), rating(item), year(item)), reverse=True)
+    elif sort == "votes":
         filtered.sort(key=lambda item: (votes(item), rating(item), year(item)), reverse=True)
     elif sort == "new":
-        filtered.sort(key=lambda item: (year(item), votes(item), rating(item)), reverse=True)
+        filtered.sort(key=lambda item: (year(item), -popular_rank(item), votes(item), rating(item)), reverse=True)
     elif sort in {"year", "year_desc"}:
         filtered.sort(key=lambda item: (year(item), rating(item)), reverse=True)
     elif sort in {"title", "alphabetical"}:
@@ -1265,6 +1355,12 @@ class MediaLibrary:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     UNIQUE(catalog_id, kind)
+                );
+                CREATE TABLE IF NOT EXISTS catalog_progress (
+                    content_id TEXT PRIMARY KEY,
+                    title_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS episode_segments (
                     episode_id TEXT PRIMARY KEY REFERENCES episodes(id),
@@ -1979,6 +2075,57 @@ class MediaLibrary:
         )
         return next(item for item in self.list_library() if item["id"] == episode_id)["progress"]
 
+    CATALOG_PROGRESS_FIELDS = {
+        "titleId": str, "providerId": str, "player": str, "translationId": str, "translationName": str,
+        "seasonNumber": int, "episodeNumber": int, "position": float, "duration": float,
+        "completed": bool, "updatedAt": int,
+    }
+    MAX_CATALOG_PROGRESS_ITEMS = 500
+
+    def list_catalog_progress(self) -> Dict[str, Any]:
+        rows = self._db.execute(
+            "SELECT content_id, payload_json FROM catalog_progress ORDER BY updated_at DESC LIMIT ?",
+            (self.MAX_CATALOG_PROGRESS_ITEMS,),
+        ).fetchall()
+        result: Dict[str, Any] = {}
+        for row in rows:
+            try:
+                result[row["content_id"]] = json.loads(row["payload_json"])
+            except json.JSONDecodeError:
+                continue
+        return result
+
+    def update_catalog_progress(self, content_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Store the browser's progress for a catalog title, keeping the newest."""
+        content_id = str(content_id or "").strip()
+        if not content_id or len(content_id) > 200 or not isinstance(payload, dict):
+            raise ValueError("Некорректный идентификатор прогресса")
+        clean: Dict[str, Any] = {}
+        for key, kind in self.CATALOG_PROGRESS_FIELDS.items():
+            value = payload.get(key)
+            if value is None:
+                continue
+            try:
+                clean[key] = str(value)[:200] if kind is str else bool(value) if kind is bool else kind(value)
+            except (TypeError, ValueError):
+                continue
+        if not clean.get("titleId") or clean.get("updatedAt", 0) <= 0:
+            raise ValueError("Нужны titleId и updatedAt")
+        with self._lock:
+            row = self._db.execute("SELECT payload_json, updated_at FROM catalog_progress WHERE content_id = ?", (content_id,)).fetchone()
+            if row and int(row["updated_at"]) >= clean["updatedAt"]:
+                return json.loads(row["payload_json"])
+            self._db.execute(
+                "INSERT INTO catalog_progress(content_id, title_id, payload_json, updated_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(content_id) DO UPDATE SET title_id=excluded.title_id, payload_json=excluded.payload_json, updated_at=excluded.updated_at",
+                (content_id, clean["titleId"], json.dumps(clean, ensure_ascii=False), clean["updatedAt"]),
+            )
+            self._db.commit()
+        return clean
+
+    def clear_catalog_progress(self) -> None:
+        self._execute("DELETE FROM catalog_progress")
+
     def offline_manifest(self, episode_id: str, quality: Optional[str] = None) -> Dict[str, Any]:
         with self._lock:
             source = self._db.execute("SELECT source_type FROM episodes WHERE id = ?", (episode_id,)).fetchone()
@@ -2539,7 +2686,7 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         if preflight:
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-CineVault-Admin-Token")
             self.send_header("Access-Control-Max-Age", "600")
 
@@ -2724,6 +2871,8 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                 self.send_json(404, {"error": str(exc)})
         elif parsed.path == "/api/history":
             self.send_json(200, {"items": self.library.list_history()})
+        elif parsed.path == "/api/catalog-progress":
+            self.send_json(200, {"items": self.library.list_catalog_progress()})
         elif parsed.path.startswith("/api/library/episodes/") and parsed.path.endswith("/skip-segments"):
             episode_id = parsed.path.split("/")[4]
             try:
@@ -2909,6 +3058,15 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
 
     def do_PUT(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/catalog-progress/"):
+            if not self.require_viewer():
+                return
+            try:
+                content_id = unquote(parsed.path[len("/api/catalog-progress/"):])
+                self.send_json(200, self.library.update_catalog_progress(content_id, self.read_json()))
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+            return
         if parsed.path.startswith("/api/progress/"):
             if not self.require_viewer():
                 return
@@ -2916,6 +3074,16 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                 self.send_json(200, self.library.update_progress(parsed.path.rsplit("/", 1)[-1], self.read_json()))
             except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
                 self.send_json(400, {"error": str(exc)})
+            return
+        self.send_json(404, {"error": "Неизвестный endpoint"})
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/catalog-progress":
+            if not self.require_viewer():
+                return
+            self.library.clear_catalog_progress()
+            self.send_json(200, {"cleared": True})
             return
         self.send_json(404, {"error": "Неизвестный endpoint"})
 
@@ -3143,6 +3311,8 @@ def main() -> None:
         parser.error("--kinopoisk-update-delay-seconds must not be negative")
     tmdb_token = os.environ.get("CINEVAULT_TMDB_API_TOKEN", "").strip() or load_local_tmdb_token()
     library = MediaLibrary(args.data_dir, ffmpeg_path=args.ffmpeg, transcode=not args.no_transcode, tmdb_api_token=tmdb_token)
+    global CATALOG_STATE_DIR
+    CATALOG_STATE_DIR = library.root
     handler = lambda *a, **kw: MediaLibraryHandler(*a, directory=str(APP_DIR), **kw)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     server.library = library  # type: ignore[attr-defined]

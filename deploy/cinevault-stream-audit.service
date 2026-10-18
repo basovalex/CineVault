@@ -1,7 +1,7 @@
 [Unit]
 Description=CineVault gradual Kinopoisk stream audit
 Requires=docker.service
-After=docker.service network-online.target cinevault.service
+After=docker.service network-online.target
 
 [Service]
 Type=simple

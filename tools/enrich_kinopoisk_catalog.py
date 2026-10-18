@@ -15,12 +15,19 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tools.catalog_tombstones import deleted_ids  # noqa: E402
 from tools.import_kinopoisk_metadata import DEFAULT_CATALOG, DEFAULT_METADATA, read_json  # noqa: E402
 from tools.sync_kinopoisk_dev_catalog import (  # noqa: E402
     API_URL, SELECT_FIELDS, api_token, merge_page, positive_int, save_json_atomic,
 )
 
 DEFAULT_STATE = ROOT / "data" / "media-library" / "kinopoisk_metadata_enrichment.json"
+# Kinopoisk.dev answers these once the daily request quota is spent.
+QUOTA_STATUSES = {401, 402, 403, 429}
+
+
+def quota_exhausted(exc: Exception) -> bool:
+    return getattr(getattr(exc, "response", None), "status_code", 0) in QUOTA_STATUSES
 
 
 def needs_enrichment(item: Dict[str, Any]) -> bool:
@@ -65,7 +72,7 @@ def fetch_ids(session: requests.Session, token: str, identifiers: List[int]) -> 
             return [row for row in payload["docs"] if isinstance(row, dict)]
         except (requests.RequestException, ValueError) as exc:
             last_error = exc
-            if attempt >= 3:
+            if attempt >= 3 or getattr(getattr(exc, "response", None), "status_code", 0) in {401, 402, 403}:
                 raise
             status = getattr(getattr(exc, "response", None), "status_code", 0)
             retry_after = positive_int(getattr(getattr(exc, "response", None), "headers", {}).get("Retry-After")) if status == 429 else 0
@@ -82,16 +89,24 @@ def enrich(token: str, catalog_path: Path, metadata_path: Path, state_path: Path
     if not isinstance(legacy, list) or not isinstance(existing, list) or not isinstance(state, dict):
         raise ValueError("Каталог или контрольная точка имеют неверный формат")
     cursor = positive_int(state.get("last_kinopoisk_id")) if resume else 0
-    pending = [kp_id for kp_id in candidate_ids(legacy, existing) if kp_id > cursor]
+    hidden = deleted_ids(state_path.parent)
+    pending = [kp_id for kp_id in candidate_ids(legacy, existing) if kp_id > cursor and kp_id not in hidden]
     cards = {positive_int(item.get("kinopoiskId")): item for item in existing
              if isinstance(item, dict) and positive_int(item.get("kinopoiskId"))}
     totals = {"pending": len(pending), "processed": 0, "fetched": 0, "created": 0,
-              "updated": 0, "last_kinopoisk_id": cursor}
+              "updated": 0, "last_kinopoisk_id": cursor, "quota_exhausted": False}
     with requests.Session() as session:
         for offset in range(0, min(len(pending), batch_size * batches), batch_size):
             identifiers = pending[offset:offset + batch_size]
-            rows = fetch_ids(session, token, identifiers)
-            result = merge_page(rows, cards, set())
+            try:
+                rows = fetch_ids(session, token, identifiers)
+            except requests.HTTPError as exc:
+                if not quota_exhausted(exc):
+                    raise
+                # Saved batches stay saved; the next run resumes from here.
+                totals["quota_exhausted"] = True
+                break
+            result = merge_page(rows, cards, hidden)
             if not dry_run:
                 save_json_atomic(metadata_path, list(cards.values()))
                 cursor = identifiers[-1]
@@ -130,9 +145,10 @@ def main() -> int:
                         args.dry_run, args.resume)
     except (OSError, ValueError, requests.RequestException) as exc:
         parser.exit(1, "Обогащение остановлено на последней сохранённой пачке: {}\n".format(type(exc).__name__))
-    print("Нужно {}, проверено {}, найдено {}, новых метаданных {}, обновлено {}, последний ID {}".format(
+    print("Нужно {}, проверено {}, найдено {}, новых метаданных {}, обновлено {}, последний ID {}{}".format(
         result["pending"], result["processed"], result["fetched"], result["created"],
-        result["updated"], result["last_kinopoisk_id"]))
+        result["updated"], result["last_kinopoisk_id"],
+        " · дневной лимит API исчерпан, продолжу в следующий запуск" if result["quota_exhausted"] else ""))
     return 0
 
 

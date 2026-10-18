@@ -2339,6 +2339,8 @@
   // index. Keep them separate so a page filter can never narrow "Для вас".
   let discoveryCatalog = [];
   let freshCatalog = [];
+  // Cards behind "Продолжить просмотр" that are not on any loaded page.
+  let progressCatalog = [];
   const importedDetailsLoading = new Set();
   const importedDetailsLoaded = new Set();
   const importedDetailsCache = new Map();
@@ -2845,7 +2847,73 @@
     } catch { return { ...defaultState, catalogMoodOnly: false, catalogPlayableOnly: false }; }
   }
 
-  function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+  function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); queueProgressSync(); }
+
+  // Progress is shared through the backend so "Продолжить просмотр" follows
+  // the viewer between devices. Each entry keeps the newest updatedAt.
+  const pushedProgressAt = new Map();
+  let progressSyncTimer = null;
+  let progressSyncReady = false;
+  function queueProgressSync() {
+    if (!progressSyncReady || progressSyncTimer) return;
+    progressSyncTimer = window.setTimeout(() => {
+      progressSyncTimer = null;
+      Object.entries(state.progress || {}).forEach(([contentId, progress]) => {
+        const updatedAt = Number(progress?.updatedAt || 0);
+        if (!updatedAt || pushedProgressAt.get(contentId) >= updatedAt) return;
+        pushCatalogProgress(contentId, progress);
+      });
+    }, 2000);
+  }
+  function pushCatalogProgress(contentId, progress) {
+    const updatedAt = Number(progress?.updatedAt || 0);
+    if (!updatedAt || !progress?.titleId) return;
+    pushedProgressAt.set(contentId, updatedAt);
+    apiFetch(`/api/catalog-progress/${encodeURIComponent(contentId)}`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(progress), keepalive: true,
+    }).catch(() => { pushedProgressAt.delete(contentId); });
+  }
+  async function loadCatalogProgress() {
+    try {
+      const response = await apiFetch("/api/catalog-progress", { cache: "no-store", headers: { accept: "application/json" } });
+      if (!response.ok) return;
+      const payload = await response.json();
+      const remote = payload.items && typeof payload.items === "object" ? payload.items : {};
+      let changed = false;
+      Object.entries(remote).forEach(([contentId, progress]) => {
+        const updatedAt = Number(progress?.updatedAt || 0);
+        pushedProgressAt.set(contentId, Math.max(pushedProgressAt.get(contentId) || 0, updatedAt));
+        if (updatedAt > Number(state.progress[contentId]?.updatedAt || 0)) {
+          state.progress[contentId] = progress;
+          changed = true;
+        }
+      });
+      const watchedIds = Object.values(state.progress).sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0)).map((progress) => String(progress?.titleId || "")).filter(Boolean);
+      if (watchedIds.length) {
+        const merged = [...new Set([...watchedIds, ...state.history])].slice(0, 100);
+        if (merged.join() !== state.history.join()) { state.history = merged; changed = true; }
+      }
+      if (changed) localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch {
+      // Offline or older backend: local progress keeps working.
+    } finally {
+      progressSyncReady = true;
+      queueProgressSync();
+    }
+    await loadProgressTitles();
+  }
+  async function loadProgressTitles() {
+    const ids = [...new Set(Object.values(state.progress).filter((progress) => !progress?.completed).map((progress) => String(progress?.titleId || "")).filter(Boolean))]
+      .filter((id) => !getTitle(id)).slice(0, 50);
+    if (!ids.length) return;
+    try {
+      const params = new URLSearchParams({ ids: ids.join(","), limit: "50" });
+      const response = await apiFetch(`/api/catalog?${params}`, { cache: "no-store", headers: { accept: "application/json" } });
+      if (!response.ok) return;
+      const payload = await response.json();
+      if (Array.isArray(payload.items)) progressCatalog = payload.items.map((entry) => posterOverrides[entry.id] ? { ...entry, posterImage: posterOverrides[entry.id] } : entry);
+    } catch {}
+  }
   function loadMetadataCache() { try { return JSON.parse(localStorage.getItem(TMDB_CACHE_KEY) || "{}"); } catch { return {}; } }
   function saveMetadataCache(cache) { localStorage.setItem(TMDB_CACHE_KEY, JSON.stringify(cache)); }
   const sourceFilesByKinopoiskId = {
@@ -4287,7 +4355,8 @@
   function getTitle(id) {
     return catalog.find((item) => item.id === id)
       || discoveryCatalog.find((item) => item.id === id)
-      || freshCatalog.find((item) => item.id === id);
+      || freshCatalog.find((item) => item.id === id)
+      || progressCatalog.find((item) => item.id === id);
   }
   function getTitleForProgress(id, progress) { return getTitle(progress?.titleId || id) || getTitle(String(id).split("-s")[0]); }
   function progressForTitle(item) {
@@ -4452,7 +4521,9 @@
   function resumePoster(item, progress) {
     const progressPct = Math.min(100, Math.round((progress.position / progress.duration) * 100));
     const episodeText = progress.episodeNumber ? ` · S${String(progress.seasonNumber).padStart(2, "0")}E${String(progress.episodeNumber).padStart(2, "0")}` : "";
-    const playbackAttr = hasPlayableSource(item) ? `data-play-media="${item.id}"` : `data-demo-play="${item.id}"`;
+    const playbackAttr = progress.player === "alternative" && Number(item.kinopoiskId || 0) > 0
+      ? `data-alternative-player="${item.id}" data-alternative-resume="1"`
+      : hasPlayableSource(item) ? `data-play-media="${item.id}"` : `data-demo-play="${item.id}"`;
     const episodeAttrs = progress.episodeNumber ? `data-resume-season="${Number(progress.seasonNumber) || 1}" data-episode="${Number(progress.episodeNumber)}"` : "";
     const posterAttrs = item.posterImage ? ` style="--poster:${escapeHtml(item.poster || "linear-gradient(145deg, #5c3b63, #221b31)")}"` : ` style="${posterStyle(item)}"`;
     const posterImage = item.posterImage ? `<img class="poster-art-image" src="${escapeHtml(highResolutionPosterUrl(item.posterImage))}" alt="" loading="lazy" decoding="async" aria-hidden="true">` : "";
@@ -5100,7 +5171,7 @@
     const progress = progressForTitle(item);
     const favorite = state.favorites.includes(item.id);
     const resumeEpisode = progress?.episodeNumber || null;
-    const watchLabel = progress && !progress.completed ? "Продолжить просмотр" : "Смотреть";
+    const watchLabel = progress && !progress.completed && progress.player !== "alternative" ? "Продолжить просмотр" : "Смотреть";
     const detailWatch = playbackReady
       ? hasPlayableSource(item)
         ? watchButton(item, watchLabel)
@@ -5122,8 +5193,11 @@
     const sourceLink = showProviderPanel ? `<a class="secondary-button" href="${escapeHtml(item.providerUrl)}" target="_blank" rel="noopener noreferrer">Открыть источник ↗</a>` : "";
     const providerPanel = showProviderPanel ? `<div class="provider-list"><div class="provider-row"><div><strong>${escapeHtml(sourceTitle)}</strong><small>${escapeHtml(sourceNote)}${item.licenseUrl ? ` · <a href="${escapeHtml(item.licenseUrl)}" target="_blank" rel="noopener noreferrer">условия лицензии ↗</a>` : ""}</small></div>${sourceLink}</div></div>` : "";
     const sourceImportAction = "";
+    const resumeInAlternative = kinopoiskId > 0 && progress?.player === "alternative" && !progress.completed;
     const alternativePlayerAction = kinopoiskId > 0
-      ? `<button class="secondary-button" data-alternative-player="${escapeHtml(item.id)}" type="button">Другой плеер · озвучки</button>`
+      ? resumeInAlternative
+        ? `<button class="primary-button" data-alternative-player="${escapeHtml(item.id)}" data-alternative-resume="1" type="button">Продолжить в другом плеере · ${escapeHtml(alternativeResumeLabel(progress))}</button>`
+        : `<button class="secondary-button" data-alternative-player="${escapeHtml(item.id)}" type="button">Другой плеер · озвучки</button>`
       : "";
     const genres = detailList(item.genres?.length ? item.genres : item.tags).filter((tag) => tag.toLowerCase() !== "для нас");
     const countries = detailList(item.countries || item.country);
@@ -5647,10 +5721,25 @@
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
   }
 
-  function openAlternativePlayer(item) {
+  // The Alloha embed reports playback through postMessage ({event, time}) and
+  // accepts {api: "seek" | "play" | "pause" | "duration" | "getTimeSave"}.
+  // getTimeSave answers with the translation, season and episode it plays.
+  const ALTERNATIVE_PLAYER_ORIGIN = "https://theatre.stravers.live";
+  const ALTERNATIVE_PROGRESS_SAVE_MS = 5000;
+
+  function alternativeProgressKey(item) { return `${item.id}-alt`; }
+
+  function alternativeResumeLabel(progress) {
+    const episode = progress?.episodeNumber ? `S${String(progress.seasonNumber || 1).padStart(2, "0")}E${String(progress.episodeNumber).padStart(2, "0")} · ` : "";
+    return `${episode}${formatTime(Number(progress?.position || 0))}`;
+  }
+
+  function openAlternativePlayer(item, { resume = false } = {}) {
     const kinopoiskId = Number(item?.kinopoiskId || item?.kinopoisk_id || 0);
     if (!kinopoiskId) return;
     rememberPlayerContext();
+    const progressKey = alternativeProgressKey(item);
+    const savedProgress = state.progress[progressKey] || null;
     modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal" role="dialog" aria-modal="true" aria-labelledby="alternative-player-title"><div class="modal-head"><div><div class="eyebrow">Другой плеер · Alloha</div><h2 id="alternative-player-title">${escapeHtml(item.title)}</h2></div><button class="icon-button" id="alternative-player-close" type="button" aria-label="Закрыть">×</button></div><div class="player-toolbar"><div class="player-selects"><label class="player-select"><span>Озвучка</span><select id="alternative-player-voice" disabled aria-label="Озвучка Alloha"></select></label><button class="secondary-button" id="alternative-player-refresh" type="button">Обновить ссылку</button></div></div><div class="provider-frame external-embed-frame"><iframe id="alternative-player-frame" title="${escapeHtml(item.title)} · Alloha" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" hidden></iframe></div><p id="alternative-player-status" class="notice" role="status" aria-live="polite">Ищу доступные озвучки…</p></section></div>`;
     const frame = $("#alternative-player-frame");
     const voiceSelect = $("#alternative-player-voice");
@@ -5660,16 +5749,88 @@
     let requestNumber = 0;
     let controller = null;
     let closed = false;
+    let activeOption = null;
+    let position = Number(savedProgress?.position || 0);
+    let duration = Number(savedProgress?.duration || 0);
+    let seasonNumber = savedProgress?.seasonNumber || null;
+    let episodeNumber = savedProgress?.episodeNumber || null;
+    let lastSavedAt = 0;
+    let started = false;
+    // Series: Alloha restores its own season, episode and time for the chosen
+    // translation; a seek could land in the wrong episode, so only films seek.
+    let resumeTarget = resume && item.kind !== "series" && savedProgress && !savedProgress.completed ? Number(savedProgress.position || 0) : 0;
+    let infoTimer = null;
+    const sendCommand = (api, value) => {
+      try { frame.contentWindow?.postMessage(JSON.stringify(value === undefined ? { api } : { api, value }), ALTERNATIVE_PLAYER_ORIGIN); } catch {}
+    };
+    const saveProgress = (completed = false) => {
+      if (!started || !activeOption) return;
+      const isSeries = item.kind === "series";
+      state.progress[progressKey] = {
+        titleId: item.id, providerId: `alloha:${activeOption.id}`, player: "alternative",
+        translationId: String(activeOption.id), translationName: activeOption.name,
+        seasonNumber: isSeries ? seasonNumber : null, episodeNumber: isSeries ? episodeNumber : null,
+        position, duration, completed, updatedAt: Date.now(),
+      };
+      rememberHistory(item.id);
+      saveState();
+      pushCatalogProgress(progressKey, state.progress[progressKey]);
+      lastSavedAt = Date.now();
+    };
+    const onPlayerMessage = (event) => {
+      if (event.origin !== ALTERNATIVE_PLAYER_ORIGIN || event.source !== frame.contentWindow) return;
+      let payload;
+      try { payload = typeof event.data === "string" ? JSON.parse(event.data) : event.data; } catch { return; }
+      if (!payload || typeof payload.event !== "string") return;
+      if (payload.event === "getTimeSave") {
+        const serial = payload.saveInfo?.serial;
+        if (Number(serial?.episode) > 0) { seasonNumber = Number(serial.season) || 1; episodeNumber = Number(serial.episode); }
+        return;
+      }
+      if (payload.event === "duration") {
+        if (Number(payload.time) > 0) duration = Number(payload.time);
+        return;
+      }
+      const time = Number(payload.time);
+      if (!Number.isFinite(time)) return;
+      // Ads play before the film and report time 0; only real playback counts.
+      if (time > 0.5 && !started) {
+        started = true;
+        sendCommand("duration");
+        sendCommand("getTimeSave");
+        status.textContent = `${activeOption?.name || "Другой плеер"} · прогресс сохраняется в «Продолжить просмотр».`;
+      }
+      if (!started) return;
+      if (resumeTarget > 30 && time + 15 < resumeTarget) {
+        sendCommand("seek", resumeTarget);
+        status.textContent = `Продолжаю с ${formatTime(resumeTarget)}.`;
+        resumeTarget = 0;
+        return;
+      }
+      resumeTarget = 0;
+      position = time;
+      const completed = payload.event === "ended" || (duration > 0 && position >= duration * .95);
+      if (payload.event === "pause" || payload.event === "ended" || completed || Date.now() - lastSavedAt > ALTERNATIVE_PROGRESS_SAVE_MS) {
+        if (payload.event === "pause") { sendCommand("duration"); sendCommand("getTimeSave"); }
+        saveProgress(completed);
+      }
+    };
+    window.addEventListener("message", onPlayerMessage);
     const showOption = (index) => {
       const option = options[index];
       if (!option) return;
+      if (activeOption && activeOption.id !== option.id) { saveProgress(false); started = false; resumeTarget = position; }
+      activeOption = option;
       voiceSelect.value = String(index);
       frame.src = option.embedUrl;
       frame.hidden = false;
-      status.textContent = `${option.name}${option.quality ? ` · ${option.quality}` : ""}. Сезон и серию выбери внутри внешнего плеера; его прогресс CineVault не получает.`;
+      const resumeText = resume && item.kind === "series" && episodeNumber ? ` Плеер продолжит S${String(seasonNumber || 1).padStart(2, "0")}E${String(episodeNumber).padStart(2, "0")} с ${formatTime(position)}.` : resumeTarget > 30 ? ` Продолжу с ${formatTime(resumeTarget)}${episodeNumber && item.kind === "series" ? `, S${String(seasonNumber || 1).padStart(2, "0")}E${String(episodeNumber).padStart(2, "0")}` : ""}.` : "";
+      status.textContent = `${option.name}${option.quality ? ` · ${option.quality}` : ""}.${resumeText} Позиция сохраняется в «Продолжить просмотр».`;
     };
+    infoTimer = window.setInterval(() => { if (started) { sendCommand("getTimeSave"); if (!duration) sendCommand("duration"); } }, 20_000);
     const loadOptions = async () => {
       const preferredName = options[Number(voiceSelect.value)]?.name || "";
+      const preferredId = String(activeOption?.id || (resume ? savedProgress?.translationId || "" : ""));
       const currentRequest = ++requestNumber;
       controller?.abort();
       const requestController = new AbortController();
@@ -5699,7 +5860,8 @@
         });
         voiceSelect.disabled = options.length < 2;
         if (options.length) {
-          const preferredIndex = options.findIndex((option) => option.name === preferredName);
+          const byId = preferredId ? options.findIndex((option) => String(option.id) === preferredId) : -1;
+          const preferredIndex = byId >= 0 ? byId : options.findIndex((option) => option.name === preferredName);
           showOption(preferredIndex >= 0 ? preferredIndex : 0);
         } else {
           status.textContent = "У Alloha сейчас нет доступных озвучек для этого тайтла.";
@@ -5714,7 +5876,7 @@
     };
     voiceSelect.addEventListener("change", () => showOption(Number(voiceSelect.value)));
     refreshButton.addEventListener("click", loadOptions);
-    const close = () => { closed = true; requestNumber += 1; controller?.abort(); frame.removeAttribute("src"); returnFromPlayer(); };
+    const close = () => { saveProgress(false); window.removeEventListener("message", onPlayerMessage); window.clearInterval(infoTimer); closed = true; requestNumber += 1; controller?.abort(); frame.removeAttribute("src"); returnFromPlayer(); };
     $("#alternative-player-close").addEventListener("click", close);
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
     loadOptions();
@@ -5894,7 +6056,7 @@
       if (item) refreshDetailPlayback(item, { force: true });
     }));
     $$('[data-open-source-import]').forEach((button) => button.addEventListener("click", () => { const item = getTitle(button.dataset.openSourceImport); if (item) openCatalogSourceImport(item); }));
-    $$('[data-alternative-player]').forEach((button) => button.addEventListener("click", () => { const item = getTitle(button.dataset.alternativePlayer); if (item) openAlternativePlayer(item); }));
+    $$('[data-alternative-player]').forEach((button) => button.addEventListener("click", () => { const item = getTitle(button.dataset.alternativePlayer); if (item) openAlternativePlayer(item, { resume: button.dataset.alternativeResume === "1" }); }));
     // Opening a title must not enter fullscreen by itself: a pending source refresh
     // or resume seek can otherwise make the browser exit fullscreen and reset the UI.
     // Fullscreen remains available from the player's explicit control.
@@ -6086,7 +6248,7 @@
       });
     });
     $$('[data-set-theme]').forEach((button) => button.addEventListener("click", () => { state.theme = "graphite"; persistAndRender(); }));
-    $$('[data-clear-progress]').forEach((button) => button.addEventListener("click", () => { state.progress = {}; persistAndRender(); }));
+    $$('[data-clear-progress]').forEach((button) => button.addEventListener("click", () => { state.progress = {}; pushedProgressAt.clear(); apiFetch("/api/catalog-progress", { method: "DELETE" }).catch(() => {}); persistAndRender(); }));
     $$('[data-catalog-genre]').forEach((button) => button.addEventListener("click", () => {
       const genre = normalizeCatalogGenre(button.dataset.catalogGenre);
       state.catalogGenre = normalizeCatalogGenre(state.catalogGenre) === genre ? "" : genre;
@@ -6247,6 +6409,9 @@
     });
     loadLibraryData(false)
       .then(() => render())
+      .catch(() => {});
+    Promise.all([importedCatalog, loadCatalogProgress()])
+      .then(() => { if (state.view === "home" || state.view === "history") render(); })
       .catch(() => {});
     return importedCatalog;
   };
