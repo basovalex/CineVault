@@ -64,7 +64,7 @@ CATALOG_INDEX_FIELDS = (
     "seasons", "runtime", "kinopoiskId", "tmdbId",
     "catalogId", "poster", "posterImage", "providerUrl", "providerName", "providerNote", "tagline",
     "episodeDataFile", "episodeDataProvider", "episodePosterPolicy",
-    "popularRank", "popularList",
+    "popularRank", "popularList", "backdropImage", "logoImage",
 )
 
 _catalog_cache_lock = threading.Lock()
@@ -1027,7 +1027,7 @@ def imported_catalog_entries(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[
                 continue
             imported = imported_by_id.get(identifier) or imported_by_kinopoisk_id.get(kinopoisk_id)
             if imported is not None:
-                for key in ("year", "description", "genres", "tags", "posterImage", "actors", "directors",
+                for key in ("year", "description", "genres", "tags", "posterImage", "backdropImage", "logoImage", "actors", "directors",
                             "producers", "countries", "ageRating", "tagline", "premiere", "runtime",
                             "voteCount", "imdbVoteCount"):
                     missing = imported.get(key) in (None, "", [], 0)
@@ -1094,6 +1094,9 @@ def apply_catalog_popularity(items: list[Dict[str, Any]], ranking: Dict[str, Dic
         if row:
             item["popularRank"] = int(row["rank"])
             item["popularList"] = str(row.get("list") or "")
+            for key in ("backdropImage", "logoImage"):
+                if row.get(key) and not item.get(key):
+                    item[key] = row[key]
         else:
             item.pop("popularRank", None)
             item.pop("popularList", None)

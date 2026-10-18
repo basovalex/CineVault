@@ -3,7 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#292e34">
+  <meta name="theme-color" content="#0d0c0f">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap">
   <meta name="description" content="Личная медиатека CineVault для просмотра разрешённых видео дома и в поездках">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -16,7 +19,7 @@
   <link rel="sitemap" type="application/xml" href="/sitemap.xml">
   <title>CineVault — кино для вас</title>
   <style>.settings-grid [data-set-theme="night"] { display: none !important; }</style>
-    <link rel="stylesheet" href="/styles.css?v=20261018-home-feature-1">
+    <link rel="stylesheet" href="/styles.css?v=20261018-saintstream-1">
 </head>
 <body>
   <div id="app" class="app-shell" data-theme="graphite">
@@ -41,7 +44,7 @@
         <label class="search-box">
           <span class="sr-only">Поиск по каталогу</span>
           <span aria-hidden="true">⌕</span>
-        <input id="search" type="search" placeholder="Введите название и нажмите Enter" autocomplete="off" aria-controls="search-suggestions">
+        <input id="search" type="search" placeholder="Фильмы, сериалы, актёры" autocomplete="off" aria-controls="search-suggestions">
           <kbd>⌘ K</kbd>
         </label>
         <div id="search-suggestions" class="search-suggestions" aria-label="Быстрые результаты поиска" hidden></div>
@@ -68,7 +71,7 @@
   </div>
   <script src="/config.local.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" crossorigin="anonymous"></script>
-  <script src="/app.js?v=20261018-alt-progress-2" defer></script>
+  <script src="/app.js?v=20261018-saintstream-1" defer></script>
   <script>
     if ("serviceWorker" in navigator) {
       let reloadingForUpdate = false;
@@ -77,7 +80,7 @@
         reloadingForUpdate = true;
         window.location.reload();
       });
-      window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js?v=20261018-alt-progress-1", { updateViaCache: "none" }).catch(() => {}));
+      window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js?v=20261018-saintstream-1", { updateViaCache: "none" }).catch(() => {}));
     }
   </script>
 </body>

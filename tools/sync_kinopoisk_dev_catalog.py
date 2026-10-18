@@ -37,7 +37,7 @@ SELECT_FIELDS = (
     "id", "name", "alternativeName", "enName", "type", "isSeries", "year",
     "description", "shortDescription", "genres", "countries", "rating", "poster",
     "externalId", "movieLength", "seriesLength", "createdAt", "updatedAt",
-    "votes", "persons", "ageRating", "slogan", "premiere",
+    "votes", "persons", "ageRating", "slogan", "premiere", "backdrop", "logo",
 )
 
 
@@ -70,6 +70,8 @@ def catalog_entry(row: Dict[str, Any]) -> Dict[str, Any]:
     url_kind = "series" if kind == "series" else "film"
     ratings = row.get("rating") if isinstance(row.get("rating"), dict) else {}
     image = row.get("poster") if isinstance(row.get("poster"), dict) else {}
+    backdrop = row.get("backdrop") if isinstance(row.get("backdrop"), dict) else {}
+    logo = row.get("logo") if isinstance(row.get("logo"), dict) else {}
     external_ids = row.get("externalId") if isinstance(row.get("externalId"), dict) else {}
     votes = row.get("votes") if isinstance(row.get("votes"), dict) else {}
     premiere = row.get("premiere") if isinstance(row.get("premiere"), dict) else {}
@@ -100,6 +102,8 @@ def catalog_entry(row: Dict[str, Any]) -> Dict[str, Any]:
         "premiere": str(premiere.get("russia") or premiere.get("world") or "")[:10],
         "runtime": positive_int(row.get("seriesLength") if kind == "series" else row.get("movieLength")) or None,
         "posterImage": str(image.get("url") or image.get("previewUrl") or "").strip(),
+        "backdropImage": str(backdrop.get("url") or backdrop.get("previewUrl") or "").strip(),
+        "logoImage": str(logo.get("previewUrl") or logo.get("url") or "").strip(),
         "providerUrl": "https://www.kinopoisk.ru/{}/{}/".format(url_kind, kp_id),
         "providerName": "Kinopoisk.dev · метаданные",
         "providerNote": "Карточка содержит метаданные. Видеопоток запрашивается при открытии.",
@@ -321,8 +325,14 @@ def sync_popular(token: str, catalog_path: Path, metadata_path: Path, state_path
                         continue
                     seen_ids.add(kp_id)
                     votes = row.get("votes") if isinstance(row.get("votes"), dict) else {}
+                    backdrop = row.get("backdrop") if isinstance(row.get("backdrop"), dict) else {}
+                    logo = row.get("logo") if isinstance(row.get("logo"), dict) else {}
+                    # Artwork travels with the ranking so cards with verified
+                    # streams (never rewritten here) get it too.
                     ranked.append({"kinopoiskId": kp_id, "list": slug, "votes": positive_int(votes.get("kp")),
-                                   "year": positive_int(row.get("year"))})
+                                   "year": positive_int(row.get("year")),
+                                   "backdropImage": str(backdrop.get("url") or "").strip(),
+                                   "logoImage": str(logo.get("previewUrl") or logo.get("url") or "").strip()})
                 result = merge_page(fresh, cards, legacy_ids | hidden, require_complete=True)
                 for key in ("created", "updated", "skipped"):
                     totals[key] += result[key]

@@ -39,3 +39,4 @@ android/local.properties
 android/.gradle/
 android/.kotlin/
 .icloud-recovered/
+app/data/catalog_popular.json
