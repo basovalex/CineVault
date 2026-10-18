@@ -2,6 +2,47 @@ import Foundation
 import SwiftUI
 import UIKit
 import CryptoKit
+import Security
+
+private enum SecretStore {
+    private static let service = "com.cinevault.personal"
+
+    static func read(_ account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    @discardableResult
+    static func write(_ value: String, account: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        if value.isEmpty {
+            let result = SecItemDelete(query as CFDictionary)
+            return result == errSecSuccess || result == errSecItemNotFound
+        }
+        var item = query
+        item[kSecValueData as String] = Data(value.utf8)
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let result = SecItemAdd(item as CFDictionary, nil)
+        if result == errSecDuplicateItem {
+            let changes: [String: Any] = [kSecValueData as String: Data(value.utf8)]
+            return SecItemUpdate(query as CFDictionary, changes as CFDictionary) == errSecSuccess
+        }
+        return result == errSecSuccess
+    }
+}
 
 actor PosterImageCache {
     static let shared = PosterImageCache()
@@ -66,18 +107,46 @@ actor PosterImageCache {
 
 @MainActor
 final class AppStore: ObservableObject {
+    static let defaultServerAddress = "https://cinevault-aleksandr.duckdns.org"
+
+    private static var bundledBasicUsername: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CineVaultBasicUsername") as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static var bundledBasicPassword: String {
+        Bundle.main.object(forInfoDictionaryKey: "CineVaultBasicPassword") as? String ?? ""
+    }
+
     @Published var episodes: [Episode] = []
-    @Published var catalog: [CatalogTitle] = CatalogTitle.featured
+    @Published var catalog: [CatalogTitle] = []
+    @Published private(set) var catalogPage = 1
+    @Published private(set) var catalogPages = 1
+    @Published private(set) var catalogTotal = 0
+    @Published private(set) var catalogFacets: CatalogFacets?
+    @Published private(set) var homeShelves: [CatalogShelf] = []
+    @Published private(set) var homeLoading = false
+    @Published private(set) var homeError: String?
+    @Published private(set) var homePopularAvailable = false
+    @Published private(set) var homeMood: String
+    @Published private(set) var isCatalogLoading = false
+    @Published private(set) var catalogError: String?
     @Published var history: [Episode] = []
     @Published var isLoading = false
     @Published var statusMessage = "Подключите сервер CineVault"
     @Published var serverAddress: String
     @Published var viewerToken: String
+    @Published var basicUsername: String
+    @Published var basicPassword: String
     @Published private(set) var catalogRequestIDs: Set<String> = []
 
     let api: CineVaultAPI
     let downloads = DownloadManager.shared
     private var refreshInFlight = false
+    private var catalogRequestVersion = 0
+    private var catalogSelection = ""
+    private var homeCandidates: [CatalogTitle] = []
+    private var homeFeedLoaded = false
     private let cacheFileName = "library-cache.json"
     private let progressFileName = "device-progress.json"
     private let catalogRequestsFileName = "catalog-requests.json"
@@ -85,15 +154,42 @@ final class AppStore: ObservableObject {
 
     init() {
         let defaults = UserDefaults.standard
-        let savedServerAddress = defaults.string(forKey: "cinevault.serverAddress") ?? "http://127.0.0.1:8080"
-        let savedViewerToken = defaults.string(forKey: "cinevault.viewerToken") ?? ""
+        let savedServerAddress = defaults.string(forKey: "cinevault.serverAddress") ?? Self.defaultServerAddress
+        let configuredBasicUsername = Self.bundledBasicUsername
+        let configuredBasicPassword = Self.bundledBasicPassword
+        let savedBasicUsername = configuredBasicUsername.isEmpty
+            ? (defaults.string(forKey: "cinevault.basicUsername") ?? "") : configuredBasicUsername
+        let savedBasicPassword = configuredBasicPassword.isEmpty
+            ? (SecretStore.read("basicPassword") ?? "") : configuredBasicPassword
+        let storedViewerToken = SecretStore.read("viewerToken")
+            ?? defaults.string(forKey: "cinevault.viewerToken") ?? ""
+        let savedViewerToken = savedBasicUsername.isEmpty ? storedViewerToken : ""
+        if defaults.object(forKey: "cinevault.viewerToken") != nil {
+            if SecretStore.write(savedViewerToken, account: "viewerToken") {
+                defaults.removeObject(forKey: "cinevault.viewerToken")
+            }
+        }
+        if SecretStore.read("basicPassword") == nil, !savedBasicPassword.isEmpty {
+            _ = SecretStore.write(savedBasicPassword, account: "basicPassword")
+        } else if !configuredBasicPassword.isEmpty, configuredBasicPassword != SecretStore.read("basicPassword") {
+            _ = SecretStore.write(configuredBasicPassword, account: "basicPassword")
+        }
 
         self.serverAddress = savedServerAddress
         self.viewerToken = savedViewerToken
+        self.basicUsername = savedBasicUsername
+        self.basicPassword = savedBasicPassword
+        self.homeMood = defaults.string(forKey: "cinevault.homeMood") ?? "уютно"
 
-        let configuration = ServerConfiguration(address: savedServerAddress, viewerToken: savedViewerToken)
-            ?? ServerConfiguration(address: "http://127.0.0.1:8080", viewerToken: "")!
+        let configuration = ServerConfiguration(
+            address: savedServerAddress, viewerToken: savedViewerToken,
+            basicUsername: savedBasicUsername, basicPassword: savedBasicPassword
+        )
+            ?? ServerConfiguration(address: Self.defaultServerAddress, viewerToken: "")!
         self.api = CineVaultAPI(configuration: configuration)
+        if defaults.string(forKey: "cinevault.basicUsername") == nil, !savedBasicUsername.isEmpty {
+            defaults.set(savedBasicUsername, forKey: "cinevault.basicUsername")
+        }
         loadLocalProgress()
         loadCatalogRequests()
         loadCachedLibrary()
@@ -101,17 +197,205 @@ final class AppStore: ObservableObject {
     }
 
     func connect() async {
-        guard let configuration = ServerConfiguration(address: serverAddress, viewerToken: viewerToken) else {
-            statusMessage = "Некорректный адрес сервера"
+        guard let configuration = ServerConfiguration(
+            address: serverAddress, viewerToken: viewerToken,
+            basicUsername: basicUsername, basicPassword: basicPassword
+        ) else {
+            statusMessage = "Проверь адрес и выбери один способ входа: Basic или viewer-токен"
+            return
+        }
+        guard SecretStore.write(viewerToken, account: "viewerToken"),
+              SecretStore.write(basicPassword, account: "basicPassword") else {
+            statusMessage = "Не удалось сохранить пароль в защищённом хранилище iPhone"
             return
         }
         api.configuration = configuration
         UserDefaults.standard.set(serverAddress, forKey: "cinevault.serverAddress")
-        UserDefaults.standard.set(viewerToken, forKey: "cinevault.viewerToken")
+        UserDefaults.standard.set(basicUsername, forKey: "cinevault.basicUsername")
+        await loadCatalogPage(1)
         await refresh()
+        await loadHomeDiscovery(force: true)
+    }
+
+    func loadCatalogFacets() async {
+        guard catalogFacets == nil else { return }
+        do {
+            catalogFacets = try await api.fetchCatalogFacets()
+        } catch {
+            // Facets are optional; the catalog itself remains usable if this endpoint fails.
+        }
+    }
+
+    func loadHomeDiscovery(force: Bool = false) async {
+        guard !homeLoading, force || !homeFeedLoaded else { return }
+        homeLoading = true
+        homeError = nil
+        defer { homeLoading = false }
+        do {
+            async let popular = api.fetchCatalogPage(page: 1, sort: "popular", collection: "popular")
+            async let recent = api.fetchCatalogPage(page: 1, sort: "new", collection: "new")
+            async let evening = api.fetchCatalogPage(page: 1, sort: "rating", collection: "evening")
+            async let anime = api.fetchCatalogPage(page: 1, sort: "rating", collection: "anime")
+            async let tense = api.fetchCatalogPage(page: 1, sort: "rating", collection: "tense")
+            async let together = api.fetchCatalogPage(page: 1, sort: "rating", collection: "together")
+            let pages = try await (popular, recent, evening, anime, tense, together)
+            let entries = [pages.0, pages.1, pages.2, pages.3, pages.4, pages.5]
+                .flatMap(\.items)
+                .map(\.catalogTitle)
+            var unique: [String: CatalogTitle] = [:]
+            entries.forEach { unique[$0.id] = $0 }
+            homeCandidates = Array(unique.values)
+
+            var tasteGenres: [String: Int] = [:]
+            var seenTitleIDs = Set<String>()
+            let watchedTitleIDs = history.compactMap(\.titleID).filter { seenTitleIDs.insert($0).inserted }.prefix(3)
+            for titleID in watchedTitleIDs {
+                if let watched = try? await api.fetchCatalogTitle(id: titleID) {
+                    for genre in watched.tags.map({ $0.localizedLowercase }) {
+                        tasteGenres[genre, default: 0] += 1
+                    }
+                }
+            }
+            let popularTitles = pages.0.items.map(\.catalogTitle)
+            let recentTitles = pages.1.items.map(\.catalogTitle)
+            let personal = rankedPersonalTitles(
+                homeCandidates, tasteGenres: tasteGenres,
+                watchedTitleIDs: Set(history.compactMap(\.titleID))
+            )
+            let moodItems = homeCandidates
+                .filter { title in title.tags.contains(where: { moodGenres.contains($0.localizedLowercase) }) }
+                .sorted(by: discoveryOrder)
+            homeShelves = [
+                CatalogShelf(id: "personal", title: "Мопс советует", subtitle: tasteGenres.isEmpty ? "Первые рекомендации — со временем подстроятся под просмотры" : "Похоже на то, что вы уже смотрели", items: personal),
+                CatalogShelf(id: "popular", title: "Популярное", subtitle: "Сначала карточки с большим числом оценок Kinopoisk", items: popularTitles),
+                CatalogShelf(id: "recent", title: "Новое и обсуждаемое", subtitle: "Свежие карточки, о которых уже голосуют", items: recentTitles),
+                CatalogShelf(id: "mood", title: moodShelfTitle, subtitle: moodShelfDescription, items: moodItems),
+                CatalogShelf(id: "evening", title: "На один вечер", subtitle: "Фильмы, которые удобно включить сегодня", items: pages.2.items.map(\.catalogTitle)),
+                CatalogShelf(id: "anime", title: "Аниме", subtitle: "Анимационные фильмы и сериалы", items: pages.3.items.map(\.catalogTitle)),
+                CatalogShelf(id: "together", title: "Для двоих", subtitle: "Романтика и истории для совместного вечера", items: pages.5.items.map(\.catalogTitle)),
+                CatalogShelf(id: "tense", title: "Держит в напряжении", subtitle: "Триллеры, детективы и криминальные истории", items: pages.4.items.map(\.catalogTitle)),
+            ].filter { !$0.items.isEmpty }
+            homePopularAvailable = !popularTitles.isEmpty
+            homeFeedLoaded = true
+            prefetchPosters()
+        } catch {
+            homeError = error.localizedDescription
+        }
+    }
+
+    func selectHomeMood(_ mood: String) {
+        guard ["уютно", "романтично", "смеяться", "напряжённо"].contains(mood) else { return }
+        homeMood = mood
+        UserDefaults.standard.set(mood, forKey: "cinevault.homeMood")
+        guard homeFeedLoaded else { return }
+        let moodItems = homeCandidates
+            .filter { title in title.tags.contains(where: { moodGenres(for: mood).contains($0.localizedLowercase) }) }
+            .sorted(by: discoveryOrder)
+        let shelf = CatalogShelf(id: "mood", title: moodShelfTitle, subtitle: moodShelfDescription, items: moodItems)
+        if let index = homeShelves.firstIndex(where: { $0.id == "mood" }) {
+            homeShelves[index] = shelf
+        } else if !moodItems.isEmpty {
+            homeShelves.insert(shelf, at: min(3, homeShelves.count))
+        }
+        homeShelves.removeAll { $0.id == "mood" && $0.items.isEmpty }
+    }
+
+    private var moodGenres: [String] { moodGenres(for: homeMood) }
+
+    private func moodGenres(for mood: String) -> [String] {
+        switch mood {
+        case "романтично": return ["мелодрама", "комедия", "драма", "романтика"]
+        case "смеяться": return ["комедия", "мультфильм", "семейный"]
+        case "напряжённо": return ["триллер", "детектив", "ужасы", "криминал", "боевик"]
+        default: return ["комедия", "семейный", "мультфильм", "приключения", "фэнтези", "мелодрама"]
+        }
+    }
+
+    private var moodShelfTitle: String {
+        switch homeMood {
+        case "романтично": return "Для двоих"
+        case "смеяться": return "Чтобы посмеяться"
+        case "напряжённо": return "Держит в напряжении"
+        default: return "Уютное на вечер"
+        }
+    }
+
+    private var moodShelfDescription: String {
+        switch homeMood {
+        case "романтично": return "Мелодрамы, романтические комедии и истории о людях"
+        case "смеяться": return "Комедии и лёгкие истории для отдыха"
+        case "напряжённо": return "Триллеры, детективы и истории с сильной интригой"
+        default: return "Тёплые истории, приключения и семейное кино"
+        }
+    }
+
+    private func discoveryOrder(_ lhs: CatalogTitle, _ rhs: CatalogTitle) -> Bool {
+        if lhs.voteCount != rhs.voteCount { return (lhs.voteCount ?? 0) > (rhs.voteCount ?? 0) }
+        if lhs.rating != rhs.rating { return (lhs.rating ?? 0) > (rhs.rating ?? 0) }
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+    }
+
+    private func rankedPersonalTitles(
+        _ items: [CatalogTitle], tasteGenres: [String: Int], watchedTitleIDs: Set<String>
+    ) -> [CatalogTitle] {
+        items.filter { !watchedTitleIDs.contains($0.id) }
+            .sorted { lhs, rhs in
+                let lhsTaste = lhs.tags.reduce(0) { $0 + (tasteGenres[$1.localizedLowercase] ?? 0) }
+                let rhsTaste = rhs.tags.reduce(0) { $0 + (tasteGenres[$1.localizedLowercase] ?? 0) }
+                if lhsTaste != rhsTaste { return lhsTaste > rhsTaste }
+                return discoveryOrder(lhs, rhs)
+            }
+            .prefix(12).map { $0 }
+    }
+
+    func loadCatalogPage(
+        _ page: Int, search: String = "", kind: String = "", genre: String = "",
+        sort: String = "rating", collection: String = ""
+    ) async {
+        guard let configuration = ServerConfiguration(
+            address: serverAddress, viewerToken: viewerToken,
+            basicUsername: basicUsername, basicPassword: basicPassword
+        ), configuration == api.configuration else {
+            catalogError = "Укажи адрес в Настройках и нажми «Подключить и обновить»."
+            return
+        }
+        if page > 1 && isCatalogLoading { return }
+        let selection = "\(search)|\(kind)|\(genre)|\(sort)|\(collection)"
+        if page == 1 && selection != catalogSelection {
+            catalog = []
+            catalogPage = 1
+            catalogPages = 1
+            catalogTotal = 0
+            catalogSelection = selection
+        }
+        catalogRequestVersion += 1
+        let requestVersion = catalogRequestVersion
+        isCatalogLoading = true
+        catalogError = nil
+        defer {
+            if requestVersion == catalogRequestVersion { isCatalogLoading = false }
+        }
+        do {
+            let response = try await api.fetchCatalogPage(
+                page: page, search: search, kind: kind, genre: genre, sort: sort, collection: collection
+            )
+            guard requestVersion == catalogRequestVersion, !Task.isCancelled else { return }
+            catalog = response.items.map(\.catalogTitle)
+            catalogPage = response.page
+            catalogPages = response.pages
+            catalogTotal = response.total
+            prefetchPosters()
+        } catch {
+            guard requestVersion == catalogRequestVersion, !Task.isCancelled else { return }
+            catalogError = error.localizedDescription
+        }
     }
 
     func refresh() async {
+        guard let configuration = ServerConfiguration(
+            address: serverAddress, viewerToken: viewerToken,
+            basicUsername: basicUsername, basicPassword: basicPassword
+        ), configuration == api.configuration else { return }
         guard !refreshInFlight else { return }
         refreshInFlight = true
         isLoading = true
@@ -125,7 +409,7 @@ final class AppStore: ObservableObject {
             rebuildLocalHistory()
             saveCachedLibrary(LibraryResponse(items: episodes, history: history))
             prefetchPosters()
-            statusMessage = episodes.isEmpty ? "Сервер подключён, но каталог пока пуст" : "Подключено серий: \(episodes.count)"
+            statusMessage = episodes.isEmpty ? "Сервер подключён · личная медиатека пока пуста" : "Подключено серий: \(episodes.count)"
         } catch {
             if episodes.isEmpty {
                 statusMessage = error.localizedDescription

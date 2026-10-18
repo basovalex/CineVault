@@ -11,7 +11,7 @@ enum CineVaultAPIError: LocalizedError {
         case .invalidServerAddress:
             return "Проверь адрес сервера. Нужен URL вида https://..."
         case .unauthorized:
-            return "Сервер не принял viewer-токен. Проверь токен доступа."
+            return "Сервер отклонил вход (HTTP 401). Проверь данные доступа в приватной сборке приложения."
         case let .server(_, message):
             return message
         case .invalidResponse:
@@ -29,6 +29,47 @@ final class CineVaultAPI {
 
     func fetchLibrary() async throws -> LibraryResponse {
         try await request(path: "api/library")
+    }
+
+    func fetchCatalogPage(
+        page: Int, search: String = "", kind: String = "", genre: String = "",
+        sort: String = "rating", collection: String = ""
+    ) async throws -> RemoteCatalogPage {
+        var query = [
+            URLQueryItem(name: "page", value: String(max(1, page))),
+            URLQueryItem(name: "limit", value: "50"),
+            URLQueryItem(name: "sort", value: sort),
+        ]
+        if !search.isEmpty { query.append(URLQueryItem(name: "search", value: search)) }
+        if !kind.isEmpty { query.append(URLQueryItem(name: "type", value: kind)) }
+        if !genre.isEmpty { query.append(URLQueryItem(name: "genre", value: genre)) }
+        if !collection.isEmpty { query.append(URLQueryItem(name: "collection", value: collection)) }
+        return try await request(path: "api/catalog", queryItems: query)
+    }
+
+    func fetchCatalogFacets() async throws -> CatalogFacets {
+        try await request(path: "api/catalog/facets")
+    }
+
+    func fetchCatalogTitle(id: String) async throws -> CatalogTitle {
+        let entry: RemoteCatalogEntry = try await request(
+            path: "api/catalog/imported/\(id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id)"
+        )
+        return entry.catalogTitle
+    }
+
+    func fetchPlayerOptions(kinopoiskID: Int) async throws -> ExternalPlayerOptions {
+        try await request(
+            path: "api/player-options",
+            queryItems: [URLQueryItem(name: "kinopoisk", value: String(kinopoiskID))]
+        )
+    }
+
+    func refreshPlayback(kinopoiskID: Int, force: Bool = false) async throws -> PlaybackRefreshResponse {
+        var request = try makeRequest(path: "api/playback/refresh", method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(PlaybackRefreshPayload(kinopoiskID: kinopoiskID, force: force))
+        return try await send(request, expecting: PlaybackRefreshResponse.self)
     }
 
     func fetchOfflineManifest(for episode: Episode, quality: String) async throws -> OfflineManifest {
@@ -61,6 +102,30 @@ final class CineVaultAPI {
         return configuration.baseURL.appendingPathComponent(relativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
     }
 
+    func playbackURL(for source: String) -> URL? {
+        if let absolute = URL(string: source), absolute.scheme == "https", absolute.host != nil {
+            return absolute
+        }
+        if source.hasPrefix("/") { return url(for: source) }
+        return nil
+    }
+
+    func authorizationHeader(for url: URL) -> String? {
+        guard url.scheme == configuration.baseURL.scheme,
+              url.host == configuration.baseURL.host,
+              url.port == configuration.baseURL.port else { return nil }
+        return authorizationHeaderValue
+    }
+
+    private var authorizationHeaderValue: String? {
+        if !configuration.basicUsername.isEmpty {
+            let credentials = "\(configuration.basicUsername):\(configuration.basicPassword)"
+            return "Basic \(Data(credentials.utf8).base64EncodedString())"
+        }
+        if !configuration.viewerToken.isEmpty { return "Bearer \(configuration.viewerToken)" }
+        return nil
+    }
+
     func authorizedRequest(for relativePath: String) throws -> URLRequest {
         try makeRequest(path: relativePath, method: "GET")
     }
@@ -79,8 +144,8 @@ final class CineVaultAPI {
         request.httpMethod = method
         request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if !configuration.viewerToken.isEmpty {
-            request.setValue("Bearer \(configuration.viewerToken)", forHTTPHeaderField: "Authorization")
+        if let authorizationHeaderValue {
+            request.setValue(authorizationHeaderValue, forHTTPHeaderField: "Authorization")
         }
         return request
     }

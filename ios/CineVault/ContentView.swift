@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import AVKit
+import WebKit
 
 extension Color {
     static let cineBackground = Color(red: 0.035, green: 0.075, blue: 0.085)
@@ -19,7 +20,7 @@ enum AppTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .home: return "Для нас"
+        case .home: return "Для вас"
         case .catalog: return "Каталог"
         case .downloads: return "Скачано"
         case .settings: return "Настройки"
@@ -38,7 +39,29 @@ enum AppTab: String, CaseIterable, Identifiable {
 
 @MainActor
 final class AppChrome: ObservableObject {
-    @Published var isTabBarHidden = false
+    @Published private(set) var isTabBarHidden = false
+    private var playerScreens: Set<UUID> = []
+
+    func hideTabBar(for screen: UUID) {
+        playerScreens.insert(screen)
+        isTabBarHidden = !playerScreens.isEmpty
+    }
+
+    func showTabBar(for screen: UUID) {
+        playerScreens.remove(screen)
+        isTabBarHidden = !playerScreens.isEmpty
+    }
+}
+
+private struct HideTabBarWhileVisible: ViewModifier {
+    @EnvironmentObject private var chrome: AppChrome
+    @State private var screenID = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { chrome.hideTabBar(for: screenID) }
+            .onDisappear { chrome.showTabBar(for: screenID) }
+    }
 }
 
 struct ContentView: View {
@@ -48,27 +71,20 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            selectedView
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if !chrome.isTabBarHidden {
-                        Color.clear.frame(height: 92)
-                    }
+        selectedView
+            // A real safe-area inset reserves the dock's space in each scroll
+            // view, so the final row and pagination can scroll fully above it.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if !chrome.isTabBarHidden {
+                    CineVaultTabBar(selection: $selectedTab)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 7)
+                        .padding(.bottom, 8)
+                        .background {
+                            Color.cineBackground.ignoresSafeArea(edges: .bottom)
+                        }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-
-            if !chrome.isTabBarHidden {
-                VStack(spacing: 0) {
-                    Spacer()
-                    Color.cineBackground
-                        .frame(height: 104)
-                        .ignoresSafeArea(edges: .bottom)
-                }
-
-                CineVaultTabBar(selection: $selectedTab)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 8)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
         }
         .environmentObject(store)
         .environmentObject(chrome)
@@ -89,7 +105,7 @@ struct ContentView: View {
     private var selectedView: some View {
         switch selectedTab {
         case .home: HomeView()
-        case .catalog: CatalogView()
+        case .catalog: CatalogView(selectedTab: $selectedTab)
         case .downloads: DownloadsView()
         case .settings: SettingsView()
         }
@@ -138,8 +154,68 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    HeroCard()
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack(alignment: .center, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Для вас")
+                                .font(.largeTitle.bold())
+                            Text("Мопс собрал кино под ваш вечер")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        PugMascot()
+                            .frame(width: 76, height: 76)
+                            .accessibilityLabel("Мопс, помощник CineVault")
+                    }
+                    if let pick = store.homeShelves.first(where: { $0.id == "personal" })?.items.first {
+                        NavigationLink {
+                            CatalogTitleDetailView(title: pick)
+                        } label: {
+                            HomeRecommendationCard(title: pick)
+                        }
+                        .buttonStyle(.plain)
+                    } else if store.homeLoading {
+                        ProgressView("Мопс выбирает фильм…")
+                            .frame(maxWidth: .infinity, minHeight: 115)
+                            .background(Color.cineSurface)
+                            .clipShape(RoundedRectangle(cornerRadius: 22))
+                    } else if let error = store.homeError {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Не удалось загрузить подборки").font(.headline)
+                            Text(error).font(.caption).foregroundStyle(.secondary)
+                            Button("Повторить") { Task { await store.loadHomeDiscovery(force: true) } }
+                                .buttonStyle(.borderedProminent)
+                        }
+                        .padding(16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.cineSurface)
+                        .clipShape(RoundedRectangle(cornerRadius: 20))
+                    } else {
+                        EmptyCard(text: "Подборка появится, когда загрузится каталог.")
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Какое настроение?")
+                            .font(.headline)
+                        HStack(spacing: 8) {
+                            moodButton("уютно", title: "Уютно", icon: "sparkles")
+                            moodButton("романтично", title: "Для двоих", icon: "heart")
+                            moodButton("смеяться", title: "Посмеяться", icon: "face.smiling")
+                            moodButton("напряжённо", title: "Интрига", icon: "eye")
+                        }
+                    }
+                    if store.homePopularAvailable == false && !store.homeLoading && store.homeError == nil {
+                        Text("Для настоящей популярности нужны счётчики оценок Kinopoisk. Пока они не пришли с сервера, не подменяю их рейтингом.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.cineSurface)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                    }
+                    ForEach(store.homeShelves) { shelf in
+                        CatalogDiscoveryShelf(shelf: shelf)
+                    }
                     if !store.continueWatching.isEmpty {
                         SectionTitle(title: "Продолжить просмотр", systemImage: "play.circle.fill")
                         ForEach(store.continueWatching) { episode in EpisodeRow(episode: episode) }
@@ -150,24 +226,151 @@ struct HomeView: View {
                     }
                 }
                 .padding()
+                // NavigationStack destinations do not always inherit the root
+                // safe-area inset. Keep the final card above the persistent dock.
+                .padding(.bottom, 112)
             }
             .background(Color.cineBackground.ignoresSafeArea())
-            .navigationTitle("CineVault")
-            .refreshable { await store.refresh() }
+            .toolbar(.hidden, for: .navigationBar)
+            .task { await store.loadHomeDiscovery() }
+            .refreshable {
+                await store.refresh()
+                await store.loadHomeDiscovery(force: true)
+            }
+        }
+    }
+
+    private func moodButton(_ mood: String, title: String, icon: String) -> some View {
+        Button {
+            store.selectHomeMood(mood)
+        } label: {
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                Text(title).lineLimit(1).minimumScaleFactor(0.8)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(store.homeMood == mood ? Color.cineBackground : Color.white.opacity(0.86))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(store.homeMood == mood ? Color.cineAccent : Color.cineSurface)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct HomeRecommendationCard: View {
+    let title: CatalogTitle
+
+    var body: some View {
+        HStack(spacing: 14) {
+            CatalogPosterArt(title: title)
+                .frame(width: 82, height: 116)
+            VStack(alignment: .leading, spacing: 7) {
+                Label("Рекомендация мопса", systemImage: "sparkles")
+                    .font(.caption.bold())
+                    .foregroundStyle(Color.cineAccent)
+                Text(title.title)
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                HStack(spacing: 6) {
+                    Text(String(title.year))
+                        .font(.caption.weight(.semibold))
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.cineBackground.opacity(0.72))
+                        .clipShape(Capsule())
+                    Text([title.kindLabel, title.rating.map { String(format: "КП %.1f", $0) }]
+                        .compactMap { $0 }.joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+                Text(title.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .background(LinearGradient(colors: [Color.cineSurface, Color.cineAccent.opacity(0.18)], startPoint: .topLeading, endPoint: .bottomTrailing))
+        .clipShape(RoundedRectangle(cornerRadius: 22))
+        .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.cineAccent.opacity(0.22), lineWidth: 1))
+    }
+}
+
+private struct CatalogDiscoveryShelf: View {
+    let shelf: CatalogShelf
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(shelf.title).font(.title3.bold())
+                Text(shelf.subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(shelf.items) { title in
+                        NavigationLink {
+                            CatalogTitleDetailView(title: title)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 7) {
+                                CatalogPosterArt(title: title)
+                                    .frame(width: 124, height: 174)
+                                Text(title.title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(2)
+                                    .frame(maxWidth: .infinity, minHeight: 36, alignment: .topLeading)
+                                if shelf.id == "popular" {
+                                    Text("\(title.voteCount ?? 0) оценок КП")
+                                        .font(.caption2)
+                                        .foregroundStyle(Color.cineAccent)
+                                } else {
+                                    Text(title.rating.map { String(format: "КП %.1f", $0) } ?? title.kindLabel)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .frame(width: 124, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
         }
     }
 }
 
 struct CatalogView: View {
     @EnvironmentObject private var store: AppStore
+    @Binding var selectedTab: AppTab
     @State private var query = ""
     @State private var filter: CatalogFilter = .all
+    @State private var selectedGenre = ""
+    @State private var sort = "rating"
+    @State private var collection = ""
 
-    private var filtered: [CatalogTitle] {
-        store.catalog.filter { title in
-            let matchesFilter = filter == .all || (filter == .movies && !title.isSeries) || (filter == .series && title.isSeries)
-            let matchesQuery = query.isEmpty || "\(title.title) \(title.originalTitle) \(title.tags.joined(separator: " "))".localizedCaseInsensitiveContains(query)
-            return matchesFilter && matchesQuery
+    private var normalizedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var searchKey: String {
+        "\(filter.rawValue)|\(normalizedQuery)|\(selectedGenre)|\(sort)|\(collection)"
+    }
+    private var genreNames: [String] {
+        (store.catalogFacets?.genres ?? [:]).keys.sorted()
+    }
+    private var serverKind: String {
+        switch filter {
+        case .all: return ""
+        case .movies: return "movie"
+        case .series: return "series"
         }
     }
 
@@ -175,11 +378,32 @@ struct CatalogView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("Фильмы и сериалы для нас")
+                    Text("Фильмы и сериалы для вас")
                         .font(.title2.bold())
                     Text("Карточки, описания и доступные способы просмотра в одном месте.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(.secondary)
+                        TextField("Найти фильм или сериал", text: $query)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.search)
+                        if !query.isEmpty {
+                            Button {
+                                query = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .accessibilityLabel("Очистить поиск")
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(Color.cineSurface)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
                     HStack(spacing: 8) {
                         ForEach(CatalogFilter.allCases) { option in
                             Button(option.title) { filter = option }
@@ -191,19 +415,162 @@ struct CatalogView: View {
                                 .clipShape(Capsule())
                         }
                     }
+                    HStack(spacing: 10) {
+                        Menu {
+                            Button("Все жанры") { selectedGenre = "" }
+                            if !genreNames.isEmpty { Divider() }
+                            ForEach(genreNames, id: \.self) { genre in
+                                Button("\(genre.capitalized) · \(store.catalogFacets?.genres[genre] ?? 0)") {
+                                    selectedGenre = genre
+                                }
+                            }
+                        } label: {
+                            Label(selectedGenre.isEmpty ? "Жанр" : selectedGenre.capitalized, systemImage: "line.3.horizontal.decrease")
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(Color.cineSurface)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+
+                        Menu {
+                            Button { sort = "popular" } label: {
+                                Label("По числу оценок Kinopoisk", systemImage: sort == "popular" ? "checkmark" : "chart.bar.fill")
+                            }
+                            Button { sort = "rating" } label: {
+                                Label("С высоким рейтингом", systemImage: sort == "rating" ? "checkmark" : "star")
+                            }
+                            Button { sort = "new" } label: {
+                                Label("Сначала новые", systemImage: sort == "new" ? "checkmark" : "calendar")
+                            }
+                            Button { sort = "title" } label: {
+                                Label("По алфавиту", systemImage: sort == "title" ? "checkmark" : "textformat.abc")
+                            }
+                        } label: {
+                            Label(sortTitle, systemImage: "arrow.up.arrow.down")
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(Color.cineSurface)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 8) {
+                            collectionChip(title: "Все карточки", value: "")
+                            collectionChip(title: "Популярные по оценкам", value: "popular")
+                        }
+                    }
+                    .scrollIndicators(.hidden)
+                    Text("\(store.catalogTotal) карточек · 50 на страницу")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let error = store.catalogError {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Не удалось загрузить каталог").font(.headline)
+                            Text(error).font(.caption).foregroundStyle(.secondary)
+                            Button("Повторить") {
+                                Task { await loadPage(1) }
+                            }
+                            Button("Настройки подключения") { selectedTab = .settings }
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.cineSurface)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                    }
+                    if store.catalog.isEmpty && !store.isCatalogLoading && store.catalogError == nil {
+                        EmptyCard(text: collection == "popular"
+                            ? "Для рейтинга популярности нужны числа оценок Kinopoisk. Сервер пока не прислал такие данные для подходящих карточек."
+                            : "По этому запросу карточек пока нет.")
+                    }
                     LazyVStack(spacing: 12) {
-                        ForEach(filtered) { title in
+                        ForEach(store.catalog) { title in
                             CatalogTitleRow(title: title)
                         }
                     }
+                    if store.isCatalogLoading {
+                        ProgressView("Загружаю каталог…")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                    } else if store.catalogTotal > 0 {
+                        HStack(spacing: 18) {
+                            Button {
+                                Task { await loadPage(store.catalogPage - 1) }
+                            } label: {
+                                Label("Назад", systemImage: "chevron.left")
+                            }
+                            .disabled(store.catalogPage <= 1)
+
+                            Text("Страница \(store.catalogPage) из \(store.catalogPages)")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel("Страница \(store.catalogPage) из \(store.catalogPages)")
+
+                            Button {
+                                Task { await loadPage(store.catalogPage + 1) }
+                            } label: {
+                                Label("Дальше", systemImage: "chevron.right")
+                                    .labelStyle(.titleAndIcon)
+                            }
+                            .disabled(store.catalogPage >= store.catalogPages)
+                        }
+                        .buttonStyle(.bordered)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                    }
                 }
                 .padding()
+                // The pagination row must remain reachable above the dock.
+                .padding(.bottom, 112)
             }
             .scrollIndicators(.hidden)
             .background(Color.cineBackground)
-            .searchable(text: $query, prompt: "Найти фильм или сериал")
             .navigationTitle("Каталог")
+            .task(id: searchKey) {
+                await store.loadCatalogFacets()
+                if !normalizedQuery.isEmpty {
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                }
+                guard !Task.isCancelled else { return }
+                await loadPage(1)
+            }
+            .refreshable {
+                await loadPage(1)
+            }
         }
+    }
+
+    private var sortTitle: String {
+        switch sort {
+        case "popular": return "По популярности"
+        case "new": return "Сначала новые"
+        case "title": return "По алфавиту"
+        default: return "По рейтингу"
+        }
+    }
+
+    private func collectionChip(title: String, value: String) -> some View {
+        Button(title) {
+            collection = value
+            if value == "popular" { sort = "popular" }
+            else if sort == "popular" { sort = "rating" }
+        }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(collection == value ? Color.cineBackground : Color.white.opacity(0.82))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(collection == value ? Color.cineAccent : Color.cineSurface)
+            .clipShape(Capsule())
+    }
+
+    private func loadPage(_ page: Int) async {
+        await store.loadCatalogPage(
+            page, search: normalizedQuery, kind: serverKind, genre: selectedGenre,
+            sort: sort, collection: collection
+        )
     }
 }
 
@@ -226,6 +593,7 @@ private struct CatalogTitleRow: View {
 
     private var serverEpisodeCount: Int {
         store.episodes.filter {
+            $0.titleID == title.id ||
             $0.title.localizedCaseInsensitiveCompare(title.title) == .orderedSame ||
             $0.originalTitle?.localizedCaseInsensitiveCompare(title.originalTitle) == .orderedSame
         }.count
@@ -240,15 +608,27 @@ private struct CatalogTitleRow: View {
                     Text(title.title)
                         .font(.headline)
                         .foregroundStyle(.white)
-                    Text("\(title.year) · \(title.kindLabel)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        Text(String(title.year))
+                            .font(.caption.weight(.semibold))
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.cineBackground.opacity(0.72))
+                            .clipShape(Capsule())
+                        Text([title.kindLabel, title.rating.map { String(format: "КП %.1f", $0) }, title.voteCount.map { "\($0) оценок" }]
+                            .compactMap { $0 }.joined(separator: " · "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
                     Text(title.description)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
                     HStack(spacing: 6) {
-                        Text(title.isSeries ? (serverEpisodeCount > 0 ? "На сервере: \(serverEpisodeCount) серий" : title.seasonLabel) : title.availabilityLabel)
+                        Text(title.isSeries ? (serverEpisodeCount > 0 ? "На сервере: \(serverEpisodeCount) серий" : title.seasonLabel) : (title.isServerTitle ? "Открыть карточку" : title.availabilityLabel))
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(title.videoURL == nil ? Color.cineSteel : Color.cineAccent)
                         if title.videoURL != nil {
@@ -277,19 +657,28 @@ private struct CatalogTitleRow: View {
 private struct CatalogTitleDetailView: View {
     @EnvironmentObject private var store: AppStore
     let title: CatalogTitle
+    @State private var fullTitle: CatalogTitle?
+    @State private var detailError: String?
+    @State private var isLoadingDetails = false
+    @State private var externalPlayers: [ExternalPlayerProvider] = []
+    @State private var externalPlayerError: String?
+    @State private var isLoadingExternalPlayers = false
     @State private var isRequesting = false
     @State private var requestError: String?
     @State private var expandedSeasons: Set<Int> = [1]
 
+    private var activeTitle: CatalogTitle { fullTitle ?? title }
+
     private var libraryEpisodes: [Episode] {
         store.episodes.filter {
+            $0.titleID == title.id ||
             $0.title.localizedCaseInsensitiveCompare(title.title) == .orderedSame ||
             $0.originalTitle?.localizedCaseInsensitiveCompare(title.originalTitle) == .orderedSame
         }
     }
 
     private var metadataLabel: String {
-        [String(title.year), title.kindLabel, title.runtimeLabel]
+        [activeTitle.year > 0 ? String(activeTitle.year) : "", activeTitle.kindLabel, activeTitle.runtimeLabel]
             .filter { !$0.isEmpty }
             .joined(separator: " · ")
     }
@@ -298,13 +687,13 @@ private struct CatalogTitleDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .top, spacing: 16) {
-                    CatalogPosterArt(title: title)
+                    CatalogPosterArt(title: activeTitle)
                         .frame(width: 130, height: 190)
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(title.title).font(.title2.bold())
+                        Text(activeTitle.title).font(.title2.bold())
                         Text(metadataLabel)
                             .foregroundStyle(.secondary)
-                        Text(title.description)
+                        Text(activeTitle.description)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -316,7 +705,7 @@ private struct CatalogTitleDetailView: View {
                     Text("Подробнее")
                         .font(.headline)
                     HStack(spacing: 8) {
-                        ForEach(title.tags, id: \.self) { tag in
+                        ForEach(activeTitle.tags, id: \.self) { tag in
                             Text("#\(tag)")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(Color.cineAccent)
@@ -326,42 +715,94 @@ private struct CatalogTitleDetailView: View {
                                 .clipShape(Capsule())
                         }
                     }
-                    if title.isSeries, !title.seasonLabel.isEmpty {
-                        Label(title.seasonLabel, systemImage: "square.stack.3d.up")
+                    if activeTitle.isSeries, !activeTitle.seasonLabel.isEmpty {
+                        Label(activeTitle.seasonLabel, systemImage: "square.stack.3d.up")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
-                    Text(title.providerNote)
+                    Text(activeTitle.providerNote)
                         .font(.caption)
-                        .foregroundStyle(title.videoURL == nil ? Color.cineSteel : Color.cineAccent)
+                        .foregroundStyle(Color.cineSteel)
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.cineSurface)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
 
-                if let videoURL = title.videoURL, let url = URL(string: videoURL) {
+                if isLoadingDetails {
+                    ProgressView("Проверяю доступные источники…")
+                }
+                if let detailError {
+                    Text("Источники не обновились: \(detailError)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Button("Повторить") { Task { await loadDetails() } }
+                }
+                if !activeTitle.playbackSources.isEmpty {
+                    SectionTitle(title: "Варианты просмотра", systemImage: "play.rectangle")
+                    ForEach(activeTitle.playbackSources) { source in
+                        if store.api.playbackURL(for: source.url) != nil {
+                            NavigationLink {
+                                CatalogFreshPlayerView(title: activeTitle, source: source)
+                            } label: {
+                                Label(source.label.isEmpty ? "Смотреть" : source.label, systemImage: "play.fill")
+                                    .font(.headline)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.cineAccent)
+                        }
+                    }
+                } else if !activeTitle.isServerTitle,
+                          let videoURL = activeTitle.videoURL,
+                          let url = URL(string: videoURL) {
                     NavigationLink {
-                        CatalogExternalPlayerView(title: title, url: url)
+                        CatalogExternalPlayerView(title: activeTitle, url: url)
                     } label: {
                         Label("Смотреть в CineVault", systemImage: "play.fill")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.cineAccent)
                 }
 
-                if title.isSeries {
+                if let kinopoiskID = activeTitle.kinopoiskID {
+                    Button {
+                        Task { await loadExternalPlayers(kinopoiskID: kinopoiskID) }
+                    } label: {
+                        Label("Показать внешние плееры и озвучки", systemImage: "film.stack")
+                    }
+                    .disabled(isLoadingExternalPlayers)
+                    if isLoadingExternalPlayers { ProgressView("Проверяю плееры…") }
+                    if let externalPlayerError {
+                        Text(externalPlayerError).font(.caption).foregroundStyle(.orange)
+                    }
+                    ForEach(externalPlayers) { provider in
+                        SectionTitle(title: provider.name, systemImage: "play.rectangle.on.rectangle")
+                        ForEach(provider.translations) { translation in
+                            if let url = URL(string: translation.embedURL),
+                               url.scheme == "https", url.host == "theatre.stravers.live", url.port == nil {
+                                NavigationLink {
+                                    CatalogAllohaPlayerView(title: activeTitle, preferredTranslation: translation.name)
+                                } label: {
+                                    Label(
+                                        [translation.name, translation.quality].filter { !$0.isEmpty }.joined(separator: " · "),
+                                        systemImage: "play.fill"
+                                    )
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                }
+
+                if activeTitle.isSeries {
                     SectionTitle(title: "Сезоны и серии", systemImage: "film.stack")
-                    Text("Серии с галочкой уже есть на сервере. Остальные можно запросить к добавлению.")
+                    Text("Серии, загруженные в вашу медиатеку, можно смотреть в приложении.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    requestButton
-                    if title.seasons.isEmpty {
+                    if !activeTitle.isServerTitle { requestButton }
+                    if activeTitle.seasons.isEmpty {
                         EmptyCard(text: "Для этого сериала пока не удалось получить список сезонов.")
                     } else {
-                        ForEach(Array(title.seasons.enumerated()), id: \.offset) { index, episodeCount in
+                        ForEach(Array(activeTitle.seasons.enumerated()), id: \.offset) { index, episodeCount in
                             let season = index + 1
                             DisclosureGroup(isExpanded: seasonBinding(season)) {
                                 LazyVStack(spacing: 8) {
@@ -396,16 +837,47 @@ private struct CatalogTitleDetailView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 16))
                         }
                     }
-                } else if title.videoURL == nil {
-                    requestButton
-                    EmptyCard(text: "Карточка и обложка уже готовы. После добавления разрешённого файла он появится здесь автоматически.")
+                } else if activeTitle.playbackSources.isEmpty && activeTitle.videoURL == nil && !isLoadingDetails {
+                    if !activeTitle.isServerTitle { requestButton }
+                    EmptyCard(text: "У этой карточки пока нет доступного источника для iOS.")
                 }
             }
             .padding()
+            // A title can be much longer than the screen; reserve space for
+            // the tab bar so its final actions and episodes are not covered.
+            .padding(.bottom, 112)
         }
         .background(Color.cineBackground)
         .navigationTitle(title.title)
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: title.id) { await loadDetails() }
+    }
+
+    private func loadDetails() async {
+        guard title.isServerTitle else { return }
+        isLoadingDetails = true
+        detailError = nil
+        defer { isLoadingDetails = false }
+        do {
+            fullTitle = try await store.api.fetchCatalogTitle(id: title.id)
+        } catch {
+            detailError = error.localizedDescription
+        }
+    }
+
+    private func loadExternalPlayers(kinopoiskID: Int) async {
+        isLoadingExternalPlayers = true
+        externalPlayerError = nil
+        defer { isLoadingExternalPlayers = false }
+        do {
+            let response = try await store.api.fetchPlayerOptions(kinopoiskID: kinopoiskID)
+            externalPlayers = response.providers
+            if externalPlayers.isEmpty {
+                externalPlayerError = "Сейчас внешние плееры недоступны для этой карточки."
+            }
+        } catch {
+            externalPlayerError = "Не удалось получить плееры: \(error.localizedDescription)"
+        }
     }
 
     private func seasonBinding(_ season: Int) -> Binding<Bool> {
@@ -576,7 +1048,212 @@ private struct CachedPosterImage<Placeholder: View>: View {
     }
 }
 
+private struct CatalogEmbedPlayerView: View {
+    @EnvironmentObject private var store: AppStore
+    let title: CatalogTitle
+    let url: URL
+
+    var body: some View {
+        ExternalEmbedWebView(url: url, siteURL: store.api.configuration.baseURL)
+            .background(Color.black)
+            .navigationTitle(title.title)
+            .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct CatalogFreshPlayerView: View {
+    @EnvironmentObject private var store: AppStore
+    let title: CatalogTitle
+    let source: CatalogPlaybackSource
+    @State private var currentSource: CatalogPlaybackSource?
+    @State private var isLoading = true
+    @State private var warning: String?
+
+    var body: some View {
+        Group {
+            if let currentSource, let url = store.api.playbackURL(for: currentSource.url) {
+                VStack(spacing: 0) {
+                    if let warning {
+                        Text(warning).font(.caption).foregroundStyle(.orange).padding(8)
+                    }
+                    if currentSource.isEmbed {
+                        CatalogEmbedPlayerView(title: title, url: url)
+                    } else {
+                        CatalogExternalPlayerView(title: title, url: url)
+                    }
+                }
+            } else if isLoading {
+                ProgressView("Обновляю ссылку на видео…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ContentUnavailableView("Видео недоступно", systemImage: "play.slash", description: Text(warning ?? "Источник не отдал ссылку"))
+            }
+        }
+        .navigationTitle(title.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            Button("Обновить ссылку", systemImage: "arrow.clockwise") {
+                Task { await refresh(force: true) }
+            }
+        }
+        .modifier(HideTabBarWhileVisible())
+        .task { await refresh(force: false) }
+    }
+
+    private func refresh(force: Bool) async {
+        isLoading = true
+        currentSource = nil
+        warning = nil
+        if let kinopoiskID = title.kinopoiskID {
+            do {
+                let response = try await store.api.refreshPlayback(kinopoiskID: kinopoiskID, force: force)
+                if response.deleted == true {
+                    warning = response.warning ?? "Карточка больше недоступна"
+                    isLoading = false
+                    return
+                }
+                let sources = response.entry?.catalogTitle.playbackSources ?? []
+                currentSource = sources.first(where: { $0.id == source.id })
+                    ?? sources.first(where: { $0.voice == source.voice && $0.quality == source.quality && $0.type == source.type })
+                    ?? sources.first(where: { $0.isEmbed == source.isEmbed })
+                warning = response.warning
+            } catch {
+                warning = "Свежую ссылку получить не удалось: \(error.localizedDescription). Пробую предыдущую."
+            }
+        }
+        if currentSource == nil {
+            currentSource = source
+        }
+        if store.api.playbackURL(for: currentSource?.url ?? "") == nil {
+            currentSource = nil
+            warning = "Некорректный адрес видео"
+        }
+        isLoading = false
+    }
+}
+
+private struct CatalogAllohaPlayerView: View {
+    @EnvironmentObject private var store: AppStore
+    let title: CatalogTitle
+    let preferredTranslation: String
+    @State private var translations: [ExternalPlayerTranslation] = []
+    @State private var selectedID: String?
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+
+    private var selected: ExternalPlayerTranslation? {
+        translations.first(where: { $0.id == selectedID }) ?? translations.first
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if translations.count > 1 {
+                Picker("Озвучка", selection: $selectedID) {
+                    ForEach(translations) { translation in
+                        Text(translation.name).tag(Optional(translation.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                .padding(.horizontal)
+            }
+            if let selected, let url = URL(string: selected.embedURL),
+               url.scheme == "https", url.host == "theatre.stravers.live", url.port == nil {
+                ExternalEmbedWebView(url: url, siteURL: store.api.configuration.baseURL)
+            } else if isLoading {
+                ProgressView("Получаю свежую ссылку Alloha…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ContentUnavailableView("Alloha недоступен", systemImage: "play.slash", description: Text(errorMessage ?? "Нет доступных озвучек"))
+            }
+        }
+        .background(Color.black)
+        .navigationTitle(title.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            Button("Обновить ссылку", systemImage: "arrow.clockwise") {
+                Task { await loadOptions() }
+            }
+        }
+        .modifier(HideTabBarWhileVisible())
+        .task { await loadOptions() }
+    }
+
+    private func loadOptions() async {
+        guard let kinopoiskID = title.kinopoiskID else {
+            errorMessage = "У карточки нет Kinopoisk ID"
+            isLoading = false
+            return
+        }
+        let currentName = selected?.name ?? preferredTranslation
+        isLoading = true
+        translations = []
+        errorMessage = nil
+        do {
+            let response = try await store.api.fetchPlayerOptions(kinopoiskID: kinopoiskID)
+            translations = response.providers.first(where: { $0.id == "alloha" })?.translations ?? []
+            selectedID = translations.first(where: { $0.name == currentName })?.id ?? translations.first?.id
+            if translations.isEmpty { errorMessage = "Сейчас нет доступных озвучек" }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+}
+
+private struct ExternalEmbedWebView: UIViewRepresentable {
+    let url: URL
+    let siteURL: URL
+
+    final class Coordinator {
+        var loadedURL: URL?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.allowsInlineMediaPlayback = true
+        configuration.mediaTypesRequiringUserActionForPlayback = []
+        if let filterURL = Bundle.main.url(forResource: "filter", withExtension: "js"),
+           let source = try? String(contentsOf: filterURL, encoding: .utf8) {
+            configuration.userContentController.addUserScript(
+                WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
+            )
+        }
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.scrollView.isScrollEnabled = false
+        loadFrame(in: webView, coordinator: context.coordinator)
+        return webView
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        guard context.coordinator.loadedURL != url else { return }
+        loadFrame(in: webView, coordinator: context.coordinator)
+    }
+
+    private func loadFrame(in webView: WKWebView, coordinator: Coordinator) {
+        coordinator.loadedURL = url
+        let safeURL = url.absoluteString
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+        let html = """
+        <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>html,body,iframe{margin:0;width:100%;height:100%;border:0;background:#000}</style></head>
+        <body><iframe src="\(safeURL)" allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+        allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></body></html>
+        """
+        webView.loadHTMLString(html, baseURL: siteURL)
+    }
+
+    static func dismantleUIView(_ webView: WKWebView, coordinator: ()) {
+        webView.stopLoading()
+        webView.loadHTMLString("", baseURL: nil)
+    }
+}
+
 private struct CatalogExternalPlayerView: View {
+    @EnvironmentObject private var store: AppStore
     let title: CatalogTitle
     let url: URL
     @State private var player: AVPlayer?
@@ -621,11 +1298,18 @@ private struct CatalogExternalPlayerView: View {
             }
         }
         .background(Color.black)
-        .ignoresSafeArea(edges: .bottom)
         .navigationTitle(title.title)
         .navigationBarTitleDisplayMode(.inline)
+        .modifier(HideTabBarWhileVisible())
         .task {
             startPlayer()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemFailedToPlayToEndTime)) { notification in
+            guard let currentItem = player?.currentItem,
+                  let failedItem = notification.object as? AVPlayerItem,
+                  currentItem === failedItem else { return }
+            isLoading = false
+            errorMessage = "Поток оборвался. Попробуй обновить ссылку или выбрать другой плеер."
         }
         .onDisappear {
             player?.pause()
@@ -640,7 +1324,13 @@ private struct CatalogExternalPlayerView: View {
         player = nil
         Task {
             do {
-                let asset = AVURLAsset(url: url)
+                let options: [String: Any]
+                if let authorization = store.api.authorizationHeader(for: url) {
+                    options = ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": authorization]]
+                } else {
+                    options = [:]
+                }
+                let asset = AVURLAsset(url: url, options: options)
                 let playable = try await asset.load(.isPlayable)
                 guard playable else {
                     throw NSError(
@@ -718,6 +1408,7 @@ struct DownloadsView: View {
                     }
                 }
                 .padding()
+                .padding(.bottom, 112)
             }
             .background(Color.cineBackground)
             .navigationTitle("Скачано")
@@ -757,8 +1448,11 @@ struct SettingsView: View {
                     TextField("https://ваш-сервер.example", text: $store.serverAddress)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    SecureField("Viewer-токен", text: $store.viewerToken)
-                    Button("Подключить и обновить") { Task { await store.connect() } }
+                        .keyboardType(.URL)
+                    Text("Вход выполняется автоматически. Данные доступа настроены в приватной сборке приложения.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Button("Переподключить и обновить") { Task { await store.connect() } }
                     Text(store.statusMessage).font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Скачивание") {
@@ -772,10 +1466,9 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Section("Метаданные каталога") {
-                    Text("Постеры, описания и состав сезонов загружаются из TMDB. TMDB не является видеопровайдером: видео появляется только после добавления разрешённого файла на ваш сервер.")
+                    Text("Карточки, поиск и варианты источников приходят с вашего CineVault-сервера. Приложение само не ищет видеопотоки на сторонних сайтах.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Link("Открыть TMDB", destination: URL(string: "https://www.themoviedb.org/")!)
                 }
             }
             .scrollContentBackground(.hidden)
@@ -882,7 +1575,7 @@ struct HeroCard: View {
     var body: some View {
         HStack(alignment: .bottom, spacing: 14) {
             VStack(alignment: .leading, spacing: 10) {
-                Label("говно советует", systemImage: "sparkles")
+                Label("CineVault советует", systemImage: "sparkles")
                     .font(.caption.bold())
                     .foregroundStyle(.white.opacity(0.75))
                 Text("Скачайте серии заранее и смотрите вместе даже в поездке")

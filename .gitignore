@@ -23,6 +23,18 @@ __pycache__/
 *.xcuserstate
 DerivedData/
 build/
+/ios/Secrets.xcconfig
+/android/local.properties
+/android/secrets.properties
+/android/.gradle/
+/android/**/build/
 
 # Local media-library sidecar files
 *.sqlite3-*
+
+# IDE and Android local state
+.idea/
+.fetched/
+android/local.properties
+android/.gradle/
+android/.kotlin/

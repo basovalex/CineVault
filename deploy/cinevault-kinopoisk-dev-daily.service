@@ -1,0 +1,10 @@
+[Unit]
+Description=CineVault daily Kinopoisk.dev film and series metadata sync
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=30min
+WorkingDirectory=/srv/cinevault
+ExecStart=/usr/bin/flock -n /run/cinevault-kinopoisk-dev-sync.lock /usr/bin/docker compose --profile maintenance run --rm kinopoisk-catalog-sync --mode daily --kind all --pages 5 --limit 100 --lookback-days 7 --min-votes 50 --require-complete

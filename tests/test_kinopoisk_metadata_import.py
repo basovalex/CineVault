@@ -7,6 +7,7 @@ from unittest.mock import patch
 from tools.import_kinopoisk_metadata import import_links, metadata_entry, parse_target
 from tools.media_library_server import KinopoiskOnDemandUpdater, imported_catalog_entries, sitemap_title_ids
 from tools.sync_kinopoisk_dev_catalog import api_token, catalog_entry as kinopoisk_dev_entry, sync as sync_kinopoisk_dev
+from tools.curate_kinopoisk_series import curate, eligible_series
 
 
 def metadata(name="Тестовый фильм", category="1"):
@@ -142,6 +143,44 @@ class KinopoiskMetadataImportTests(unittest.TestCase):
         with patch.dict("tools.sync_kinopoisk_dev_catalog.os.environ", {}, clear=True), \
                 patch("tools.sync_kinopoisk_dev_catalog.ROOT", self.root):
             self.assertEqual(api_token(), "test-only")
+
+    def test_curated_year_adds_complete_cards_and_preserves_legacy(self):
+        description = "Подробное описание сериала с героями и сюжетом, достаточное для карточки каталога."
+        def row(identifier, votes, poster=True):
+            return {"id": identifier, "name": "Сериал {}".format(identifier), "type": "tv-series",
+                    "isSeries": True, "year": 2000, "description": description,
+                    "genres": [{"name": "драма"}], "votes": {"kp": votes},
+                    "poster": {"url": "https://example.org/poster.jpg"} if poster else {}}
+        self.catalog.write_text(json.dumps([{"id": "kinopoisk-1", "kinopoiskId": 1,
+                                             "kind": "series", "videoSources": [{"url": "https://example.org/movie.m3u8"}]}]), encoding="utf-8")
+        self.assertFalse(eligible_series(row(2, 5), 2000, 100))
+        self.assertFalse(eligible_series(row(2, 100, poster=False), 2000, 100))
+        with patch("tools.curate_kinopoisk_series.fetch_page", return_value={
+            "docs": [row(1, 500), row(2, 300), row(3, 5)], "pages": 1,
+        }):
+            result = curate("fake-token", self.catalog, self.metadata, self.root / "state.json",
+                            2000, 2000, 2, 100, 1, 0)
+        self.assertEqual(result["years"]["2000"], 2)
+        self.assertEqual(result["created"], 2)
+        cards = imported_catalog_entries(self.catalog)
+        self.assertEqual(len(cards), 2)
+        self.assertEqual(cards[0]["description"], description)
+        self.assertEqual(json.loads(self.catalog.read_text())[0]["videoSources"][0]["url"],
+                         "https://example.org/movie.m3u8")
+
+    def test_curated_year_does_not_count_misclassified_legacy_card(self):
+        self.catalog.write_text(json.dumps([{"id": "kinopoisk-1", "kinopoiskId": 1,
+                                             "kind": "movie", "year": 2000}]), encoding="utf-8")
+        def row(identifier):
+            return {"id": identifier, "name": "Сериал", "type": "tv-series", "isSeries": True,
+                    "year": 2000, "description": "Подробное описание сериала с героями и сюжетом, достаточное для карточки каталога.",
+                    "genres": [{"name": "драма"}], "votes": {"kp": 1000},
+                    "poster": {"url": "https://example.org/poster.jpg"}}
+        with patch("tools.curate_kinopoisk_series.fetch_page", return_value={"docs": [row(1), row(2)], "pages": 1}):
+            result = curate("fake-token", self.catalog, self.metadata, self.root / "state.json",
+                            2000, 2000, 1, 100, 1, 0)
+        self.assertEqual(result["years"]["2000"], 1)
+        self.assertEqual(json.loads(self.metadata.read_text())[0]["kinopoiskId"], 2)
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ SELECT_FIELDS = (
     "id", "name", "alternativeName", "enName", "type", "isSeries", "year",
     "description", "shortDescription", "genres", "countries", "rating", "poster",
     "externalId", "movieLength", "seriesLength", "createdAt", "updatedAt",
+    "votes", "persons", "ageRating", "slogan", "premiere",
 )
 
 
@@ -65,6 +66,13 @@ def catalog_entry(row: Dict[str, Any]) -> Dict[str, Any]:
     ratings = row.get("rating") if isinstance(row.get("rating"), dict) else {}
     image = row.get("poster") if isinstance(row.get("poster"), dict) else {}
     external_ids = row.get("externalId") if isinstance(row.get("externalId"), dict) else {}
+    votes = row.get("votes") if isinstance(row.get("votes"), dict) else {}
+    premiere = row.get("premiere") if isinstance(row.get("premiere"), dict) else {}
+    people = row.get("persons") if isinstance(row.get("persons"), list) else []
+    def people_by_role(role: str, limit: int) -> List[str]:
+        return list(dict.fromkeys(str(person.get("name") or person.get("enName") or "").strip()
+            for person in people if isinstance(person, dict) and person.get("enProfession") == role
+            and (person.get("name") or person.get("enName"))))[:limit]
     genres = text_list(row.get("genres"))
     entry = {
         "id": "kinopoisk-{}".format(kp_id), "kinopoiskId": kp_id,
@@ -77,6 +85,14 @@ def catalog_entry(row: Dict[str, Any]) -> Dict[str, Any]:
         "rating": rating(ratings.get("kp")),
         "ratingKinopoisk": rating(ratings.get("kp")),
         "imdbRating": rating(ratings.get("imdb")),
+        "voteCount": positive_int(votes.get("kp")),
+        "imdbVoteCount": positive_int(votes.get("imdb")),
+        "actors": people_by_role("actor", 12),
+        "directors": people_by_role("director", 6),
+        "producers": people_by_role("producer", 6),
+        "ageRating": positive_int(row.get("ageRating")) or None,
+        "tagline": str(row.get("slogan") or "").strip(),
+        "premiere": str(premiere.get("russia") or premiere.get("world") or "")[:10],
         "runtime": positive_int(row.get("seriesLength") if kind == "series" else row.get("movieLength")) or None,
         "posterImage": str(image.get("url") or image.get("previewUrl") or "").strip(),
         "providerUrl": "https://www.kinopoisk.ru/{}/{}/".format(url_kind, kp_id),
@@ -93,16 +109,23 @@ def catalog_entry(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def fetch_page(session: requests.Session, token: str, page: int, limit: int,
-               updated_since: Optional[date] = None, kind: str = "all") -> Dict[str, Any]:
+               updated_since: Optional[date] = None, kind: str = "all",
+               year: Optional[int] = None, min_votes: int = 0,
+               sort_votes: bool = False) -> Dict[str, Any]:
     params: list[tuple[str, Any]] = [
         ("page", page), ("limit", limit),
-        ("sortField", "updatedAt" if updated_since else "id"), ("sortType", "-1" if updated_since else "1"),
+        ("sortField", "votes.kp" if sort_votes else "updatedAt" if updated_since else "id"),
+        ("sortType", "-1" if sort_votes or updated_since else "1"),
     ]
     params.extend(("selectFields", field) for field in SELECT_FIELDS)
     if updated_since:
         # Kinopoisk.dev uses dd.mm.yyyy ranges for date filters. Keep an
         # overlap between daily runs so a delayed provider update is retried.
         params.append(("updatedAt", "{}-{}".format(updated_since.strftime("%d.%m.%Y"), date.today().strftime("%d.%m.%Y"))))
+    if year is not None:
+        params.append(("year", year))
+    if min_votes:
+        params.append(("votes.kp", "{}-99999999".format(min_votes)))
     if kind == "series":
         params.append(("isSeries", "true"))
     elif kind == "movie":
@@ -119,7 +142,8 @@ def fetch_page(session: requests.Session, token: str, page: int, limit: int,
             last_error = exc
             if attempt >= 3:
                 raise
-            time.sleep(2 ** attempt)
+            retry_after = positive_int(response.headers.get("Retry-After")) if response is not None and response.status_code == 429 else 0
+            time.sleep(min(60, max(2 ** attempt, retry_after)))
     if response is None:
         raise last_error or RuntimeError("Kinopoisk.dev не ответил")
     payload = response.json()
@@ -149,10 +173,24 @@ def api_token() -> str:
     return ""
 
 
-def merge_page(rows: Iterable[Dict[str, Any]], cards: Dict[int, Dict[str, Any]], legacy_ids: set) -> Dict[str, int]:
+def has_core_metadata(row: Dict[str, Any]) -> bool:
+    poster = row.get("poster") if isinstance(row.get("poster"), dict) else {}
+    return bool(
+        str(row.get("name") or "").strip()
+        and len(str(row.get("description") or "").strip()) >= 60
+        and str(poster.get("url") or poster.get("previewUrl") or "").strip()
+        and row.get("genres")
+    )
+
+
+def merge_page(rows: Iterable[Dict[str, Any]], cards: Dict[int, Dict[str, Any]],
+               legacy_ids: set, require_complete: bool = False) -> Dict[str, int]:
     result = {"seen": 0, "created": 0, "updated": 0, "skipped": 0}
     for row in rows:
         result["seen"] += 1
+        if require_complete and not has_core_metadata(row):
+            result["skipped"] += 1
+            continue
         try:
             entry = catalog_entry(row)
         except ValueError:
@@ -171,7 +209,10 @@ def merge_page(rows: Iterable[Dict[str, Any]], cards: Dict[int, Dict[str, Any]],
                 for key in ("videoSources", "sourceFile", "episodeDataFile", "seasons", "catalogId")
                 if previous.get(key)
             }
-            cards[kp_id] = {**previous, **entry, **preserved}
+            fresh_fields = {key: value for key, value in entry.items() if value not in (None, "", [])}
+            if len(str(fresh_fields.get("description") or "")) < len(str(previous.get("description") or "")):
+                fresh_fields.pop("description", None)
+            cards[kp_id] = {**previous, **fresh_fields, **preserved}
             result["updated"] += 1
             continue
         cards[kp_id] = entry
@@ -182,7 +223,8 @@ def merge_page(rows: Iterable[Dict[str, Any]], cards: Dict[int, Dict[str, Any]],
 def sync(token: str, catalog_path: Path, metadata_path: Path, state_path: Path,
          start_page: int, pages: int, limit: int, delay_seconds: float,
          dry_run: bool = False, mode: str = "backfill", lookback_days: int = 7,
-         kind: str = "all") -> Dict[str, int]:
+         kind: str = "all", min_votes: int = 0,
+         require_complete: bool = False) -> Dict[str, int]:
     legacy = read_json(catalog_path, [])
     existing = read_json(metadata_path, [])
     if not isinstance(legacy, list) or not isinstance(existing, list):
@@ -198,11 +240,12 @@ def sync(token: str, catalog_path: Path, metadata_path: Path, state_path: Path,
     totals = {"pages": 0, "seen": 0, "created": 0, "updated": 0, "skipped": 0, "next_page": page}
     with requests.Session() as session:
         for _ in range(pages):
-            payload = fetch_page(session, token, page, limit, updated_since=updated_since, kind=kind)
+            payload = fetch_page(session, token, page, limit, updated_since=updated_since,
+                                 kind=kind, min_votes=min_votes)
             rows = payload["docs"]
             if not rows:
                 break
-            result = merge_page(rows, cards, legacy_ids)
+            result = merge_page(rows, cards, legacy_ids, require_complete=require_complete)
             if not dry_run:
                 save_json_atomic(metadata_path, list(cards.values()))
                 next_state = dict(state) if isinstance(state, dict) else {}
@@ -243,9 +286,13 @@ def main() -> int:
     parser.add_argument("--delay-seconds", type=float, default=1.0)
     parser.add_argument("--lookback-days", type=int, default=7,
                         help="Перекрытие обновлений для daily (1–31 день)")
+    parser.add_argument("--min-votes", type=int, default=0,
+                        help="Минимальное число оценок Кинопоиска для новых карточек")
+    parser.add_argument("--require-complete", action="store_true",
+                        help="Добавлять только карточки с описанием, постером и жанром")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    if args.start_page < 0 or not 1 <= args.pages <= 100 or not 1 <= args.limit <= 250 or args.delay_seconds < 0 or not 1 <= args.lookback_days <= 31:
+    if args.start_page < 0 or not 1 <= args.pages <= 100 or not 1 <= args.limit <= 250 or args.delay_seconds < 0 or not 1 <= args.lookback_days <= 31 or args.min_votes < 0:
         parser.error("Проверь диапазоны start-page, pages, limit, delay-seconds и lookback-days")
     token = api_token()
     if not token:
@@ -253,7 +300,8 @@ def main() -> int:
     try:
         result = sync(token, args.catalog_path, args.metadata_path, args.state_path,
                       args.start_page, args.pages, args.limit, args.delay_seconds, args.dry_run,
-                      mode=args.mode, lookback_days=args.lookback_days, kind=args.kind)
+                      mode=args.mode, lookback_days=args.lookback_days, kind=args.kind,
+                      min_votes=args.min_votes, require_complete=args.require_complete)
     except (OSError, ValueError, requests.RequestException, json.JSONDecodeError) as exc:
         parser.exit(1, "Синхронизация остановлена на текущей странице: {}\n".format(type(exc).__name__))
     print("{}: режим {}, тип {}, страниц {{pages}}, просмотрено {{seen}}, добавлено {{created}}, обновлено {{updated}}, пропущено {{skipped}}, следующая страница {{next_page}}".format(

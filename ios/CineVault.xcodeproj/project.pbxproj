@@ -16,6 +16,7 @@
 		A00000000000000000000007 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000007 /* ContentView.swift */; };
 		A00000000000000000000010 /* LocalHLSFileServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000010 /* LocalHLSFileServer.swift */; };
 		A00000000000000000000008 /* pug-mascot.png in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000009 /* pug-mascot.png */; };
+		A00000000000000000000012 /* filter.js in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000012 /* filter.js */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,6 +30,8 @@
 		B00000000000000000000010 /* LocalHLSFileServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHLSFileServer.swift; sourceTree = "<group>"; };
 		B00000000000000000000008 /* CineVault.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CineVault.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000009 /* pug-mascot.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Resources/pug-mascot.png; sourceTree = "<group>"; };
+		B00000000000000000000011 /* CineVault.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = CineVault.xcconfig; sourceTree = "<group>"; };
+		B00000000000000000000012 /* filter.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = ../../tools/alloha_ad_filter_extension/filter.js; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -45,6 +48,7 @@
 		D00000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
+				B00000000000000000000011 /* CineVault.xcconfig */,
 				D00000000000000000000002 /* CineVault */,
 				D00000000000000000000003 /* Products */,
 			);
@@ -62,6 +66,7 @@
 				B00000000000000000000007 /* ContentView.swift */,
 				B00000000000000000000010 /* LocalHLSFileServer.swift */,
 				B00000000000000000000009 /* pug-mascot.png */,
+				B00000000000000000000012 /* filter.js */,
 			);
 			path = CineVault;
 			sourceTree = "<group>";
@@ -128,6 +133,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A00000000000000000000008 /* pug-mascot.png in Resources */,
+				A00000000000000000000012 /* filter.js in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -154,10 +160,12 @@
 /* Begin XCBuildConfiguration section */
 		F00000000000000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B00000000000000000000011 /* CineVault.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = CineVault/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = CineVault;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
@@ -174,10 +182,12 @@
 		};
 		F00000000000000000000002 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B00000000000000000000011 /* CineVault.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = CineVault/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = CineVault;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;

@@ -1,0 +1,10 @@
+[Unit]
+Description=CineVault enrich existing Kinopoisk cards in resumable batches
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=infinity
+WorkingDirectory=/srv/cinevault
+ExecStart=/usr/bin/flock -n /run/cinevault-kinopoisk-dev-sync.lock /usr/bin/docker compose --profile maintenance run --rm --entrypoint python kinopoisk-catalog-sync tools/enrich_kinopoisk_catalog.py --batch-size 100 --batches 500 --delay-seconds 1 --resume

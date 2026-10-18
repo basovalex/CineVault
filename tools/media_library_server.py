@@ -48,7 +48,9 @@ DEFAULT_DATA_DIR = ROOT / "data" / "media-library"
 CATALOG_IMPORTS_PATH = APP_DIR / "data" / "catalog_imports.json"
 CATALOG_INDEX_FIELDS = (
     "id", "kind", "title", "originalTitle", "year", "description", "tags", "genres",
-    "rating", "ratingKinopoisk", "imdbRating", "seasons", "runtime", "kinopoiskId", "tmdbId",
+    "rating", "ratingKinopoisk", "imdbRating", "voteCount", "imdbVoteCount",
+    "actors", "directors", "producers", "countries", "ageRating", "premiere",
+    "seasons", "runtime", "kinopoiskId", "tmdbId",
     "catalogId", "poster", "posterImage", "providerUrl", "providerName", "providerNote", "tagline",
     "episodeDataFile", "episodeDataProvider", "episodePosterPolicy",
 )
@@ -93,6 +95,91 @@ DEFAULT_KINOPOISK_UPDATE_DELAY_SECONDS = 2
 DEFAULT_KINOPOISK_UPDATE_TIMEOUT_SECONDS = 5 * 60
 KINOPOISK_REFRESH_COOLDOWN_SECONDS = 15
 KINOPOISK_UPDATE_RETRY_ATTEMPTS = 2
+PLAYER_OPTIONS_API_URL = "https://fbphdplay.top/api/players"
+ALLOHA_EMBED_HOST = "theatre.stravers.live"
+
+
+def alloha_player_options(payload: Any) -> list[Dict[str, Any]]:
+    """Keep only per-translation embeds from the known Alloha player."""
+    players = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(players, list):
+        return []
+    for player in players:
+        if not isinstance(player, dict) or player.get("type") != "Alloha":
+            continue
+        translations = player.get("translations")
+        if not isinstance(translations, list):
+            return []
+        options = []
+        seen_urls = set()
+        for translation in translations[:32]:
+            if not isinstance(translation, dict):
+                continue
+            url = str(translation.get("iframeUrl") or "").strip()
+            if not url or len(url) > MAX_EXTERNAL_EMBED_URL_LENGTH or url in seen_urls:
+                continue
+            try:
+                parsed = urllib.parse.urlsplit(url)
+                has_port = parsed.port is not None
+            except ValueError:
+                continue
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != ALLOHA_EMBED_HOST
+                or has_port
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.path not in {"", "/"}
+                or not parsed.query
+                or parsed.fragment
+            ):
+                continue
+            name = str(translation.get("name") or "").strip()[:80]
+            if not name:
+                continue
+            seen_urls.add(url)
+            options.append({
+                "id": str(translation.get("id") or len(options) + 1)[:80],
+                "name": name,
+                "quality": str(translation.get("quality") or "").strip()[:40],
+                "embedUrl": url,
+            })
+        return options
+    return []
+
+
+def fetch_player_options(kinopoisk_id: Any) -> Dict[str, Any]:
+    try:
+        resolved_id = int(str(kinopoisk_id).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Kinopoisk ID должен быть положительным числом") from exc
+    if resolved_id < 1:
+        raise ValueError("Kinopoisk ID должен быть положительным числом")
+    try:
+        with requests.get(
+            PLAYER_OPTIONS_API_URL,
+            params={"kinopoisk": resolved_id},
+            headers={
+            "Accept": "application/json",
+            "Origin": "https://fbfind.online",
+            "Referer": "https://fbfind.online/",
+            "User-Agent": "Mozilla/5.0 CineVault/1.0",
+            },
+            timeout=12,
+            stream=True,
+        ) as response:
+            response.raise_for_status()
+            raw = response.raw.read(256 * 1024 + 1, decode_content=True)
+    except requests.RequestException as exc:
+        raise RuntimeError("Не удалось получить список внешних плееров") from exc
+    if len(raw) > 256 * 1024:
+        raise RuntimeError("Ответ со списком плееров слишком большой")
+    try:
+        payload = json.loads(raw)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise RuntimeError("Источник вернул некорректный список плееров") from exc
+    options = alloha_player_options(payload)
+    return {"providers": [{"id": "alloha", "name": "Alloha", "mode": "embed", "translations": options}] if options else []}
 DEFAULT_KINOPOISK_IMPORT_TIMEOUT_SECONDS = 30 * 60
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024 * 1024
 MAX_SOURCE_JSON_BYTES = 10 * 1024 * 1024
@@ -896,27 +983,42 @@ def imported_catalog_entries(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[
     with _catalog_cache_lock:
         if _catalog_cache.get("path") == cache_key and _catalog_cache.get("mtime_ns") == mtime_ns:
             return _catalog_cache["items"]
-    try:
-        payload = json.loads(catalog_path.read_text(encoding="utf-8"))
-        metadata_payload = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_mtime_ns is not None else []
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError("Каталог CineVault временно недоступен") from exc
-    items = [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
-    known_ids = {str(item.get("id") or "") for item in items}
-    known_kinopoisk_ids = {str(item.get("kinopoiskId") or "") for item in items if item.get("kinopoiskId")}
-    for item in metadata_payload if isinstance(metadata_payload, list) else []:
-        if not isinstance(item, dict):
-            continue
-        identifier = str(item.get("id") or "")
-        kinopoisk_id = str(item.get("kinopoiskId") or "")
-        if not identifier or not kinopoisk_id or identifier in known_ids or kinopoisk_id in known_kinopoisk_ids:
-            continue
-        items.append(item)
-        known_ids.add(identifier)
-        known_kinopoisk_ids.add(kinopoisk_id)
-    with _catalog_cache_lock:
+        # Keep parsing under the lock. Concurrent first-page/facets/discovery
+        # requests must not each decode and merge the same large JSON files.
+        try:
+            payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+            metadata_payload = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_mtime_ns is not None else []
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Каталог CineVault временно недоступен") from exc
+        items = [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+        known_ids = {str(item.get("id") or "") for item in items}
+        known_kinopoisk_ids = {str(item.get("kinopoiskId") or "") for item in items if item.get("kinopoiskId")}
+        imported_by_id = {str(item.get("id") or ""): item for item in items}
+        imported_by_kinopoisk_id = {str(item.get("kinopoiskId") or ""): item for item in items if item.get("kinopoiskId")}
+        for item in metadata_payload if isinstance(metadata_payload, list) else []:
+            if not isinstance(item, dict):
+                continue
+            identifier = str(item.get("id") or "")
+            kinopoisk_id = str(item.get("kinopoiskId") or "")
+            if not identifier or not kinopoisk_id:
+                continue
+            imported = imported_by_id.get(identifier) or imported_by_kinopoisk_id.get(kinopoisk_id)
+            if imported is not None:
+                for key in ("year", "description", "genres", "tags", "posterImage", "actors", "directors",
+                            "producers", "countries", "ageRating", "tagline", "premiere", "runtime",
+                            "voteCount", "imdbVoteCount"):
+                    missing = imported.get(key) in (None, "", [], 0)
+                    short_description = key == "description" and len(str(imported.get(key) or "")) < 60 and len(str(item.get(key) or "")) >= 60
+                    if (missing or short_description) and item.get(key) not in (None, "", [], 0):
+                        imported[key] = item[key]
+                continue
+            if identifier in known_ids or kinopoisk_id in known_kinopoisk_ids:
+                continue
+            items.append(item)
+            known_ids.add(identifier)
+            known_kinopoisk_ids.add(kinopoisk_id)
         _catalog_cache.update({"path": cache_key, "mtime_ns": mtime_ns, "items": items})
-    return items
+        return items
 
 
 def imported_catalog_index(catalog_path: Path = CATALOG_IMPORTS_PATH, limit: int = 500) -> list[Dict[str, Any]]:
@@ -924,10 +1026,7 @@ def imported_catalog_index(catalog_path: Path = CATALOG_IMPORTS_PATH, limit: int
     items = imported_catalog_entries(catalog_path)
 
     def score(item: Dict[str, Any]) -> tuple[float, int]:
-        try:
-            item_rating = float(item.get("ratingKinopoisk") or item.get("rating") or item.get("imdbRating") or 0)
-        except (TypeError, ValueError):
-            item_rating = 0
+        item_rating = catalog_confidence_rating(item)
         try:
             item_year = max(0, int(item.get("year") or 0))
         except (TypeError, ValueError):
@@ -946,6 +1045,18 @@ def imported_catalog_item(identifier: str, catalog_path: Path = CATALOG_IMPORTS_
     raise KeyError("Карточка каталога не найдена")
 
 
+def catalog_confidence_rating(item: Dict[str, Any]) -> float:
+    """Shrink tiny-sample ratings toward a neutral prior for discovery order."""
+    try:
+        rating_value = float(item.get("ratingKinopoisk") or item.get("rating") or item.get("imdbRating") or 0)
+        votes = max(0, int(item.get("voteCount") or item.get("imdbVoteCount") or 0))
+    except (TypeError, ValueError):
+        return 0.0
+    if rating_value <= 0:
+        return 0.0
+    return (rating_value * votes + 6.8 * 500) / (votes + 500)
+
+
 def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
     """Return a small, server-filtered page of catalog cards."""
     items = imported_catalog_entries()
@@ -961,6 +1072,8 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
     collection = str(params.get("collection", [""])[0]).strip().casefold()
     collection = {"romance": "together", "thrill": "tense"}.get(collection, collection)
     sort = str(params.get("sort", ["rating"])[0]).strip().casefold()
+    if collection == "popular" and sort == "rating":
+        sort = "popular"
     if kind in {"movies", "film", "films"}:
         kind = "movie"
     if kind in {"serial", "serials", "tv"}:
@@ -976,6 +1089,12 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
         values = item.get("genres") if isinstance(item.get("genres"), list) else item.get("tags", [])
         return {str(value).strip().casefold() for value in values if str(value).strip()}
 
+    def votes(item: Dict[str, Any]) -> int:
+        try:
+            return max(0, int(item.get("voteCount") or 0))
+        except (TypeError, ValueError):
+            return 0
+
     def matches(item: Dict[str, Any]) -> bool:
         if requested_ids and str(item.get("id", "")) not in requested_ids:
             return False
@@ -985,8 +1104,20 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
             return False
         if genre and genre not in genres(item):
             return False
-        if collection == "popular" and float(item.get("ratingKinopoisk") or item.get("rating") or 0) < 7:
+        if collection == "popular" and votes(item) <= 0:
             return False
+        if collection == "new":
+            try:
+                item_year = int(item.get("year") or 0)
+                vote_count = int(item.get("voteCount") or 0)
+            except (TypeError, ValueError):
+                return False
+            if item_year < datetime.now().year - 1 or item_year > datetime.now().year or vote_count < 1000:
+                return False
+            if not item.get("posterImage") or len(str(item.get("description") or "")) < 60:
+                return False
+            if catalog_confidence_rating(item) < 6.5:
+                return False
         if collection in {"evening", "mood"}:
             if not (genres(item) & {"уютно", "на вечер", "комедия", "драма", "мелодрама", "приключения", "семейный"}):
                 return False
@@ -1000,16 +1131,22 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
 
     filtered = [item for item in items if matches(item)]
     def rating(item: Dict[str, Any]) -> float:
+        return catalog_confidence_rating(item)
+    def year(item: Dict[str, Any]) -> int:
         try:
-            return float(item.get("ratingKinopoisk") or item.get("rating") or item.get("imdbRating") or 0)
+            return int(item.get("year") or 0)
         except (TypeError, ValueError):
             return 0
-    if sort in {"year", "year_desc", "new"}:
-        filtered.sort(key=lambda item: (int(item.get("year") or 0), rating(item)), reverse=True)
+    if sort in {"popular", "votes"}:
+        filtered.sort(key=lambda item: (votes(item), rating(item), year(item)), reverse=True)
+    elif sort == "new":
+        filtered.sort(key=lambda item: (year(item), votes(item), rating(item)), reverse=True)
+    elif sort in {"year", "year_desc"}:
+        filtered.sort(key=lambda item: (year(item), rating(item)), reverse=True)
     elif sort in {"title", "alphabetical"}:
         filtered.sort(key=lambda item: str(item.get("title") or "").casefold())
     else:
-        filtered.sort(key=lambda item: (rating(item), int(item.get("year") or 0)), reverse=True)
+        filtered.sort(key=lambda item: (rating(item), year(item)), reverse=True)
 
     try:
         page = max(1, int(params.get("page", ["1"])[0]))
@@ -2513,6 +2650,20 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
             self.send_text(200, "User-agent: *\nAllow: /\nSitemap: /sitemap.xml\n", "text/plain; charset=utf-8", cache_control="no-cache")
         elif parsed.path == "/api/health":
             self.send_json(200, {"ok": True, "service": "cinevault-media-library"})
+        elif parsed.path == "/api/player-options":
+            try:
+                params = urllib.parse.parse_qs(parsed.query)
+                kinopoisk_id = int(params.get("kinopoisk", [""])[0])
+                if kinopoisk_id < 1:
+                    raise ValueError
+                imported_catalog_item(str(kinopoisk_id))
+                self.send_json(200, fetch_player_options(kinopoisk_id))
+            except ValueError:
+                self.send_json(400, {"error": "Kinopoisk ID должен быть положительным числом"})
+            except KeyError:
+                self.send_json(404, {"error": "Карточка Kinopoisk не найдена в каталоге CineVault"})
+            except RuntimeError as exc:
+                self.send_json(502, {"error": str(exc)})
         elif parsed.path == "/api/catalog/index":
             try:
                 params = urllib.parse.parse_qs(parsed.query)

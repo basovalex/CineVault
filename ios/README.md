@@ -1,11 +1,16 @@
 # CineVault iOS
 
-Нативный SwiftUI-клиент для личного CineVault-сервера.
+Нативный SwiftUI-клиент для личного CineVault-сервера. Это первый функциональный срез, а не готовая сборка для App Store.
 
 ## Что уже заложено
 
-- подключение к серверу по HTTP/HTTPS;
-- viewer-токен через `Authorization: Bearer ...`;
+- подключение к серверу по HTTP/HTTPS, вход через HTTP Basic **или** viewer-токен;
+- пароли и viewer-токен в Keychain iPhone;
+- живой постраничный каталог из `GET /api/catalog`, поиск фильмов и сериалов на сервере;
+- полная карточка из `GET /api/catalog/imported/{id}` с вариантами источников и озвучек;
+- внешний Alloha по запросу через `GET /api/player-options?kinopoisk=...` внутри `WKWebView`;
+- перед запуском встроенного источника — обновление через `POST /api/playback/refresh`, как на сайте; Alloha получает свежие озвучки при каждом открытии и по кнопке обновления;
+- Alloha открывается во вложенном iframe; в его контекст на старте страницы вводится тот же узкий фильтр рекламного списка, что в локальном браузерном расширении (`tools/alloha_ad_filter_extension/filter.js`). Это экспериментальное поведение: другие объявления и изменения стороннего плеера не покрыты;
 - каталог серий из `GET /api/library`;
 - встроенный `AVPlayer` для HLS/исходного файла;
 - загрузка исходника в лучшем доступном качестве внутри `Application Support/CineVaultDownloads`;
@@ -15,11 +20,12 @@
 
 ## Открытие
 
-1. Открой `CineVault.xcodeproj` в Xcode на Mac с установленным iOS SDK.
-2. Выбери iPhone Simulator или подключённый iPhone.
-3. В приложении укажи адрес backend и `CINEVAULT_VIEWER_TOKEN`. Для локального Windows-теста адрес выглядит как `http://192.168.0.45:8080`; iPhone и Windows должны быть в одной Wi-Fi сети.
+1. Установи [Xcode из Mac App Store](https://apps.apple.com/app/xcode/id497799835), открой его один раз и дождись установки iOS-компонентов. Если App Store не предлагает совместимую версию, сверь macOS с [требованиями Apple](https://developer.apple.com/xcode/system-requirements/).
+2. Открой `ios/CineVault.xcodeproj` в Xcode. Выбери iPhone Simulator или подключённый iPhone. Для своего iPhone добавь Apple Account в настройках Xcode, выбери команду в Signing & Capabilities и при необходимости замени Bundle Identifier на уникальный.
+3. Для приватной сборки скопируй `ios/Secrets.xcconfig.example` в `ios/Secrets.xcconfig` и укажи там логин/пароль Caddy Basic Auth. Этот локальный файл исключён из Git; секреты попадут внутрь собранного приложения, поэтому IPA передавай только доверенным людям. После сборки приложение подключается автоматически, а поля логина и пароля в интерфейсе не показываются. Адрес сервера можно поменять в «Настройках»; для другого сервера пересобери приложение с его доступами. Для локального Windows-теста адрес выглядит как `http://192.168.0.45:8080`; iPhone и Windows должны быть в одной Wi-Fi сети.
 4. Загрузи серии на backend через существующий админский импорт.
 
 `127.0.0.1` в iOS-приложении означает сам iPhone, а не MacBook. Для поездки нужен домен/VPN/Tailscale с HTTPS. Серии должны быть загружены на сервер законным способом.
+
 
 Пошаговая настройка Windows-сервера: [docs/CineVault-Windows-Deployment.md](../docs/CineVault-Windows-Deployment.md).

@@ -142,9 +142,12 @@ final class PlaybackModel: ObservableObject {
         }
         didApplyResume = false
         didFallbackToLowQuality = false
-        let options: [String: Any] = isLocal || api.configuration.viewerToken.isEmpty
-            ? [:]
-            : ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(api.configuration.viewerToken)"]]
+        let options: [String: Any]
+        if !isLocal, let authorization = api.authorizationHeader(for: url) {
+            options = ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": authorization]]
+        } else {
+            options = [:]
+        }
         let asset = AVURLAsset(url: url, options: options)
         let item = AVPlayerItem(asset: asset)
         applyQuality(to: item)
@@ -361,6 +364,7 @@ private extension PlaybackQuality {
 struct PlayerView: View {
     @StateObject private var model: PlaybackModel
     @State private var isFullscreen = false
+    @State private var playerScreenID = UUID()
     @EnvironmentObject private var chrome: AppChrome
     let episode: Episode
 
@@ -404,12 +408,12 @@ struct PlayerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
         .onAppear {
-            chrome.isTabBarHidden = true
+            chrome.hideTabBar(for: playerScreenID)
             model.start()
         }
         .onDisappear {
             if !isFullscreen {
-                chrome.isTabBarHidden = false
+                chrome.showTabBar(for: playerScreenID)
                 model.stop()
             }
         }

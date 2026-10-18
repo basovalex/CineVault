@@ -104,6 +104,17 @@ python3 tools/import_kinopoisk_metadata.py --links-file kinopoisk_media_system_f
 
 Для постепенного расширения за пределы уже известных ссылок подготовлен импорт метаданных из Kinopoisk.dev. Он читает `CINEVAULT_KINOPOISK_DEV_TOKEN` из окружения или локального игнорируемого Git-файла `.env`, не получает видео и не затирает подключённые карточки. Режим `backfill` постранично обходит историческую базу и сохраняет контрольную точку в `data/media-library/kinopoisk_catalog_sync.json`; режим `daily` повторно забирает последние изменения с недельным перекрытием и обновляет названия, постеры и рейтинги:
 
+Отдельный отбор сериалов по годам требует название, описание, постер, жанр и минимум 100 оценок. Он сохраняет до 100 отобранных сериалов за каждый год 2000–2026; если источник не даёт 100 подходящих, выводит фактическое число, не подмешивая случайные карточки. Уже подключённые источники воспроизведения остаются нетронутыми:
+
+```bash
+python3 tools/curate_kinopoisk_series.py --dry-run
+python3 tools/curate_kinopoisk_series.py
+```
+
+Для ежедневного добавления новых фильмов и сериалов используй `sync_kinopoisk_dev_catalog.py --mode daily --kind all --min-votes 50 --require-complete`. На VPS это запускает `cinevault-kinopoisk-dev-daily.timer` в 10:00 UTC с небольшим случайным сдвигом. Таймеру нужен `CINEVAULT_KINOPOISK_DEV_TOKEN` в серверном `.env`; он обновляет только метаданные, не ищет видеопотоки.
+
+Старые карточки с неполными метаданными можно пакетно дополнить командой `python3 tools/enrich_kinopoisk_catalog.py --batches 10 --resume`. Она запрашивает только известные Kinopoisk ID, пишет дополнительные поля в `catalog_metadata.json`, оставляет `catalog_imports.json` и видеоссылки без изменений и после каждой пачки сохраняет контрольную точку. На VPS для длительного первоначального прохода предусмотрен `cinevault-metadata-enrichment.service`; после сбоя его можно запустить повторно.
+
 ```bash
 python3 tools/sync_kinopoisk_dev_catalog.py --mode backfill --pages 2 --limit 250 --dry-run
 python3 tools/sync_kinopoisk_dev_catalog.py --mode backfill --pages 2 --limit 250

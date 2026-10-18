@@ -1,0 +1,10 @@
+[Unit]
+Description=CineVault curated series backfill for 2000-2026
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=infinity
+WorkingDirectory=/srv/cinevault
+ExecStart=/usr/bin/flock -n /run/cinevault-kinopoisk-dev-sync.lock /usr/bin/docker compose --profile maintenance run --rm --entrypoint python kinopoisk-catalog-sync tools/curate_kinopoisk_series.py --start-year 2000 --end-year 2026 --target 100 --min-votes 100 --candidate-pages 3 --delay-seconds 1 --resume

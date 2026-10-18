@@ -3,14 +3,23 @@ import Foundation
 struct ServerConfiguration: Equatable {
     var baseURL: URL
     var viewerToken: String
+    var basicUsername: String
+    var basicPassword: String
 
-    init?(address: String, viewerToken: String) {
+    init?(address: String, viewerToken: String, basicUsername: String = "", basicPassword: String = "") {
         let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), url.scheme == "http" || url.scheme == "https", url.host != nil else {
             return nil
         }
+        let username = basicUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = viewerToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (username.isEmpty == basicPassword.isEmpty), username.isEmpty || token.isEmpty else {
+            return nil
+        }
         self.baseURL = url
-        self.viewerToken = viewerToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.viewerToken = token
+        self.basicUsername = username
+        self.basicPassword = basicPassword
     }
 }
 
@@ -49,6 +58,14 @@ struct CatalogTitle: Identifiable, Hashable {
     let providerName: String
     let providerNote: String
     let videoURL: String?
+    var kinopoiskID: Int? = nil
+    var playbackSources: [CatalogPlaybackSource] = []
+    var isServerTitle = false
+    var rating: Double? = nil
+    var voteCount: Int? = nil
+    var actors: [String] = []
+    var directors: [String] = []
+    var countries: [String] = []
 
     var isSeries: Bool { kind == "series" }
     var kindLabel: String { isSeries ? "Сериал" : "Фильм" }
@@ -92,6 +109,166 @@ struct CatalogTitle: Identifiable, Hashable {
         CatalogTitle(id: "elephants-dream-open", kind: "movie", title: "Elephants Dream", originalTitle: "Elephants Dream", year: 2006, description: "Первый открытый фильм Blender Foundation: странное путешествие по механическому миру.", tags: ["фантастика", "атмосферно", "напряжённо"], seasons: [], runtime: 11, posterURL: "https://archive.org/services/img/elephants-dream_202403", providerName: "Archive.org · Public Domain", providerNote: "Открытый фильм, можно смотреть прямо в CineVault", videoURL: "https://archive.org/download/elephants-dream_202403/Elephants%20Dream.mp4"),
         CatalogTitle(id: "gentlemen-of-fortune-rutube", kind: "movie", title: "Джентльмены удачи", originalTitle: "Джентльмены удачи", year: 1971, description: "Легендарная советская комедия в официальной публикации Киноконцерна «Мосфильм» на RUTUBE.", tags: ["комедия", "уютно", "для нас"], seasons: [], runtime: 88, posterURL: nil, providerName: "RUTUBE · Мосфильм", providerNote: "Официальная публикация; просмотр откроется после подключения RUTUBE-плеера", videoURL: nil)
     ]
+}
+
+struct CatalogPlaybackSource: Decodable, Hashable, Identifiable {
+    let id: String
+    let url: String
+    let type: String
+    let quality: String
+    let voice: String
+
+    var isEmbed: Bool { type == "embed" || type == "iframe" }
+    var label: String {
+        [voice, quality].filter { !$0.isEmpty && $0 != "Авто" }.joined(separator: " · ")
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, url, type, quality, voice }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        url = try values.decode(String.self, forKey: .url)
+        id = (try? values.decode(String.self, forKey: .id)) ?? url
+        type = (try? values.decode(String.self, forKey: .type)) ?? ""
+        quality = (try? values.decode(String.self, forKey: .quality)) ?? ""
+        voice = (try? values.decode(String.self, forKey: .voice)) ?? ""
+    }
+}
+
+struct RemoteCatalogPage: Decodable {
+    let items: [RemoteCatalogEntry]
+    let page: Int
+    let pages: Int
+    let total: Int
+}
+
+struct CatalogFacets: Decodable {
+    let total: Int
+    let movies: Int
+    let series: Int
+    let genres: [String: Int]
+}
+
+struct CatalogShelf: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let items: [CatalogTitle]
+}
+
+struct ExternalPlayerOptions: Decodable {
+    let providers: [ExternalPlayerProvider]
+}
+
+struct PlaybackRefreshResponse: Decodable {
+    let refreshed: Bool
+    let cached: Bool
+    let deleted: Bool?
+    let warning: String?
+    let entry: RemoteCatalogEntry?
+}
+
+struct PlaybackRefreshPayload: Encodable {
+    let kinopoiskID: Int
+    let force: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case kinopoiskID = "kinopoisk_id"
+        case force
+    }
+}
+
+struct ExternalPlayerProvider: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let translations: [ExternalPlayerTranslation]
+}
+
+struct ExternalPlayerTranslation: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let quality: String
+    let embedURL: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, quality
+        case embedURL = "embedUrl"
+    }
+}
+
+struct RemoteCatalogEntry: Decodable {
+    let id: String
+    let kind: String
+    let title: String
+    let originalTitle: String?
+    let year: Int
+    let description: String?
+    let tags: [String]
+    let seasons: [Int]
+    let runtime: Int
+    let posterImage: String?
+    let providerName: String?
+    let providerNote: String?
+    let kinopoiskID: Int?
+    let videoSources: [CatalogPlaybackSource]
+    let rating: Double?
+    let voteCount: Int?
+    let actors: [String]
+    let directors: [String]
+    let countries: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, title, originalTitle, year, description, tags, genres
+        case seasons, runtime, posterImage, providerName, providerNote
+        case kinopoiskID = "kinopoiskId"
+        case videoSources, rating, ratingKinopoisk, voteCount, actors, directors, countries
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        kind = (try? values.decode(String.self, forKey: .kind)) ?? "movie"
+        title = try values.decode(String.self, forKey: .title)
+        originalTitle = try? values.decode(String.self, forKey: .originalTitle)
+        year = (try? values.decode(Int.self, forKey: .year))
+            ?? Int((try? values.decode(String.self, forKey: .year)) ?? "") ?? 0
+        description = try? values.decode(String.self, forKey: .description)
+        tags = (try? values.decode([String].self, forKey: .genres))
+            ?? (try? values.decode([String].self, forKey: .tags)) ?? []
+        seasons = (try? values.decode([Int].self, forKey: .seasons)) ?? []
+        runtime = (try? values.decode(Int.self, forKey: .runtime))
+            ?? Int((try? values.decode(String.self, forKey: .runtime)) ?? "") ?? 0
+        posterImage = try? values.decode(String.self, forKey: .posterImage)
+        providerName = try? values.decode(String.self, forKey: .providerName)
+        providerNote = try? values.decode(String.self, forKey: .providerNote)
+        kinopoiskID = (try? values.decode(Int.self, forKey: .kinopoiskID))
+            ?? Int((try? values.decode(String.self, forKey: .kinopoiskID)) ?? "")
+        videoSources = (try? values.decode([CatalogPlaybackSource].self, forKey: .videoSources)) ?? []
+        rating = (try? values.decode(Double.self, forKey: .ratingKinopoisk))
+            ?? (try? values.decode(Double.self, forKey: .rating))
+        voteCount = try? values.decode(Int.self, forKey: .voteCount)
+        actors = (try? values.decode([String].self, forKey: .actors)) ?? []
+        directors = (try? values.decode([String].self, forKey: .directors)) ?? []
+        countries = (try? values.decode([String].self, forKey: .countries)) ?? []
+    }
+
+    var catalogTitle: CatalogTitle {
+        var item = CatalogTitle(
+            id: id, kind: kind, title: title, originalTitle: originalTitle ?? title,
+            year: year, description: description ?? "", tags: tags, seasons: seasons,
+            runtime: runtime, posterURL: posterImage, providerName: providerName ?? "CineVault",
+            providerNote: providerNote ?? "", videoURL: videoSources.first(where: { !$0.isEmbed })?.url
+        )
+        item.kinopoiskID = kinopoiskID
+        item.playbackSources = videoSources
+        item.isServerTitle = true
+        item.rating = rating
+        item.voteCount = voteCount
+        item.actors = actors
+        item.directors = directors
+        item.countries = countries
+        return item
+    }
 }
 
 struct PlaybackProgress: Codable, Hashable {
