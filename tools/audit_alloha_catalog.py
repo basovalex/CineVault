@@ -92,12 +92,12 @@ def main() -> int:
     parser.add_argument("--catalog-path", type=Path, default=DEFAULT_CATALOG)
     parser.add_argument("--metadata-path", type=Path, default=DEFAULT_METADATA)
     parser.add_argument("--state-path", type=Path, default=DEFAULT_STATE)
-    parser.add_argument("--delay-seconds", type=float, default=0.8)
+    parser.add_argument("--delay-seconds", type=float, default=15.0)
     parser.add_argument("--max-items", type=int, default=0)
     parser.add_argument("--status", action="store_true")
     args = parser.parse_args()
 
-    from tools.media_library_server import fetch_player_options  # noqa: E402
+    from tools.media_library_server import PlayerOptionsRateLimited, fetch_player_options  # noqa: E402
 
     auditor = AllohaAuditor(args.state_path)
     # Cards in the catalog plus titles player 1 gave up on: Alloha may have them.
@@ -121,9 +121,14 @@ def main() -> int:
             time.sleep(600)
             continue
         try:
-            providers = fetch_player_options(kinopoisk_id).get("providers") or []
+            providers = fetch_player_options(kinopoisk_id, use_cache=False).get("providers") or []
             translations = sum(len(provider.get("translations") or []) for provider in providers)
             auditor.record(kinopoisk_id, translations)
+        except PlayerOptionsRateLimited:
+            # Viewers share this API budget: back off well before retrying.
+            print("Alloha: лимит запросов, пауза 10 минут", flush=True)
+            time.sleep(600)
+            continue
         except (RuntimeError, ValueError, OSError):
             auditor.record_failure(kinopoisk_id)
             translations = -1

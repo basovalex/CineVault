@@ -163,7 +163,7 @@ def alloha_player_options(payload: Any) -> list[Dict[str, Any]]:
 
 RUTUBE_SEARCH_URL = "https://rutube.ru/api/search/video/"
 TRAILER_CACHE_SECONDS = 14 * 24 * 3600
-TRAILER_WORDS = ("трейлер", "тизер", "trailer", "teaser")
+TRAILER_WORDS = ("трейлер", "trailer")
 
 
 def _trailer_text(value: Any) -> str:
@@ -189,7 +189,7 @@ def score_trailer_candidate(candidate: Dict[str, Any], titles: Iterable[str], ye
         score += 2
     if "официальн" in name:
         score += 2
-    if any(bad in name for bad in ("обзор", "реакция", "разбор", "пародия", "фанатский", "fan made", "концепт")):
+    if any(bad in name for bad in ("обзор", "реакция", "разбор", "пародия", "фанатский", "fan made", "концепт", "тизер", "teaser", "shorts", "short")):
         score -= 8
     try:
         score += min(4.0, max(0, int(candidate.get("hits") or 0)) ** 0.25 / 3)
@@ -232,13 +232,28 @@ def search_rutube_trailers(title: str, original_title: str = "", year: int = 0, 
     return sorted(found.values(), key=lambda item: item["score"], reverse=True)[:limit]
 
 
-def fetch_player_options(kinopoisk_id: Any) -> Dict[str, Any]:
+class PlayerOptionsRateLimited(RuntimeError):
+    """The players API asked us to slow down (HTTP 429)."""
+
+
+# Successful answers are reused for a while: the players API rate-limits
+# per IP, and the background Alloha check shares that budget with viewers.
+PLAYER_OPTIONS_CACHE_SECONDS = 10 * 60
+_player_options_cache: Dict[int, tuple] = {}
+_player_options_lock = threading.Lock()
+
+
+def fetch_player_options(kinopoisk_id: Any, use_cache: bool = True) -> Dict[str, Any]:
     try:
         resolved_id = int(str(kinopoisk_id).strip())
     except (TypeError, ValueError) as exc:
         raise ValueError("Kinopoisk ID должен быть положительным числом") from exc
     if resolved_id < 1:
         raise ValueError("Kinopoisk ID должен быть положительным числом")
+    with _player_options_lock:
+        cached = _player_options_cache.get(resolved_id)
+    if use_cache and cached and time.monotonic() - cached[0] < PLAYER_OPTIONS_CACHE_SECONDS:
+        return cached[1]
     try:
         with requests.get(
             PLAYER_OPTIONS_API_URL,
@@ -252,9 +267,15 @@ def fetch_player_options(kinopoisk_id: Any) -> Dict[str, Any]:
             timeout=12,
             stream=True,
         ) as response:
+            if response.status_code == 429:
+                if cached:
+                    return cached[1]
+                raise PlayerOptionsRateLimited("Источник просит подождать минуту — пробую ещё раз")
             response.raise_for_status()
             raw = response.raw.read(256 * 1024 + 1, decode_content=True)
     except requests.RequestException as exc:
+        if cached:
+            return cached[1]
         raise RuntimeError("Не удалось получить список внешних плееров") from exc
     if len(raw) > 256 * 1024:
         raise RuntimeError("Ответ со списком плееров слишком большой")
@@ -263,7 +284,12 @@ def fetch_player_options(kinopoisk_id: Any) -> Dict[str, Any]:
     except (ValueError, UnicodeDecodeError) as exc:
         raise RuntimeError("Источник вернул некорректный список плееров") from exc
     options = alloha_player_options(payload)
-    return {"providers": [{"id": "alloha", "name": "Alloha", "mode": "embed", "translations": options}] if options else []}
+    result = {"providers": [{"id": "alloha", "name": "Alloha", "mode": "embed", "translations": options}] if options else []}
+    with _player_options_lock:
+        if len(_player_options_cache) > 2000:
+            _player_options_cache.clear()
+        _player_options_cache[resolved_id] = (time.monotonic(), result)
+    return result
 DEFAULT_KINOPOISK_IMPORT_TIMEOUT_SECONDS = 30 * 60
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024 * 1024
 MAX_SOURCE_JSON_BYTES = 10 * 1024 * 1024

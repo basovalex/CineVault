@@ -4456,8 +4456,11 @@
     ]);
     const seen = new Set();
     return [...(ru.results || []), ...(en.results || [])]
-      .filter((video) => video.site === "YouTube" && /^(Trailer|Teaser)$/.test(video.type) && /^[\w-]{6,20}$/.test(video.key) && !seen.has(video.key) && seen.add(video.key))
-      .sort((a, b) => (b.official === true) - (a.official === true))
+      // Trailers only: no teasers, clips, featurettes or vertical shorts.
+      .filter((video) => video.site === "YouTube" && video.type === "Trailer" && /^[\w-]{6,20}$/.test(video.key)
+        && !/#?shorts?\b|тизер|teaser|tv spot|реакция|reaction|обзор|review/i.test(String(video.name || ""))
+        && !seen.has(video.key) && seen.add(video.key))
+      .sort((a, b) => (b.official === true) - (a.official === true) || (b.iso_639_1 === "ru") - (a.iso_639_1 === "ru") || Number(b.size || 0) - Number(a.size || 0))
       .slice(0, 4)
       .map((video) => ({ id: video.key, title: video.name, label: video.iso_639_1 === "ru" ? "YouTube · русский" : "YouTube · оригинал", embedUrl: `https://www.youtube-nocookie.com/embed/${video.key}?autoplay=1&rel=0&modestbranding=1` }));
   }
@@ -6296,6 +6299,8 @@
     const refreshButton = { disabled: false };
     const status = $("#alternative-player-status");
     let options = [];
+    let retryCount = 0;
+    let retryTimer = null;
     let requestNumber = 0;
     let controller = null;
     let closed = false;
@@ -6401,6 +6406,7 @@
         if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
         if (closed || currentRequest !== requestNumber) return;
         options = payload.providers?.find((provider) => provider.id === "alloha")?.translations || [];
+        retryCount = 0;
         voiceSelect.replaceChildren();
         options.forEach((option, index) => {
           const choice = document.createElement("option");
@@ -6418,7 +6424,14 @@
         }
       } catch (error) {
         if (closed || currentRequest !== requestNumber) return;
-        status.textContent = `Не удалось открыть другой плеер: ${error?.name === "AbortError" ? "истёк таймаут" : error.message}. Можно повторить запрос.`;
+        // There is no manual refresh button: retry on our own a few times.
+        retryCount += 1;
+        if (retryCount <= 4) {
+          status.textContent = `Источник отвечает с задержкой — пробую ещё раз через ${retryCount * 10} секунд…`;
+          retryTimer = window.setTimeout(() => { if (!closed) loadOptions(); }, retryCount * 10_000);
+        } else {
+          status.textContent = `Плеер 2 сейчас недоступен (${error?.name === "AbortError" ? "истёк таймаут" : error.message}). Попробуйте Плеер 1 или откройте позже.`;
+        }
       } finally {
         window.clearTimeout(timeout);
         if (!closed && currentRequest === requestNumber) refreshButton.disabled = false;
@@ -6426,7 +6439,7 @@
     };
     voiceSelect.addEventListener("change", () => showOption(Number(voiceSelect.value)));
 
-    const close = () => { saveProgress(false); window.removeEventListener("message", onPlayerMessage); window.clearInterval(infoTimer); closed = true; requestNumber += 1; controller?.abort(); frame.removeAttribute("src"); returnFromPlayer(); };
+    const close = () => { saveProgress(false); window.removeEventListener("message", onPlayerMessage); window.clearInterval(infoTimer); window.clearTimeout(retryTimer); closed = true; requestNumber += 1; controller?.abort(); frame.removeAttribute("src"); returnFromPlayer(); };
     $("#alternative-player-close").addEventListener("click", close);
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
     loadOptions();

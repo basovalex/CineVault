@@ -6,7 +6,7 @@ After=docker.service network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/srv/cinevault
-ExecStart=/usr/bin/docker compose exec -T cinevault python tools/audit_alloha_catalog.py --delay-seconds 0.8
+ExecStart=/usr/bin/docker compose exec -T cinevault python tools/audit_alloha_catalog.py --delay-seconds 15
 Restart=always
 RestartSec=5m
 
