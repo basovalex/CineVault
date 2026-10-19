@@ -169,8 +169,17 @@ struct ExternalEmbedWebView: UIViewRepresentable {
     let url: URL
     let siteURL: URL
 
-    final class Coordinator {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var loadedURL: URL?
+
+        /// Taps still reach the provider's player; this only tells our own controls to show up.
+        @objc func touched() {
+            NotificationCenter.default.post(name: .playerTouched, object: nil)
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            true
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -196,6 +205,10 @@ struct ExternalEmbedWebView: UIViewRepresentable {
         webView.scrollView.isScrollEnabled = false
         // SwiftUI already places the view inside the safe area.
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.touched))
+        tap.cancelsTouchesInView = false
+        tap.delegate = context.coordinator
+        webView.addGestureRecognizer(tap)
         loadFrame(in: webView, coordinator: context.coordinator)
         return webView
     }
@@ -408,13 +421,20 @@ struct LandscapeVideoFill: ViewModifier {
 /// sideways. The providers' own buttons often do nothing inside an iPhone app.
 struct PlayerFullscreenButton: ViewModifier {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @State private var exitVisible = false
+    @State private var hideExitID = UUID()
+
+    private func revealExit() {
+        withAnimation(.easeOut(duration: 0.2)) { exitVisible = true }
+        hideExitID = UUID()
+    }
 
     func body(content: Content) -> some View {
         content
             .overlay(alignment: OrientationPolicy.cameraIsOnLeft ? .trailing : .leading) {
                 // Full screen hides the navigation bar, so it needs a way out of its own.
                 // It sits in the black margin beside the video, on the side away from the camera.
-                if OrientationPolicy.isPhone && verticalSizeClass == .compact {
+                if OrientationPolicy.isPhone && verticalSizeClass == .compact && exitVisible {
                     Button {
                         OrientationPolicy.returnUpright()
                     } label: {
@@ -425,7 +445,19 @@ struct PlayerFullscreenButton: ViewModifier {
                     .accessibilityLabel("Выйти из полноэкранного режима")
                     .padding(.horizontal, 2)
                     .ignoresSafeArea()
+                    .transition(.opacity)
                 }
+            }
+            // Like the player's own controls: shown after a tap, gone after a few seconds.
+            .onReceive(NotificationCenter.default.publisher(for: .playerTouched)) { _ in revealExit() }
+            .onChange(of: verticalSizeClass) { _, sizeClass in
+                if sizeClass == .compact { revealExit() } else { exitVisible = false }
+            }
+            .task(id: hideExitID) {
+                guard exitVisible else { return }
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.3)) { exitVisible = false }
             }
             .toolbar {
             if OrientationPolicy.isPhone && verticalSizeClass != .compact {
@@ -437,4 +469,8 @@ struct PlayerFullscreenButton: ViewModifier {
             }
         }
     }
+}
+
+extension Notification.Name {
+    static let playerTouched = Notification.Name("CineVaultPlayerTouched")
 }
