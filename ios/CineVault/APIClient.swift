@@ -47,8 +47,11 @@ final class CineVaultAPI {
         return try await request(path: "api/catalog", queryItems: query)
     }
 
-    func fetchCatalogFacets() async throws -> CatalogFacets {
-        try await request(path: "api/catalog/facets")
+    func fetchCatalogFacets(kind: String = "") async throws -> CatalogFacets {
+        try await request(
+            path: "api/catalog/facets",
+            queryItems: kind.isEmpty ? [] : [URLQueryItem(name: "type", value: kind)]
+        )
     }
 
     func fetchCatalogTitle(id: String) async throws -> CatalogTitle {
@@ -86,6 +89,19 @@ final class CineVaultAPI {
     func updateProgress(episodeID: String, update: ProgressUpdate) async throws {
         var request = try makeRequest(path: "api/progress/\(episodeID)", method: "PUT")
         request.httpBody = try JSONEncoder().encode(update)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        _ = try await send(request, expecting: EmptyResponse.self)
+    }
+
+    func fetchCatalogProgress() async throws -> [String: CatalogProgressEntry] {
+        let response: CatalogProgressResponse = try await request(path: "api/catalog-progress")
+        return response.items
+    }
+
+    func updateCatalogProgress(contentID: String, entry: CatalogProgressEntry) async throws {
+        let encoded = contentID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? contentID
+        var request = try makeRequest(path: "api/catalog-progress/\(encoded)", method: "PUT")
+        request.httpBody = try JSONEncoder().encode(entry)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         _ = try await send(request, expecting: EmptyResponse.self)
     }

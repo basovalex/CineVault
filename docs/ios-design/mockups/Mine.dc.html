@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Моё</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#00A86B}a:hover{color:#00C07A}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0D0C0F; color: #FFFFFF; font-family: Rubik, -apple-system, sans-serif;">
+
+  <div style="position: absolute; left: 20px; right: 20px; top: 58px; display: flex; flex-direction: column; gap: 16px;">
+    <div style="display: flex; align-items: center; justify-content: space-between;">
+      <h1 style="margin: 0; font-size: 30px; font-weight: 600;">Моё</h1>
+      <button aria-label="Настройки" style="width: 44px; height: 44px; border-radius: 14px; border: 1px solid rgba(255,255,255,.08); background: #17161B; color: #FFFFFF; display: grid; place-items: center;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"></path></svg>
+      </button>
+    </div>
+    <div role="tablist" aria-label="Списки" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 4px; border-radius: 14px; background: #17161B;">
+      <button role="tab" aria-selected="false" style="height: 38px; border: 0; border-radius: 11px; background: transparent; color: #9CA4AB; font: 500 14px Rubik, sans-serif;">Избранное · 24</button>
+      <button role="tab" aria-selected="true" style="height: 38px; border: 0; border-radius: 11px; background: #28262D; color: #FFFFFF; font: 600 14px Rubik, sans-serif;">История</button>
+    </div>
+  </div>
+
+  <div style="position: absolute; left: 20px; right: 20px; top: 200px; display: flex; flex-direction: column; gap: 6px;">
+    <div style="font-size: 13px; font-weight: 600; color: #9CA4AB; letter-spacing: .04em; margin-bottom: 4px;">СЕГОДНЯ</div>
+    <sc-for list="{{history}}" as="h" hint-placeholder-count="4">
+      <a href="Details.dc.html" style="display: flex; gap: 14px; align-items: center; padding: 8px 0; color: #FFFFFF; text-decoration: none;">
+        <div style="position: relative; flex: 0 0 auto; width: 150px; height: 84px; border-radius: 10px; overflow: hidden; background: #17161B;">
+          <img src="{{h.img}}" alt="{{h.title}}" style="width: 100%; height: 100%; object-fit: cover; display: block;">
+          <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255,255,255,.2);">
+            <div style="height: 4px; width: {{h.progress}}; background: #00A86B;"></div>
+          </div>
+        </div>
+        <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px;">
+          <div style="font-size: 15px; font-weight: 600;">{{h.title}}</div>
+          <div style="font-size: 12px; color: #9CA4AB;">{{h.sub}}</div>
+          <div style="font-size: 12px; color: #00A86B;">{{h.left}}</div>
+        </div>
+      </a>
+    </sc-for>
+
+    <div style="margin-top: 14px; padding: 14px; border-radius: 14px; background: #17161B; border: 1px solid rgba(255,255,255,.08); display: flex; align-items: center; gap: 12px;">
+      <div style="width: 44px; height: 44px; border-radius: 12px; background: rgba(0,168,107,.16); color: #00A86B; display: grid; place-items: center;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"></path></svg>
+      </div>
+      <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px;">
+        <div style="font-size: 15px; font-weight: 600;">Загрузки</div>
+        <div style="font-size: 12px; color: #9CA4AB;">2 фильма · 4,1 ГБ · смотреть без сети</div>
+      </div>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9CA4AB" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>
+    </div>
+  </div>
+
+  <nav aria-label="Разделы" style="position: absolute; left: 0; right: 0; bottom: 0; height: 84px; box-sizing: border-box; padding: 8px 8px 0; background: rgba(13,12,15,.94); border-top: 1px solid rgba(255,255,255,.08); display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));">
+    <a href="Main.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #9CA4AB; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="m4 10 8-6 8 6v9a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"></path></svg>Главная</a>
+    <a href="Catalog.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #9CA4AB; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"></rect><rect x="14" y="4" width="6" height="6" rx="1"></rect><rect x="4" y="14" width="6" height="6" rx="1"></rect><rect x="14" y="14" width="6" height="6" rx="1"></rect></svg>Каталог</a>
+    <a href="Search.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #9CA4AB; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>Поиск</a>
+    <a href="Mine.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #00A86B; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 8.7c0 5-8.8 10.3-8.8 10.3S3.2 13.7 3.2 8.7A4.6 4.6 0 0 1 12 6.2a4.6 4.6 0 0 1 8.8 2.5Z"></path></svg>Моё</a>
+    <a href="Mine.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #9CA4AB; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"></path></svg>Загрузки</a>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      history: [
+        { img: '/_blob/f4ae4381dccd0a9751054f0642ed2868', title: 'Горничная', sub: 'Фильм · 2025', left: 'Осталось 48 мин', progress: '58%' },
+        { img: '/_blob/cb1d7becd8b21e5878a17e5026375a48', title: 'Майкл', sub: 'Фильм · 2026', left: 'Осталось 1 ч 12 мин', progress: '24%' },
+        { img: '/_blob/7cf841975cff8a69c59c695cdacab5d8', title: 'Человек-паук: Новый день', sub: 'Фильм · 2026', left: 'Досмотрено', progress: '100%' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

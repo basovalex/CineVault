@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Каталог</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#00A86B}a:hover{color:#00C07A}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0D0C0F; color: #FFFFFF; font-family: Rubik, -apple-system, sans-serif;">
+
+  <div style="position: absolute; left: 20px; right: 20px; top: 58px; display: flex; flex-direction: column; gap: 16px;">
+    <div style="display: flex; align-items: center; justify-content: space-between;">
+      <h1 style="margin: 0; font-size: 30px; font-weight: 600;">Каталог</h1>
+      <button aria-label="Сортировка и фильтры" style="width: 44px; height: 44px; border-radius: 14px; border: 1px solid rgba(255,255,255,.08); background: #17161B; color: #FFFFFF; display: grid; place-items: center;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle></svg>
+      </button>
+    </div>
+
+    <div role="tablist" aria-label="Тип" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 4px; border-radius: 14px; background: #17161B;">
+      <button role="tab" aria-selected="true" style="height: 38px; border: 0; border-radius: 11px; background: #28262D; color: #FFFFFF; font: 600 14px Rubik, sans-serif;">Фильмы · 5 412</button>
+      <button role="tab" aria-selected="false" style="height: 38px; border: 0; border-radius: 11px; background: transparent; color: #9CA4AB; font: 500 14px Rubik, sans-serif;">Сериалы · 1 208</button>
+    </div>
+
+    <div style="display: flex; gap: 8px; overflow: hidden;">
+      <button style="flex: 0 0 auto; height: 34px; padding: 0 14px; border-radius: 17px; border: 0; background: #FFFFFF; color: #0D0C0F; font: 600 13px Rubik, sans-serif;">Все жанры</button>
+      <button style="flex: 0 0 auto; height: 34px; padding: 0 14px; border-radius: 17px; border: 1px solid rgba(255,255,255,.12); background: transparent; color: #FFFFFF; font: 500 13px Rubik, sans-serif;">боевик</button>
+      <button style="flex: 0 0 auto; height: 34px; padding: 0 14px; border-radius: 17px; border: 1px solid rgba(255,255,255,.12); background: transparent; color: #FFFFFF; font: 500 13px Rubik, sans-serif;">драма</button>
+      <button style="flex: 0 0 auto; height: 34px; padding: 0 14px; border-radius: 17px; border: 1px solid rgba(255,255,255,.12); background: transparent; color: #FFFFFF; font: 500 13px Rubik, sans-serif;">комедия</button>
+      <button style="flex: 0 0 auto; height: 34px; padding: 0 14px; border-radius: 17px; border: 1px solid rgba(255,255,255,.12); background: transparent; color: #FFFFFF; font: 500 13px Rubik, sans-serif;">фантастика</button>
+    </div>
+  </div>
+
+  <div style="position: absolute; left: 20px; right: 20px; top: 262px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 10px; row-gap: 16px;">
+    <sc-for list="{{posters}}" as="p" hint-placeholder-count="9">
+      <a href="Details.dc.html" style="display: flex; flex-direction: column; gap: 6px; color: #FFFFFF; text-decoration: none;">
+        <div style="position: relative; aspect-ratio: 2 / 3; border-radius: 10px; overflow: hidden; background: #17161B;">
+          <img src="{{p.img}}" alt="{{p.title}}" style="width: 100%; height: 100%; object-fit: cover; display: block;">
+          <div style="position: absolute; left: 6px; top: 6px; padding: 3px 6px; border-radius: 6px; background: rgba(13,12,15,.78); color: #FFCD1A; font-size: 11px; font-weight: 600;">★ {{p.rating}}</div>
+        </div>
+        <div style="font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{p.title}}</div>
+      </a>
+    </sc-for>
+  </div>
+
+  <nav aria-label="Разделы" style="position: absolute; left: 0; right: 0; bottom: 0; height: 84px; box-sizing: border-box; padding: 8px 8px 0; background: rgba(13,12,15,.94); border-top: 1px solid rgba(255,255,255,.08); display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));">
+    <a href="Main.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #9CA4AB; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="m4 10 8-6 8 6v9a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"></path></svg>Главная</a>
+    <a href="Catalog.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #00A86B; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"></rect><rect x="14" y="4" width="6" height="6" rx="1"></rect><rect x="4" y="14" width="6" height="6" rx="1"></rect><rect x="14" y="14" width="6" height="6" rx="1"></rect></svg>Каталог</a>
+    <a href="Search.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #9CA4AB; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>Поиск</a>
+    <a href="Mine.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #9CA4AB; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 8.7c0 5-8.8 10.3-8.8 10.3S3.2 13.7 3.2 8.7A4.6 4.6 0 0 1 12 6.2a4.6 4.6 0 0 1 8.8 2.5Z"></path></svg>Моё</a>
+    <a href="Mine.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #9CA4AB; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"></path></svg>Загрузки</a>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      posters: [
+        { img: '/_blob/1dc919817c25e12ae06a7c0afcd9d457', title: 'Одиссея', rating: '8.2' },
+        { img: '/_blob/3f762950b7e762203a94ac92b75c77cc', title: 'Проект «Конец света»', rating: '8.4' },
+        { img: '/_blob/ed0d7ae0861b336c7b014e4b8dbbdb62', title: 'Человек-паук: Новый день', rating: '8.0' },
+        { img: '/_blob/bc0b665bad63c19c9300355e33ee162b', title: 'Майкл', rating: '8.0' },
+        { img: '/_blob/87152e44482f1384131985b8401b304a', title: 'Горничная', rating: '7.6' },
+        { img: '/_blob/7f2beb7f24b2e80101289620038d5054', title: 'Аватар: Пламя и пепел', rating: '7.5' },
+        { img: '/_blob/508181facc5e3ab58f4cf50e51c56ca4', title: 'Оппенгеймер', rating: '8.1' },
+        { img: '/_blob/12f81ea5727b5f60c56e60b304187d1d', title: 'Бэтмен', rating: '7.2' },
+        { img: '/_blob/1964491f5e83f024ca19c90269524cfc', title: 'Человек-паук: Нет пути домой', rating: '7.9' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

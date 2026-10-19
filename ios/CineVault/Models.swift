@@ -66,8 +66,30 @@ struct CatalogTitle: Identifiable, Hashable {
     var actors: [String] = []
     var directors: [String] = []
     var countries: [String] = []
+    var backdropURL: String? = nil
+    var logoURL: String? = nil
+    var imdbRating: Double? = nil
+    var ageRating: String = ""
+    var tagline: String = ""
 
     var isSeries: Bool { kind == "series" }
+    /// "18+" from Kinopoisk's "18" or MPAA-like "pg13" values.
+    var ageLabel: String {
+        let value = ageRating.lowercased()
+        if let number = Int(value) { return "\(number)+" }
+        switch value {
+        case "g": return "0+"
+        case "pg": return "6+"
+        case "pg13": return "12+"
+        case "r": return "16+"
+        case "nc17": return "18+"
+        default: return ""
+        }
+    }
+    var genres: [String] { tags.filter { $0 != "для нас" } }
+    var shortMeta: String {
+        [year > 0 ? String(year) : nil, genres.first].compactMap { $0 }.joined(separator: " · ")
+    }
     var kindLabel: String { isSeries ? "Сериал" : "Фильм" }
     var availabilityLabel: String { videoURL == nil ? "Источник пока не подключён" : "Можно смотреть" }
     var runtimeLabel: String {
@@ -182,6 +204,80 @@ struct ExternalPlayerProvider: Decodable, Identifiable {
     let id: String
     let name: String
     let translations: [ExternalPlayerTranslation]
+    /// Collaps, Veoveo, Turbo: one embed; voices are chosen inside the player.
+    let embedURL: String?
+    let voices: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, translations, voices
+        case embedURL = "embedUrl"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        name = (try? values.decode(String.self, forKey: .name)) ?? id
+        translations = (try? values.decode([ExternalPlayerTranslation].self, forKey: .translations)) ?? []
+        embedURL = try? values.decode(String.self, forKey: .embedURL)
+        voices = (try? values.decode([String].self, forKey: .voices)) ?? []
+    }
+}
+
+/// Server-synced progress shared with the website (`/api/catalog-progress`).
+struct CatalogProgressEntry: Codable, Hashable {
+    let titleId: String
+    var providerId: String? = nil
+    var player: String? = nil
+    var translationName: String? = nil
+    var seasonNumber: Int? = nil
+    var episodeNumber: Int? = nil
+    var position: Double? = nil
+    var duration: Double? = nil
+    var completed: Bool? = nil
+    let updatedAt: Int
+
+    var fraction: Double {
+        guard let position, let duration, duration > 0 else { return 0 }
+        return min(max(position / duration, 0), 1)
+    }
+}
+
+struct CatalogProgressResponse: Decodable {
+    let items: [String: CatalogProgressEntry]
+}
+
+/// What the app keeps on device for a favourite, enough to draw its poster.
+struct FavoriteTitle: Codable, Hashable, Identifiable {
+    let id: String
+    let kind: String
+    let title: String
+    let originalTitle: String
+    let year: Int
+    let posterURL: String?
+    let rating: Double?
+    let addedAt: Date
+
+    init(_ title: CatalogTitle) {
+        id = title.id
+        kind = title.kind
+        self.title = title.title
+        originalTitle = title.originalTitle
+        year = title.year
+        posterURL = title.posterURL
+        rating = title.rating
+        addedAt = Date()
+    }
+
+    var catalogTitle: CatalogTitle {
+        var item = CatalogTitle(
+            id: id, kind: kind, title: title, originalTitle: originalTitle, year: year,
+            description: "", tags: [], seasons: [], runtime: 0, posterURL: posterURL,
+            providerName: "CineVault", providerNote: "", videoURL: nil
+        )
+        item.rating = rating
+        item.isServerTitle = true
+        return item
+    }
 }
 
 struct ExternalPlayerTranslation: Decodable, Identifiable {
@@ -216,12 +312,18 @@ struct RemoteCatalogEntry: Decodable {
     let actors: [String]
     let directors: [String]
     let countries: [String]
+    let backdropImage: String?
+    let logoImage: String?
+    let imdbRating: Double?
+    let ageRating: String
+    let tagline: String
 
     private enum CodingKeys: String, CodingKey {
         case id, kind, title, originalTitle, year, description, tags, genres
         case seasons, runtime, posterImage, providerName, providerNote
         case kinopoiskID = "kinopoiskId"
         case videoSources, rating, ratingKinopoisk, voteCount, actors, directors, countries
+        case backdropImage, logoImage, imdbRating, ageRating, tagline
     }
 
     init(from decoder: Decoder) throws {
@@ -250,6 +352,13 @@ struct RemoteCatalogEntry: Decodable {
         actors = (try? values.decode([String].self, forKey: .actors)) ?? []
         directors = (try? values.decode([String].self, forKey: .directors)) ?? []
         countries = (try? values.decode([String].self, forKey: .countries)) ?? []
+        backdropImage = try? values.decode(String.self, forKey: .backdropImage)
+        logoImage = try? values.decode(String.self, forKey: .logoImage)
+        imdbRating = (try? values.decode(Double.self, forKey: .imdbRating))
+            ?? Double((try? values.decode(String.self, forKey: .imdbRating)) ?? "")
+        ageRating = (try? values.decode(String.self, forKey: .ageRating))
+            ?? (try? values.decode(Int.self, forKey: .ageRating)).map(String.init) ?? ""
+        tagline = (try? values.decode(String.self, forKey: .tagline)) ?? ""
     }
 
     var catalogTitle: CatalogTitle {
@@ -267,6 +376,11 @@ struct RemoteCatalogEntry: Decodable {
         item.actors = actors
         item.directors = directors
         item.countries = countries
+        item.backdropURL = backdropImage
+        item.logoURL = logoImage
+        item.imdbRating = imdbRating
+        item.ageRating = ageRating
+        item.tagline = tagline
         return item
     }
 }
