@@ -15,8 +15,13 @@
 		A00000000000000000000006 /* PlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000006 /* PlayerView.swift */; };
 		A00000000000000000000007 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000007 /* ContentView.swift */; };
 		A00000000000000000000010 /* LocalHLSFileServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000010 /* LocalHLSFileServer.swift */; };
-		A00000000000000000000008 /* pug-mascot.png in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000009 /* pug-mascot.png */; };
 		A00000000000000000000012 /* filter.js in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000012 /* filter.js */; };
+		A00000000000000000000020 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000020 /* Theme.swift */; };
+		A00000000000000000000021 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000021 /* HomeView.swift */; };
+		A00000000000000000000022 /* CatalogViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000022 /* CatalogViews.swift */; };
+		A00000000000000000000023 /* TitleDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000023 /* TitleDetailView.swift */; };
+		A00000000000000000000024 /* MineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000024 /* MineView.swift */; };
+		A00000000000000000000025 /* EmbedPlayers.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000025 /* EmbedPlayers.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,9 +34,14 @@
 		B00000000000000000000007 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B00000000000000000000010 /* LocalHLSFileServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHLSFileServer.swift; sourceTree = "<group>"; };
 		B00000000000000000000008 /* CineVault.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CineVault.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		B00000000000000000000009 /* pug-mascot.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Resources/pug-mascot.png; sourceTree = "<group>"; };
 		B00000000000000000000011 /* CineVault.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = CineVault.xcconfig; sourceTree = "<group>"; };
 		B00000000000000000000012 /* filter.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = ../../tools/alloha_ad_filter_extension/filter.js; sourceTree = "<group>"; };
+		B00000000000000000000020 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		B00000000000000000000021 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		B00000000000000000000022 /* CatalogViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogViews.swift; sourceTree = "<group>"; };
+		B00000000000000000000023 /* TitleDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TitleDetailView.swift; sourceTree = "<group>"; };
+		B00000000000000000000024 /* MineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MineView.swift; sourceTree = "<group>"; };
+		B00000000000000000000025 /* EmbedPlayers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbedPlayers.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -65,7 +75,12 @@
 				B00000000000000000000006 /* PlayerView.swift */,
 				B00000000000000000000007 /* ContentView.swift */,
 				B00000000000000000000010 /* LocalHLSFileServer.swift */,
-				B00000000000000000000009 /* pug-mascot.png */,
+				B00000000000000000000020 /* Theme.swift */,
+				B00000000000000000000021 /* HomeView.swift */,
+				B00000000000000000000022 /* CatalogViews.swift */,
+				B00000000000000000000023 /* TitleDetailView.swift */,
+				B00000000000000000000024 /* MineView.swift */,
+				B00000000000000000000025 /* EmbedPlayers.swift */,
 				B00000000000000000000012 /* filter.js */,
 			);
 			path = CineVault;
@@ -132,7 +147,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A00000000000000000000008 /* pug-mascot.png in Resources */,
 				A00000000000000000000012 /* filter.js in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -152,6 +166,12 @@
 				A00000000000000000000006 /* PlayerView.swift in Sources */,
 				A00000000000000000000007 /* ContentView.swift in Sources */,
 				A00000000000000000000010 /* LocalHLSFileServer.swift in Sources */,
+				A00000000000000000000020 /* Theme.swift in Sources */,
+				A00000000000000000000021 /* HomeView.swift in Sources */,
+				A00000000000000000000022 /* CatalogViews.swift in Sources */,
+				A00000000000000000000023 /* TitleDetailView.swift in Sources */,
+				A00000000000000000000024 /* MineView.swift in Sources */,
+				A00000000000000000000025 /* EmbedPlayers.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

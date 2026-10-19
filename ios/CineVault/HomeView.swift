@@ -5,6 +5,8 @@ struct HomeView: View {
     @Binding var selectedTab: AppTab
     @State private var heroSelection = 0
     @State private var isSettingsPresented = false
+    /// Pages of a paged TabView do not push NavigationLinks, so the hero pushes by path.
+    @State private var path: [CatalogTitle] = []
 
     /// The hero rotates through the first recommendations that have wide artwork.
     private var heroItems: [CatalogTitle] {
@@ -16,7 +18,7 @@ struct HomeView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             GeometryReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 30) {
@@ -68,7 +70,7 @@ struct HomeView: View {
             } else {
                 TabView(selection: $heroSelection) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, title in
-                        HeroPage(title: title, label: index == 0 ? "Советуем" : "Новинка")
+                        HeroPage(title: title, label: index == 0 ? "Советуем" : "Новинка") { path.append(title) }
                             .tag(index)
                     }
                 }
@@ -168,6 +170,7 @@ private struct HeroPage: View {
     @EnvironmentObject private var store: AppStore
     let title: CatalogTitle
     let label: String
+    let open: () -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -195,7 +198,7 @@ private struct HeroPage: View {
                     TitleLogo(title: title)
                     MetaLine(title: title)
                     HStack(spacing: 10) {
-                        NavigationLink(value: title) {
+                        Button(action: open) {
                             Label("Смотреть", systemImage: "play.fill")
                         }
                         .buttonStyle(CinePrimaryButtonStyle())
@@ -204,7 +207,7 @@ private struct HeroPage: View {
                         }
                         .buttonStyle(CineIconButtonStyle())
                         .accessibilityLabel(store.isFavorite(title.id) ? "Убрать из избранного" : "В избранное")
-                        NavigationLink(value: title) { Image(systemName: "info.circle") }
+                        Button(action: open) { Image(systemName: "info.circle") }
                             .buttonStyle(CineIconButtonStyle())
                             .accessibilityLabel("Подробнее")
                     }
@@ -238,7 +241,7 @@ struct MetaLine: View {
 
     private var parts: [String] {
         [
-            title.imdbRating.map { "IMDb \(String(format: "%.1f", $0))" },
+            title.imdbRating.flatMap { $0 > 0 ? "IMDb \(String(format: "%.1f", $0))" : nil },
             title.year > 0 ? String(title.year) : nil,
             title.genres.first,
             title.isSeries ? (title.seasons.isEmpty ? "Сериал" : "\(title.seasons.count) сез.") : (title.runtimeLabel.isEmpty ? nil : title.runtimeLabel),
