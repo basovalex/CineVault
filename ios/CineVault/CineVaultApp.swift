@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import WebKit
 
 @main
 struct CineVaultApp: App {
@@ -20,6 +21,7 @@ final class CineVaultAppDelegate: NSObject, UIApplicationDelegate {
         #if DEBUG
         DebugRotation.install()
         #endif
+        PlayerAdBlocker.prepare()
         return true
     }
 

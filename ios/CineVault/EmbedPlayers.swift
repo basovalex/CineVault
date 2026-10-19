@@ -198,6 +198,7 @@ struct ExternalEmbedWebView: UIViewRepresentable {
                 WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
             )
         }
+        PlayerAdBlocker.apply(to: configuration.userContentController)
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.isOpaque = false
         webView.backgroundColor = .black
@@ -473,4 +474,59 @@ struct PlayerFullscreenButton: ViewModifier {
 
 extension Notification.Name {
     static let playerTouched = Notification.Name("CineVaultPlayerTouched")
+}
+
+/// Refuses requests to known ad networks inside every embedded player, the way iOS
+/// ad blockers do. The players themselves and their video servers load as before;
+/// ads baked into the video itself cannot be removed this way.
+@MainActor
+enum PlayerAdBlocker {
+    private static let adHosts = [
+        // Yandex and AdFox ad serving and counters
+        "an.yandex.ru", "yabs.yandex.ru", "mc.yandex.ru", "adfox.ru", "adfox.yandex.ru",
+        // Google ad serving
+        "doubleclick.net", "googlesyndication.com", "googleadservices.com", "adservice.google.com",
+        // VK / Mail.ru (myTarget)
+        "ad.mail.ru", "ads.vk.com", "target.my.com", "r.mradx.net",
+        // Video ad networks common in Russian players
+        "adriver.ru", "betweendigital.com", "buzzoola.com", "otm-r.com", "mediasniper.ru",
+        "videoroll.net", "moevideo.biz", "adhigh.net", "hybrid.ai", "adlook.me", "propellerads.com",
+        "exoclick.com", "adsterra.com", "popads.net", "onclickads.net",
+    ]
+    private static var ruleList: WKContentRuleList?
+    private static var waiting: [WKUserContentController] = []
+    private static var isCompiling = false
+
+    /// Compiled once per launch; players opened before it is ready get it as soon as it is.
+    static func prepare() {
+        guard ruleList == nil, !isCompiling else { return }
+        isCompiling = true
+        let rules = adHosts.map { host -> [String: Any] in
+            let escaped = host.replacingOccurrences(of: ".", with: "\\.")
+            return ["trigger": ["url-filter": "^https?://([^/]*\\.)?\(escaped)[:/]"], "action": ["type": "block"]]
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: rules),
+              let json = String(data: data, encoding: .utf8) else { return }
+        WKContentRuleListStore.default().compileContentRuleList(forIdentifier: "cinevault-player-ads", encodedContentRuleList: json) { list, error in
+            #if DEBUG
+            NSLog("PlayerAdBlocker: %@", error.map { "\($0)" } ?? "\(adHosts.count) rules ready")
+            #endif
+            Task { @MainActor in
+                isCompiling = false
+                guard let list else { return }
+                ruleList = list
+                waiting.forEach { $0.add(list) }
+                waiting = []
+            }
+        }
+    }
+
+    static func apply(to controller: WKUserContentController) {
+        if let ruleList {
+            controller.add(ruleList)
+        } else {
+            waiting.append(controller)
+            prepare()
+        }
+    }
 }
