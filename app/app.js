@@ -2407,6 +2407,36 @@
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const app = $("#app");
   const page = $("#page");
+  // Horizontal rails scroll sideways with a trackpad, but a mouse wheel on Windows only
+  // scrolls up and down, and the rails hide their scrollbar. Desktop pointers get arrows.
+  const railArrowsWanted = window.matchMedia("(hover: hover) and (pointer: fine)");
+  function enhanceRails() {
+    if (!railArrowsWanted.matches) return;
+    page.querySelectorAll(".discovery-rail:not([data-rail-arrows])").forEach((rail) => {
+      rail.dataset.railArrows = "1";
+      const wrap = document.createElement("div");
+      wrap.className = "rail-wrap";
+      rail.replaceWith(wrap);
+      wrap.append(rail);
+      const arrows = [-1, 1].map((direction) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `rail-arrow ${direction < 0 ? "is-prev" : "is-next"}`;
+        button.setAttribute("aria-label", direction < 0 ? "Прокрутить назад" : "Прокрутить вперёд");
+        button.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="${direction < 0 ? "m15 5-7 7 7 7" : "m9 5 7 7-7 7"}"/></svg>`;
+        button.addEventListener("click", () => rail.scrollBy({ left: direction * rail.clientWidth * 0.85, behavior: "smooth" }));
+        wrap.append(button);
+        return button;
+      });
+      const update = () => {
+        arrows[0].hidden = rail.scrollLeft <= 4;
+        arrows[1].hidden = rail.scrollLeft + rail.clientWidth >= rail.scrollWidth - 4;
+      };
+      rail.addEventListener("scroll", update, { passive: true });
+      window.requestAnimationFrame(update);
+    });
+  }
+  new MutationObserver(() => window.requestAnimationFrame(enhanceRails)).observe(page, { childList: true, subtree: true });
   const modalRoot = $("#modal-root");
 
   if ("scrollRestoration" in window.history) window.history.scrollRestoration = "manual";
@@ -4598,6 +4628,49 @@
   // loads (filters, tabs) show a shimmering skeleton of the page instead.
   const RACCOON_LINES = ["Загружаем фильмы…", "Енот листает каталог…", "Готовим попкорн…", "Ищем, что посмотреть вдвоём…"];
   let raccoonTimer = null;
+  // A menu of our own instead of a native <select>: Chrome on Windows would not open
+  // the native list here, and this one looks and behaves the same everywhere.
+  const CATALOG_SORTS = [["rating", "По рейтингу"], ["year", "Сначала новые"], ["title", "По алфавиту"]];
+  function catalogSortMenuMarkup() {
+    const current = CATALOG_SORTS.find(([value]) => value === state.catalogSort) || CATALOG_SORTS[0];
+    const options = CATALOG_SORTS.map(([value, label]) => `<button type="button" role="option" aria-selected="${value === current[0]}" data-catalog-sort-value="${value}">${label}</button>`).join("");
+    return `<div class="studio-sort" data-catalog-sort-menu><button class="studio-sort-button" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Сортировка: ${current[1]}" data-catalog-sort-toggle>${current[1]}</button><div class="studio-sort-list" role="listbox" aria-label="Сортировка" hidden>${options}</div></div>`;
+  }
+  function bindCatalogSortMenu() {
+    const menu = $("[data-catalog-sort-menu]");
+    if (!menu) return;
+    const toggle = menu.querySelector("[data-catalog-sort-toggle]");
+    const list = menu.querySelector(".studio-sort-list");
+    const setOpen = (open) => {
+      list.hidden = !open;
+      toggle.setAttribute("aria-expanded", String(open));
+      if (open) {
+        list.querySelector('[aria-selected="true"]')?.focus();
+        window.setTimeout(() => document.addEventListener("click", closeOnOutside), 0);
+      } else {
+        document.removeEventListener("click", closeOnOutside);
+      }
+    };
+    const closeOnOutside = (event) => { if (!menu.contains(event.target)) setOpen(false); };
+    toggle.addEventListener("click", () => setOpen(list.hidden));
+    menu.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !list.hidden) { setOpen(false); toggle.focus(); }
+      if ((event.key === "ArrowDown" || event.key === "ArrowUp") && !list.hidden) {
+        const buttons = [...list.querySelectorAll("button")];
+        const index = buttons.indexOf(document.activeElement);
+        buttons[(index + (event.key === "ArrowDown" ? 1 : buttons.length - 1)) % buttons.length]?.focus();
+        event.preventDefault();
+      }
+    });
+    list.querySelectorAll("[data-catalog-sort-value]").forEach((button) => button.addEventListener("click", () => {
+      setOpen(false);
+      if (state.catalogSort === button.dataset.catalogSortValue) return;
+      state.catalogSort = button.dataset.catalogSortValue;
+      resetCatalogPage();
+      saveState();
+      loadRemoteCatalogPage(1);
+    }));
+  }
   function renderCatalogLoading() {
     window.clearInterval(raccoonTimer);
     if (catalogHydrating) {
@@ -5423,7 +5496,7 @@
     const genreFilterMarkup = `<div class="genre-rail-wrap"><div class="genre-list genre-rail" role="group" aria-label="Фильтр по жанру">${genreButtons}</div></div>`;
     const catalogMarkup = items.length ? `<div class="poster-grid" id="catalog-results" tabindex="-1">${pageItems.slice(0, 16).map((item) => poster(item)).join("")}${pageItems.length > 16 ? `<div id="catalog-lazy-sentinel" class="catalog-lazy-sentinel" aria-hidden="true"></div>` : ""}</div>${paginationMarkup}` : `<div class="empty-state"><div class="empty-pet"><span class="empty-icon" aria-hidden="true">🎬</span></div><h2>${savedView ? savedViewEmpty.title : "Ничего не подошло"}</h2><p>${savedView ? savedViewEmpty.copy : emptyCopy}</p>${savedView ? `<a class="primary-button" href="${routeForView("catalog")}" data-view="catalog">${savedViewEmpty.action}</a>` : '<button class="primary-button" data-catalog-reset type="button">Сбросить фильтры</button>'}</div>`;
     const savedViewMarkup = `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div>${catalogMarkup}`;
-    page.innerHTML = savedView ? savedViewMarkup : `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls catalog-studio" aria-label="Подобрать фильм"><div class="studio-top"><div class="studio-tabs" role="group" aria-label="Подборки каталога">${collectionButtons}</div><div class="studio-actions"><label class="studio-sort"><span class="sr-only">Сортировка</span><select data-catalog-sort><option value="rating"${state.catalogSort === "rating" ? " selected" : ""}>По рейтингу</option><option value="year"${state.catalogSort === "year" ? " selected" : ""}>Сначала новые</option><option value="title"${state.catalogSort === "title" ? " selected" : ""}>По алфавиту</option></select></label><button class="text-button studio-random" data-catalog-random type="button"${items.length ? "" : " disabled"} title="Открыть случайный фильм из выдачи">Случайный</button></div></div>${genreFilterMarkup}<div class="catalog-result-row">${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}${remoteCatalogLoading ? `<span class="catalog-loading-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span> Обновляю карточки…</span>` : ""}${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${catalogMarkup}`;
+    page.innerHTML = savedView ? savedViewMarkup : `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls catalog-studio" aria-label="Подобрать фильм"><div class="studio-top"><div class="studio-tabs" role="group" aria-label="Подборки каталога">${collectionButtons}</div><div class="studio-actions">${catalogSortMenuMarkup()}<button class="text-button studio-random" data-catalog-random type="button"${items.length ? "" : " disabled"} title="Открыть случайный фильм из выдачи">Случайный</button></div></div>${genreFilterMarkup}<div class="catalog-result-row">${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}${remoteCatalogLoading ? `<span class="catalog-loading-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span> Обновляю карточки…</span>` : ""}${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${catalogMarkup}`;
     const liveStatus = $("#catalog-live-status");
     if (liveStatus) window.requestAnimationFrame(() => { liveStatus.textContent = "Каталог обновлён."; });
     bindPageActions();
@@ -6755,12 +6828,7 @@
       loadRemoteCatalogPage(1);
     }));
     $$('[data-open-collection]').forEach((button) => button.addEventListener("click", () => openCatalogCollection(button.dataset.openCollection)));
-    $('[data-catalog-sort]')?.addEventListener("change", (event) => {
-      state.catalogSort = event.currentTarget.value;
-      resetCatalogPage();
-      saveState();
-      loadRemoteCatalogPage(1);
-    });
+    bindCatalogSortMenu();
     $$('[data-catalog-page]').forEach((button) => button.addEventListener("click", () => {
       const nextPage = Number(button.dataset.catalogPage);
       const pagination = catalogPagination(filteredCatalog());
