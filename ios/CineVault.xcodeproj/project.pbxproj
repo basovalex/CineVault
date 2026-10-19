@@ -125,7 +125,7 @@
 			};
 			buildConfigurationList = E00000000000000000000006 /* Build configuration list for PBXProject "CineVault" */;
 			compatibilityVersion = "Xcode 14.0";
-			developmentRegion = en;
+			developmentRegion = ru;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,

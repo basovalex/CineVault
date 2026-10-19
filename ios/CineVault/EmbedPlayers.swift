@@ -9,9 +9,11 @@ struct CatalogEmbedPlayerView: View {
 
     var body: some View {
         ExternalEmbedWebView(url: url, siteURL: store.api.configuration.baseURL)
-            .background(Color.black)
+            .modifier(LandscapeVideoFill())
+            .background(Color.black.ignoresSafeArea())
             .navigationTitle(title.title)
             .navigationBarTitleDisplayMode(.inline)
+            .modifier(LandscapePlayerChrome())
     }
 }
 
@@ -51,6 +53,7 @@ struct CatalogFreshPlayerView: View {
             }
         }
         .modifier(HideTabBarWhileVisible())
+        .modifier(LandscapePlayerChrome())
         .task { await refresh(force: false) }
     }
 
@@ -95,13 +98,15 @@ struct CatalogAllohaPlayerView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
 
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
     private var selected: ExternalPlayerTranslation? {
         translations.first(where: { $0.id == selectedID }) ?? translations.first
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if translations.count > 1 {
+            if translations.count > 1 && verticalSizeClass != .compact {
                 Picker("Озвучка", selection: $selectedID) {
                     ForEach(translations) { translation in
                         Text(translation.name).tag(Optional(translation.id))
@@ -113,6 +118,7 @@ struct CatalogAllohaPlayerView: View {
             if let selected, let url = URL(string: selected.embedURL),
                url.scheme == "https", url.host == "theatre.stravers.live", url.port == nil {
                 ExternalEmbedWebView(url: url, siteURL: store.api.configuration.baseURL)
+                    .modifier(LandscapeVideoFill())
             } else if isLoading {
                 ProgressView("Получаю свежую ссылку Alloha…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -120,7 +126,7 @@ struct CatalogAllohaPlayerView: View {
                 ContentUnavailableView("Alloha недоступен", systemImage: "play.slash", description: Text(errorMessage ?? "Нет доступных озвучек"))
             }
         }
-        .background(Color.black)
+        .background(Color.black.ignoresSafeArea())
         .navigationTitle(title.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -129,6 +135,7 @@ struct CatalogAllohaPlayerView: View {
             }
         }
         .modifier(HideTabBarWhileVisible())
+        .modifier(LandscapePlayerChrome())
         .task { await loadOptions() }
         .onChange(of: selected?.id) { _, _ in
             guard let selected else { return }
@@ -171,7 +178,11 @@ struct ExternalEmbedWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
+        configuration.allowsPictureInPictureMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
+        // Lets the provider's own full-screen button take the whole display,
+        // its controls and voice menus included, instead of a bare system player.
+        configuration.preferences.isElementFullscreenEnabled = true
         if let filterURL = Bundle.main.url(forResource: "filter", withExtension: "js"),
            let source = try? String(contentsOf: filterURL, encoding: .utf8) {
             configuration.userContentController.addUserScript(
@@ -179,7 +190,12 @@ struct ExternalEmbedWebView: UIViewRepresentable {
             )
         }
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.isOpaque = false
+        webView.backgroundColor = .black
+        webView.scrollView.backgroundColor = .black
         webView.scrollView.isScrollEnabled = false
+        // SwiftUI already places the view inside the safe area.
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
         loadFrame(in: webView, coordinator: context.coordinator)
         return webView
     }
@@ -223,6 +239,7 @@ struct CatalogExternalPlayerView: View {
             if let player {
                 VideoPlayer(player: player)
                     .background(Color.black)
+                    .modifier(LandscapeVideoFill())
             } else {
                 Color.black
             }
@@ -255,10 +272,11 @@ struct CatalogExternalPlayerView: View {
                 .background(.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 16))
             }
         }
-        .background(Color.black)
+        .background(Color.black.ignoresSafeArea())
         .navigationTitle(title.title)
         .navigationBarTitleDisplayMode(.inline)
         .modifier(HideTabBarWhileVisible())
+        .modifier(LandscapePlayerChrome())
         .task {
             startPlayer()
         }
@@ -321,6 +339,7 @@ struct EmbedProviderPlayerView: View {
     @EnvironmentObject private var store: AppStore
     let title: CatalogTitle
     let provider: ExternalPlayerProvider
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private var url: URL? {
         guard let raw = provider.embedURL, let url = URL(string: raw), url.scheme == "https", url.host != nil else { return nil }
@@ -331,10 +350,11 @@ struct EmbedProviderPlayerView: View {
         VStack(spacing: 0) {
             if let url {
                 ExternalEmbedWebView(url: url, siteURL: store.api.configuration.baseURL)
+                    .modifier(LandscapeVideoFill())
             } else {
                 ContentUnavailableView("Плеер недоступен", systemImage: "play.slash", description: Text("\(provider.name) не отдал ссылку"))
             }
-            if !provider.voices.isEmpty || title.isSeries {
+            if verticalSizeClass != .compact, !provider.voices.isEmpty || title.isSeries {
                 Text(hint)
                     .font(.cine(12))
                     .foregroundStyle(Color.cineMuted)
@@ -347,6 +367,7 @@ struct EmbedProviderPlayerView: View {
         .navigationTitle(title.title)
         .navigationBarTitleDisplayMode(.inline)
         .modifier(HideTabBarWhileVisible())
+        .modifier(LandscapePlayerChrome())
         .onAppear { store.recordEmbedOpened(title, providerID: provider.id) }
     }
 
@@ -355,5 +376,48 @@ struct EmbedProviderPlayerView: View {
         var text = voices.isEmpty ? "Озвучка выбирается внутри плеера." : "Озвучки внутри плеера: \(voices)\(provider.voices.count > 8 ? "…" : "")."
         if title.isSeries { text += " Сезон и серию — тоже там." }
         return text
+    }
+}
+
+/// iPhone turned sideways: the player takes the whole screen. The navigation bar,
+/// status bar and home indicator step aside; turning the phone upright brings them back.
+struct LandscapePlayerChrome: ViewModifier {
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    private var isLandscape: Bool { verticalSizeClass == .compact }
+
+    func body(content: Content) -> some View {
+        content
+            .toolbar(isLandscape ? .hidden : .automatic, for: .navigationBar)
+            .statusBarHidden(isLandscape)
+            .persistentSystemOverlays(isLandscape ? .hidden : .automatic)
+    }
+}
+
+/// In landscape the video runs to the top and bottom edges; the sides keep their
+/// safe-area margins so the player's controls stay clear of the camera housing.
+struct LandscapeVideoFill: ViewModifier {
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    func body(content: Content) -> some View {
+        content.ignoresSafeArea(edges: verticalSizeClass == .compact ? .vertical : [])
+    }
+}
+
+/// A full-screen button that works with every provider: it turns the picture
+/// sideways. The providers' own buttons often do nothing inside an iPhone app.
+struct PlayerFullscreenButton: ViewModifier {
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    func body(content: Content) -> some View {
+        content.toolbar {
+            if OrientationPolicy.isPhone && verticalSizeClass != .compact {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("На весь экран", systemImage: "arrow.up.left.and.arrow.down.right") {
+                        OrientationPolicy.rotate(to: .landscapeRight)
+                    }
+                }
+            }
+        }
     }
 }

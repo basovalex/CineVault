@@ -269,22 +269,25 @@ struct TitleDetailView: View {
     @ViewBuilder
     private var playerDestination: some View {
         if let choice = selectedChoice {
-            switch choice.kind {
-            case .cinevault:
-                if let source = item.playbackSources.first(where: { $0.id == selectedVoice?.id }) ?? item.playbackSources.first {
-                    CatalogFreshPlayerView(title: item, source: source)
-                } else if let raw = item.videoURL, let url = URL(string: raw) {
-                    CatalogExternalPlayerView(title: item, url: url)
-                }
-            case .alloha:
-                CatalogAllohaPlayerView(title: item, preferredTranslation: providers
-                    .first(where: { $0.id == "alloha" })?.translations
-                    .first(where: { $0.id == selectedVoice?.id })?.name ?? "")
-            case .embed:
-                if let provider = providers.first(where: { $0.id == choice.id }) {
-                    EmbedProviderPlayerView(title: item, provider: provider)
+            Group {
+                switch choice.kind {
+                case .cinevault:
+                    if let source = item.playbackSources.first(where: { $0.id == selectedVoice?.id }) ?? item.playbackSources.first {
+                        CatalogFreshPlayerView(title: item, source: source)
+                    } else if let raw = item.videoURL, let url = URL(string: raw) {
+                        CatalogExternalPlayerView(title: item, url: url)
+                    }
+                case .alloha:
+                    CatalogAllohaPlayerView(title: item, preferredTranslation: providers
+                        .first(where: { $0.id == "alloha" })?.translations
+                        .first(where: { $0.id == selectedVoice?.id })?.name ?? "")
+                case .embed:
+                    if let provider = providers.first(where: { $0.id == choice.id }) {
+                        EmbedProviderPlayerView(title: item, provider: provider)
+                    }
                 }
             }
+            .modifier(PlayerFullscreenButton())
         }
     }
 

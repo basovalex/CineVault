@@ -162,6 +162,26 @@ struct RemoteCatalogPage: Decodable {
     let page: Int
     let pages: Int
     let total: Int
+
+    private enum CodingKeys: String, CodingKey { case items, page, pages, total }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        // A single malformed card must not sink the whole page, and with it a home shelf.
+        items = try values.decode([Lenient<RemoteCatalogEntry>].self, forKey: .items).compactMap(\.value)
+        page = try values.decode(Int.self, forKey: .page)
+        pages = try values.decode(Int.self, forKey: .pages)
+        total = try values.decode(Int.self, forKey: .total)
+    }
+}
+
+/// Decodes to nil instead of failing the array around it.
+struct Lenient<Value: Decodable>: Decodable {
+    let value: Value?
+
+    init(from decoder: Decoder) throws {
+        value = try? Value(from: decoder)
+    }
 }
 
 struct CatalogFacets: Decodable {

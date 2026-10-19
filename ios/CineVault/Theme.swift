@@ -44,26 +44,41 @@ enum CineMetrics {
 
 // MARK: - Buttons
 
+// On iOS 26 and later the buttons are Liquid Glass: they refract what lies
+// beneath them and stretch under the finger. Earlier systems keep flat fills.
+
 struct CinePrimaryButtonStyle: ButtonStyle {
+    @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let label = configuration.label
             .font(.cine(16, .semibold))
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 50)
-            .background(Color.cineButton.opacity(configuration.isPressed ? 0.8 : 1))
-            .clipShape(RoundedRectangle(cornerRadius: CineMetrics.buttonRadius))
+        if #available(iOS 26.0, *) {
+            label.glassEffect(.regular.tint(Color.cineButton).interactive(), in: .rect(cornerRadius: CineMetrics.buttonRadius))
+        } else {
+            label
+                .background(Color.cineButton.opacity(configuration.isPressed ? 0.8 : 1))
+                .clipShape(RoundedRectangle(cornerRadius: CineMetrics.buttonRadius))
+        }
     }
 }
 
 struct CineSecondaryButtonStyle: ButtonStyle {
+    @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let label = configuration.label
             .font(.cine(16, .medium))
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 50)
-            .background(Color.cineSurface.opacity(configuration.isPressed ? 1 : 0.7))
-            .overlay(RoundedRectangle(cornerRadius: CineMetrics.buttonRadius).stroke(Color.white.opacity(0.18), lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: CineMetrics.buttonRadius))
+        if #available(iOS 26.0, *) {
+            label.glassEffect(.regular.interactive(), in: .rect(cornerRadius: CineMetrics.buttonRadius))
+        } else {
+            label
+                .background(Color.cineSurface.opacity(configuration.isPressed ? 1 : 0.7))
+                .overlay(RoundedRectangle(cornerRadius: CineMetrics.buttonRadius).stroke(Color.white.opacity(0.18), lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: CineMetrics.buttonRadius))
+        }
     }
 }
 
@@ -71,26 +86,38 @@ struct CineSecondaryButtonStyle: ButtonStyle {
 struct CineIconButtonStyle: ButtonStyle {
     var size: CGFloat = 50
 
+    @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let label = configuration.label
             .font(.system(size: 19, weight: .medium))
             .foregroundStyle(.white)
             .frame(width: size, height: size)
-            .background(Color.cineSurface.opacity(configuration.isPressed ? 1 : 0.7))
-            .overlay(RoundedRectangle(cornerRadius: CineMetrics.buttonRadius).stroke(Color.white.opacity(0.16), lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: CineMetrics.buttonRadius))
+        if #available(iOS 26.0, *) {
+            label.glassEffect(.regular.interactive(), in: .rect(cornerRadius: CineMetrics.buttonRadius))
+        } else {
+            label
+                .background(Color.cineSurface.opacity(configuration.isPressed ? 1 : 0.7))
+                .overlay(RoundedRectangle(cornerRadius: CineMetrics.buttonRadius).stroke(Color.white.opacity(0.16), lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: CineMetrics.buttonRadius))
+        }
     }
 }
 
 /// Round translucent button over artwork (back, share, favourite).
 struct CineOverlayButtonStyle: ButtonStyle {
+    @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let label = configuration.label
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: 44, height: 44)
-            .background(Color.cineBackground.opacity(configuration.isPressed ? 0.8 : 0.55))
-            .clipShape(Circle())
+        if #available(iOS 26.0, *) {
+            label.glassEffect(.regular.interactive(), in: .circle)
+        } else {
+            label
+                .background(Color.cineBackground.opacity(configuration.isPressed ? 0.8 : 0.55))
+                .clipShape(Circle())
+        }
     }
 }
 
@@ -122,13 +149,14 @@ struct CineChip: View {
 struct CineSegmented<Value: Hashable>: View {
     let options: [(value: Value, title: String)]
     @Binding var selection: Value
+    @Namespace private var selectionPill
 
     var body: some View {
         HStack(spacing: 0) {
             ForEach(options, id: \.value) { option in
                 let isSelected = option.value == selection
                 Button {
-                    withAnimation(.easeOut(duration: 0.18)) { selection = option.value }
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { selection = option.value }
                 } label: {
                     Text(option.title)
                         .font(.cine(14, isSelected ? .semibold : .medium))
@@ -136,8 +164,13 @@ struct CineSegmented<Value: Hashable>: View {
                         .minimumScaleFactor(0.8)
                         .foregroundStyle(isSelected ? Color.white : Color.cineMuted)
                         .frame(maxWidth: .infinity, minHeight: 38)
-                        .background(isSelected ? Color.cineSurface2 : Color.clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 11))
+                        .background {
+                            if isSelected {
+                                RoundedRectangle(cornerRadius: 11)
+                                    .fill(Color.cineSurface2)
+                                    .matchedGeometryEffect(id: "selection", in: selectionPill)
+                            }
+                        }
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -145,8 +178,20 @@ struct CineSegmented<Value: Hashable>: View {
             }
         }
         .padding(4)
-        .background(Color.cineSurface)
-        .clipShape(RoundedRectangle(cornerRadius: CineMetrics.buttonRadius))
+        .modifier(SegmentedTrack())
+    }
+}
+
+private struct SegmentedTrack: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: .rect(cornerRadius: CineMetrics.buttonRadius))
+        } else {
+            content
+                .background(Color.cineSurface)
+                .clipShape(RoundedRectangle(cornerRadius: CineMetrics.buttonRadius))
+        }
     }
 }
 

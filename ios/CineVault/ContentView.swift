@@ -48,12 +48,72 @@ final class AppChrome: ObservableObject {
 
     func hideTabBar(for screen: UUID) {
         playerScreens.insert(screen)
-        isTabBarHidden = !playerScreens.isEmpty
+        update()
     }
 
     func showTabBar(for screen: UUID) {
         playerScreens.remove(screen)
+        update()
+    }
+
+    private func update() {
         isTabBarHidden = !playerScreens.isEmpty
+        OrientationPolicy.setAllowsLandscape(!playerScreens.isEmpty)
+    }
+}
+
+/// iPhone screens stay upright, except while a player is on screen: then the
+/// phone may turn sideways and the video fills the display. iPad turns freely.
+@MainActor
+enum OrientationPolicy {
+    private(set) static var allowsLandscape = false
+
+    static var isPhone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+
+    static var mask: UIInterfaceOrientationMask {
+        guard isPhone else { return .all }
+        return allowsLandscape ? .allButUpsideDown : .portrait
+    }
+
+    static func setAllowsLandscape(_ allowed: Bool) {
+        guard allowed != allowsLandscape else { return }
+        allowsLandscape = allowed
+        for scene in windowScenes {
+            var controller = scene.keyWindow?.rootViewController
+            while let current = controller {
+                current.setNeedsUpdateOfSupportedInterfaceOrientations()
+                controller = current.presentedViewController
+            }
+        }
+        if !allowed { returnUpright() }
+    }
+
+    /// Turns an iPhone interface back to portrait, as if the phone had been rotated.
+    static func returnUpright() {
+        guard isPhone else { return }
+        rotate(to: .portrait)
+    }
+
+    static func rotate(to orientations: UIInterfaceOrientationMask) {
+        for scene in windowScenes where !orientations.contains(scene.effectiveGeometry.interfaceOrientation.mask) {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientations))
+        }
+    }
+
+    private static var windowScenes: [UIWindowScene] {
+        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    }
+}
+
+private extension UIInterfaceOrientation {
+    var mask: UIInterfaceOrientationMask {
+        switch self {
+        case .portrait: return .portrait
+        case .portraitUpsideDown: return .portraitUpsideDown
+        case .landscapeLeft: return .landscapeLeft
+        case .landscapeRight: return .landscapeRight
+        default: return []
+        }
     }
 }
 
@@ -63,6 +123,7 @@ struct HideTabBarWhileVisible: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .toolbar(.hidden, for: .tabBar)
             .onAppear { chrome.hideTabBar(for: screenID) }
             .onDisappear { chrome.showTabBar(for: screenID) }
     }
@@ -84,34 +145,52 @@ struct ContentView: View {
     }
 
     var body: some View {
-        ZStack {
-            // Every tab stays alive so its scroll position and navigation survive switching.
-            ForEach(AppTab.allCases) { tab in
-                screen(for: tab)
-                    .opacity(selectedTab == tab ? 1 : 0)
-                    .allowsHitTesting(selectedTab == tab)
-                    .accessibilityHidden(selectedTab != tab)
+        tabs
+            .environmentObject(store)
+            .environmentObject(chrome)
+            .tint(.cineAccent)
+            .preferredColorScheme(.dark)
+            .task {
+                await store.refresh()
+                await store.refreshPeriodically()
             }
-        }
-        // A real safe-area inset reserves the bar's space in each scroll view.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !chrome.isTabBarHidden {
-                CineVaultTabBar(selection: $selectedTab)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            .onChange(of: scenePhase) { _, newPhase in
+                guard newPhase == .active else { return }
+                Task { await store.refresh() }
             }
-        }
-        .environmentObject(store)
-        .environmentObject(chrome)
-        .tint(.cineAccent)
-        .preferredColorScheme(.dark)
-        .animation(.easeOut(duration: 0.2), value: chrome.isTabBarHidden)
-        .task {
-            await store.refresh()
-            await store.refreshPeriodically()
-        }
-        .onChange(of: scenePhase) { _, newPhase in
-            guard newPhase == .active else { return }
-            Task { await store.refresh() }
+    }
+
+    @ViewBuilder
+    private var tabs: some View {
+        if #available(iOS 26.0, *) {
+            // The system tab bar is Liquid Glass here: it floats over the content,
+            // morphs the selection between tabs and shrinks while scrolling down.
+            TabView(selection: $selectedTab) {
+                ForEach(AppTab.allCases) { tab in
+                    Tab(tab.title, systemImage: tab.systemImage, value: tab, role: tab == .search ? .search : nil) {
+                        screen(for: tab)
+                    }
+                }
+            }
+            .tabBarMinimizeBehavior(.onScrollDown)
+        } else {
+            ZStack {
+                // Every tab stays alive so its scroll position and navigation survive switching.
+                ForEach(AppTab.allCases) { tab in
+                    screen(for: tab)
+                        .opacity(selectedTab == tab ? 1 : 0)
+                        .allowsHitTesting(selectedTab == tab)
+                        .accessibilityHidden(selectedTab != tab)
+                }
+            }
+            // A real safe-area inset reserves the bar's space in each scroll view.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if !chrome.isTabBarHidden {
+                    CineVaultTabBar(selection: $selectedTab)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeOut(duration: 0.2), value: chrome.isTabBarHidden)
         }
     }
 

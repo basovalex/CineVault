@@ -152,6 +152,7 @@ final class AppStore: ObservableObject {
     private var catalogSelection = ""
     private var homeCandidates: [CatalogTitle] = []
     private var homeFeedLoaded = false
+    private var homeLoadTask: Task<Void, Never>?
     private let cacheFileName = "library-cache.json"
     private let progressFileName = "device-progress.json"
     private let catalogRequestsFileName = "catalog-requests.json"
@@ -235,59 +236,83 @@ final class AppStore: ObservableObject {
     }
 
     func loadHomeDiscovery(force: Bool = false) async {
-        guard !homeLoading, force || !homeFeedLoaded else { return }
+        // A view's task is cancelled when the view goes away or a pull-to-refresh ends;
+        // the shelves load in a task of their own, so a half-done load is never thrown away.
+        if let running = homeLoadTask {
+            await running.value
+            return
+        }
+        guard force || !homeFeedLoaded else { return }
+        let task = Task { await performHomeDiscovery() }
+        homeLoadTask = task
+        await task.value
+        homeLoadTask = nil
+    }
+
+    private func performHomeDiscovery() async {
         homeLoading = true
         homeError = nil
         defer { homeLoading = false }
-        do {
-            async let popular = api.fetchCatalogPage(page: 1, sort: "popular", collection: "popular")
-            async let recent = api.fetchCatalogPage(page: 1, sort: "new", collection: "new")
-            async let evening = api.fetchCatalogPage(page: 1, sort: "rating", collection: "evening")
-            async let anime = api.fetchCatalogPage(page: 1, sort: "rating", collection: "anime")
-            async let tense = api.fetchCatalogPage(page: 1, sort: "rating", collection: "tense")
-            async let together = api.fetchCatalogPage(page: 1, sort: "rating", collection: "together")
-            let pages = try await (popular, recent, evening, anime, tense, together)
-            let entries = [pages.0, pages.1, pages.2, pages.3, pages.4, pages.5]
-                .flatMap(\.items)
-                .map(\.catalogTitle)
-            var unique: [String: CatalogTitle] = [:]
-            entries.forEach { unique[$0.id] = $0 }
-            homeCandidates = Array(unique.values)
+        // Each collection loads on its own: one that fails only leaves its shelf out.
+        async let popular = homePage(sort: "popular", collection: "popular")
+        async let recent = homePage(sort: "new", collection: "new")
+        async let evening = homePage(sort: "rating", collection: "evening")
+        async let anime = homePage(sort: "rating", collection: "anime")
+        async let tense = homePage(sort: "rating", collection: "tense")
+        async let together = homePage(sort: "rating", collection: "together")
+        let results = await [popular, recent, evening, anime, tense, together]
+        let pages = results.map { try? $0.get() }
+        guard pages.contains(where: { $0 != nil }) else {
+            if case .failure(let error)? = results.first { homeError = error.localizedDescription }
+            return
+        }
+        func titles(_ index: Int) -> [CatalogTitle] {
+            pages[index]?.items.map(\.catalogTitle) ?? []
+        }
+        let entries = pages.indices.flatMap(titles)
+        var unique: [String: CatalogTitle] = [:]
+        entries.forEach { unique[$0.id] = $0 }
+        homeCandidates = Array(unique.values)
 
-            var tasteGenres: [String: Int] = [:]
-            var seenTitleIDs = Set<String>()
-            let watchedTitleIDs = history.compactMap(\.titleID).filter { seenTitleIDs.insert($0).inserted }.prefix(3)
-            for titleID in watchedTitleIDs {
-                if let watched = try? await api.fetchCatalogTitle(id: titleID) {
-                    for genre in watched.tags.map({ $0.localizedLowercase }) {
-                        tasteGenres[genre, default: 0] += 1
-                    }
+        var tasteGenres: [String: Int] = [:]
+        var seenTitleIDs = Set<String>()
+        let watchedTitleIDs = history.compactMap(\.titleID).filter { seenTitleIDs.insert($0).inserted }.prefix(3)
+        for titleID in watchedTitleIDs {
+            if let watched = try? await api.fetchCatalogTitle(id: titleID) {
+                for genre in watched.tags.map({ $0.localizedLowercase }) {
+                    tasteGenres[genre, default: 0] += 1
                 }
             }
-            let popularTitles = pages.0.items.map(\.catalogTitle)
-            let recentTitles = pages.1.items.map(\.catalogTitle)
-            let personal = rankedPersonalTitles(
-                homeCandidates, tasteGenres: tasteGenres,
-                watchedTitleIDs: Set(history.compactMap(\.titleID))
-            )
-            let moodItems = homeCandidates
-                .filter { title in title.tags.contains(where: { moodGenres.contains($0.localizedLowercase) }) }
-                .sorted(by: discoveryOrder)
-            homeShelves = [
-                CatalogShelf(id: "personal", title: "Советуем вам", subtitle: tasteGenres.isEmpty ? "Первые рекомендации — со временем подстроятся под просмотры" : "Похоже на то, что вы уже смотрели", items: personal),
-                CatalogShelf(id: "popular", title: "Популярное", subtitle: "Сначала карточки с большим числом оценок Kinopoisk", items: popularTitles),
-                CatalogShelf(id: "recent", title: "Новое и обсуждаемое", subtitle: "Свежие карточки, о которых уже голосуют", items: recentTitles),
-                CatalogShelf(id: "mood", title: moodShelfTitle, subtitle: moodShelfDescription, items: moodItems),
-                CatalogShelf(id: "evening", title: "На один вечер", subtitle: "Фильмы, которые удобно включить сегодня", items: pages.2.items.map(\.catalogTitle)),
-                CatalogShelf(id: "anime", title: "Аниме", subtitle: "Анимационные фильмы и сериалы", items: pages.3.items.map(\.catalogTitle)),
-                CatalogShelf(id: "together", title: "Для двоих", subtitle: "Романтика и истории для совместного вечера", items: pages.5.items.map(\.catalogTitle)),
-                CatalogShelf(id: "tense", title: "Держит в напряжении", subtitle: "Триллеры, детективы и криминальные истории", items: pages.4.items.map(\.catalogTitle)),
-            ].filter { !$0.items.isEmpty }
-            homePopularAvailable = !popularTitles.isEmpty
-            homeFeedLoaded = true
-            prefetchPosters()
+        }
+        let popularTitles = titles(0)
+        let recentTitles = titles(1)
+        let personal = rankedPersonalTitles(
+            homeCandidates, tasteGenres: tasteGenres,
+            watchedTitleIDs: Set(history.compactMap(\.titleID))
+        )
+        let moodItems = homeCandidates
+            .filter { title in title.tags.contains(where: { moodGenres.contains($0.localizedLowercase) }) }
+            .sorted(by: discoveryOrder)
+        homeShelves = [
+            CatalogShelf(id: "personal", title: "Советуем вам", subtitle: tasteGenres.isEmpty ? "Первые рекомендации — со временем подстроятся под просмотры" : "Похоже на то, что вы уже смотрели", items: personal),
+            CatalogShelf(id: "popular", title: "Популярное", subtitle: "Сначала карточки с большим числом оценок Kinopoisk", items: popularTitles),
+            CatalogShelf(id: "recent", title: "Новое и обсуждаемое", subtitle: "Свежие карточки, о которых уже голосуют", items: recentTitles),
+            CatalogShelf(id: "mood", title: moodShelfTitle, subtitle: moodShelfDescription, items: moodItems),
+            CatalogShelf(id: "evening", title: "На один вечер", subtitle: "Фильмы, которые удобно включить сегодня", items: titles(2)),
+            CatalogShelf(id: "anime", title: "Аниме", subtitle: "Анимационные фильмы и сериалы", items: titles(3)),
+            CatalogShelf(id: "together", title: "Для двоих", subtitle: "Романтика и истории для совместного вечера", items: titles(5)),
+            CatalogShelf(id: "tense", title: "Держит в напряжении", subtitle: "Триллеры, детективы и криминальные истории", items: titles(4)),
+        ].filter { !$0.items.isEmpty }
+        homePopularAvailable = !popularTitles.isEmpty
+        homeFeedLoaded = true
+        prefetchPosters()
+    }
+
+    private func homePage(sort: String, collection: String) async -> Result<RemoteCatalogPage, Error> {
+        do {
+            return .success(try await api.fetchCatalogPage(page: 1, sort: sort, collection: collection))
         } catch {
-            homeError = error.localizedDescription
+            return .failure(error)
         }
     }
 
