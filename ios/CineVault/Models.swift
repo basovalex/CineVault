@@ -243,7 +243,7 @@ struct ExternalPlayerProvider: Decodable, Identifiable {
     }
 }
 
-/// Server-synced progress shared with the website (`/api/catalog-progress`).
+/// Watch progress for one title or episode, kept on this device.
 struct CatalogProgressEntry: Codable, Hashable {
     let titleId: String
     var providerId: String? = nil
@@ -260,10 +260,6 @@ struct CatalogProgressEntry: Codable, Hashable {
         guard let position, let duration, duration > 0 else { return 0 }
         return min(max(position / duration, 0), 1)
     }
-}
-
-struct CatalogProgressResponse: Decodable {
-    let items: [String: CatalogProgressEntry]
 }
 
 /// What the app keeps on device for a favourite, enough to draw its poster.

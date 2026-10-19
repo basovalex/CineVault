@@ -94,6 +94,11 @@ enum OrientationPolicy {
         rotate(to: .portrait)
     }
 
+    /// Landscape with the camera housing on the left edge (the phone turned anticlockwise).
+    static var cameraIsOnLeft: Bool {
+        windowScenes.first?.effectiveGeometry.interfaceOrientation != .landscapeLeft
+    }
+
     static func rotate(to orientations: UIInterfaceOrientationMask) {
         for scene in windowScenes where !orientations.contains(scene.effectiveGeometry.interfaceOrientation.mask) {
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientations))
@@ -323,7 +328,7 @@ struct SettingsView: View {
                 }
                 Section {
                     Label("Избранное хранится на этом iPhone", systemImage: "heart")
-                    Label("История просмотра общая с сайтом", systemImage: "clock.arrow.circlepath")
+                    Label("История просмотра хранится на этом iPhone", systemImage: "clock.arrow.circlepath")
                     Label("Скачанные серии доступны без интернета", systemImage: "arrow.down.to.line")
                 } header: {
                     Text("Данные")

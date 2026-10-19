@@ -410,7 +410,24 @@ struct PlayerFullscreenButton: ViewModifier {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     func body(content: Content) -> some View {
-        content.toolbar {
+        content
+            .overlay(alignment: OrientationPolicy.cameraIsOnLeft ? .trailing : .leading) {
+                // Full screen hides the navigation bar, so it needs a way out of its own.
+                // It sits in the black margin beside the video, on the side away from the camera.
+                if OrientationPolicy.isPhone && verticalSizeClass == .compact {
+                    Button {
+                        OrientationPolicy.returnUpright()
+                    } label: {
+                        Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    }
+                    .buttonStyle(CineOverlayButtonStyle())
+                    .scaleEffect(0.85)
+                    .accessibilityLabel("Выйти из полноэкранного режима")
+                    .padding(.horizontal, 2)
+                    .ignoresSafeArea()
+                }
+            }
+            .toolbar {
             if OrientationPolicy.isPhone && verticalSizeClass != .compact {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("На весь экран", systemImage: "arrow.up.left.and.arrow.down.right") {

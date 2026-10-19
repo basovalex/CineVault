@@ -157,6 +157,7 @@ final class AppStore: ObservableObject {
     private let progressFileName = "device-progress.json"
     private let catalogRequestsFileName = "catalog-requests.json"
     private let favoritesFileName = "favorites.json"
+    private let catalogProgressFileName = "catalog-progress.json"
     private var titleCache: [String: CatalogTitle] = [:]
     private var localProgress: [String: PlaybackProgress] = [:]
 
@@ -201,6 +202,7 @@ final class AppStore: ObservableObject {
         loadLocalProgress()
         loadCatalogRequests()
         loadFavorites()
+        loadCatalogProgressFromDisk()
         loadCachedLibrary()
         prefetchPosters()
     }
@@ -276,7 +278,9 @@ final class AppStore: ObservableObject {
 
         var tasteGenres: [String: Int] = [:]
         var seenTitleIDs = Set<String>()
-        let watchedTitleIDs = history.compactMap(\.titleID).filter { seenTitleIDs.insert($0).inserted }.prefix(3)
+        // Taste comes from what was watched on this device only.
+        let watchedOnDevice = latestProgressByTitle.map(\.titleId) + history.compactMap(\.titleID)
+        let watchedTitleIDs = watchedOnDevice.filter { seenTitleIDs.insert($0).inserted }.prefix(3)
         for titleID in watchedTitleIDs {
             if let watched = try? await api.fetchCatalogTitle(id: titleID) {
                 for genre in watched.tags.map({ $0.localizedLowercase }) {
@@ -288,7 +292,7 @@ final class AppStore: ObservableObject {
         let recentTitles = titles(1)
         let personal = rankedPersonalTitles(
             homeCandidates, tasteGenres: tasteGenres,
-            watchedTitleIDs: Set(history.compactMap(\.titleID))
+            watchedTitleIDs: Set(watchedOnDevice)
         )
         let moodItems = homeCandidates
             .filter { title in title.tags.contains(where: { moodGenres.contains($0.localizedLowercase) }) }
@@ -482,13 +486,9 @@ final class AppStore: ObservableObject {
         saveFavorites()
     }
 
-    // MARK: Shared watch history
+    // MARK: Watch history (on this iPhone; the site keeps its own per browser)
 
     func loadCatalogProgress() async {
-        guard let remote = try? await api.fetchCatalogProgress() else { return }
-        for (key, entry) in remote where entry.updatedAt > (catalogProgress[key]?.updatedAt ?? 0) {
-            catalogProgress[key] = entry
-        }
         await resolveWatchedTitles()
     }
 
@@ -533,7 +533,7 @@ final class AppStore: ObservableObject {
         titleCache[title.id] = title
         watchedTitles.removeAll { $0.id == title.id }
         watchedTitles.insert(title, at: 0)
-        Task { try? await api.updateCatalogProgress(contentID: contentID, entry: entry) }
+        saveCatalogProgress()
     }
 
     private func resolveWatchedTitles() async {
@@ -686,6 +686,23 @@ final class AppStore: ObservableObject {
             return
         }
         favorites = stored
+    }
+
+    private func loadCatalogProgressFromDisk() {
+        guard let url = storageURL(catalogProgressFileName),
+              let data = try? Data(contentsOf: url),
+              let stored = try? JSONDecoder().decode([String: CatalogProgressEntry].self, from: data) else {
+            return
+        }
+        catalogProgress = stored
+    }
+
+    private func saveCatalogProgress() {
+        guard let url = storageURL(catalogProgressFileName),
+              let data = try? JSONEncoder().encode(catalogProgress) else {
+            return
+        }
+        try? data.write(to: url, options: .atomic)
     }
 
     private func saveFavorites() {

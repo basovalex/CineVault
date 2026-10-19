@@ -2888,67 +2888,15 @@
     } catch { return { ...defaultState, catalogMoodOnly: false, catalogPlayableOnly: false }; }
   }
 
-  function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); queueProgressSync(); }
+  function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
 
   // Progress is shared through the backend so "Продолжить просмотр" follows
   // the viewer between devices. Each entry keeps the newest updatedAt.
-  const pushedProgressAt = new Map();
-  let progressSyncTimer = null;
-  let progressSyncReady = false;
-  function queueProgressSync() {
-    if (!progressSyncReady || progressSyncTimer) return;
-    progressSyncTimer = window.setTimeout(() => {
-      progressSyncTimer = null;
-      Object.entries(state.progress || {}).forEach(([contentId, progress]) => {
-        const updatedAt = Number(progress?.updatedAt || 0);
-        if (!updatedAt || pushedProgressAt.get(contentId) >= updatedAt) return;
-        pushCatalogProgress(contentId, progress);
-      });
-    }, 2000);
-  }
-  function pushCatalogProgress(contentId, progress) {
-    const updatedAt = Number(progress?.updatedAt || 0);
-    if (!updatedAt || !progress?.titleId) return;
-    pushedProgressAt.set(contentId, updatedAt);
-    apiFetch(`/api/catalog-progress/${encodeURIComponent(contentId)}`, {
-      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(progress), keepalive: true,
-    }).catch(() => { pushedProgressAt.delete(contentId); });
-  }
+  // Watch progress belongs to this browser: "Продолжить просмотр" differs per device.
   async function loadCatalogProgress() {
-    try {
-      const response = await apiFetch("/api/catalog-progress", { cache: "no-store", headers: { accept: "application/json" } });
-      if (!response.ok) return;
-      const payload = await response.json();
-      const remote = payload.items && typeof payload.items === "object" ? payload.items : {};
-      let changed = false;
-      Object.entries(remote).forEach(([contentId, progress]) => {
-        const updatedAt = Number(progress?.updatedAt || 0);
-        pushedProgressAt.set(contentId, Math.max(pushedProgressAt.get(contentId) || 0, updatedAt));
-        if (updatedAt > Number(state.progress[contentId]?.updatedAt || 0)) {
-          state.progress[contentId] = progress;
-          changed = true;
-        }
-      });
-      const watchedIds = Object.values(state.progress).sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0)).map((progress) => String(progress?.titleId || "")).filter(Boolean);
-      if (watchedIds.length) {
-        const merged = [...new Set([...watchedIds, ...state.history])].slice(0, 100);
-        if (merged.join() !== state.history.join()) { state.history = merged; changed = true; }
-      }
-      if (changed) localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      // Offline or older backend: local progress keeps working.
-    } finally {
-      progressSyncReady = true;
-      queueProgressSync();
-    }
     await loadProgressTitles();
   }
-  function pushSharedState(key, value) {
-    const updatedAt = Number(value?.updatedAt) || Date.now();
-    apiFetch(`/api/shared/${encodeURIComponent(key)}`, {
-      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ updatedAt, value }), keepalive: true,
-    }).catch(() => {});
-  }
+
   async function loadProgressTitles() {
     const ids = [...new Set(Object.values(state.progress).filter((progress) => !progress?.completed).map((progress) => String(progress?.titleId || "")).filter(Boolean))]
       .filter((id) => !getTitle(id)).slice(0, 50);
@@ -3146,13 +3094,11 @@
       const response = await apiFetch("/api/library", { headers: { accept: "application/json" } });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
-      libraryEpisodes = Array.isArray(payload.items) ? payload.items : [];
-      libraryHistory = (Array.isArray(payload.history) ? payload.history : libraryEpisodes.filter((item) => item.progress)).map((item) => ({ ...item }));
-      const serverHistoryIds = libraryHistory.map((item) => String(item.title_id || "").trim()).filter(Boolean);
-      if (serverHistoryIds.length) {
-        state.history = [...new Set([...serverHistoryIds, ...state.history])].slice(0, 100);
-        saveState();
-      }
+      // Episode progress is kept in this browser, like the rest of the watch history.
+      const localEpisodeProgress = state.episodeProgress || {};
+      libraryEpisodes = (Array.isArray(payload.items) ? payload.items : []).map((item) => ({ ...item, progress: localEpisodeProgress[item.id] || null }));
+      libraryHistory = libraryEpisodes.filter((item) => item.progress)
+        .sort((a, b) => String(b.progress.updatedAt || "").localeCompare(String(a.progress.updatedAt || "")));
       mergeLibraryIntoCatalog();
       libraryStatus = `Общий backend-каталог: ${libraryEpisodes.length} ${libraryEpisodes.length === 1 ? "серия" : "серий"}.`;
     } catch (error) {
@@ -5424,8 +5370,6 @@
     Object.entries(state.progress || {}).forEach(([contentId, progress]) => {
       if (String(progress?.titleId || "") !== titleId && contentId !== titleId && !contentId.startsWith(`${titleId}-`)) return;
       delete state.progress[contentId];
-      pushedProgressAt.delete(contentId);
-      apiFetch(`/api/catalog-progress/${encodeURIComponent(contentId)}`, { method: "DELETE" }).catch(() => {});
     });
     state.history = state.history.filter((id) => id !== titleId);
     saveState();
@@ -5641,8 +5585,7 @@
     $("#settings-clear-history")?.addEventListener("click", (event) => {
       const button = event.currentTarget;
       if (button.dataset.confirm !== "1") { button.dataset.confirm = "1"; button.textContent = "Точно очистить?"; window.setTimeout(() => { if (button.isConnected) { button.dataset.confirm = ""; button.textContent = "Очистить историю"; } }, 4000); return; }
-      state.progress = {}; state.history = []; pushedProgressAt.clear();
-      apiFetch("/api/catalog-progress", { method: "DELETE" }).catch(() => {});
+      state.progress = {}; state.history = []; state.episodeProgress = {};
       saveState(); button.textContent = "История очищена"; button.disabled = true;
     });
   }
@@ -6302,7 +6245,6 @@
       };
       rememberHistory(item.id);
       saveState();
-      pushCatalogProgress(progressKey, state.progress[progressKey]);
       lastSavedAt = Date.now();
     };
     const onPlayerMessage = (event) => {
@@ -6510,7 +6452,8 @@
       const payload = { position, duration, completed };
       if (!force && Date.now() - lastSaved < 1500 && !completed) return;
       lastSaved = Date.now();
-      apiFetch(`/api/progress/${encodeURIComponent(item.id)}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }).catch(() => {});
+      state.episodeProgress = { ...(state.episodeProgress || {}), [item.id]: { ...payload, updatedAt: new Date().toISOString() } };
+      saveState();
       const current = libraryEpisodes.find((episode) => episode.id === item.id);
       if (current) {
         current.progress = { ...payload, updatedAt: new Date().toISOString() };
@@ -6789,7 +6732,7 @@
       });
     });
     $$('[data-set-theme]').forEach((button) => button.addEventListener("click", () => { state.theme = THEMES.some((theme) => theme.id === button.dataset.setTheme) ? button.dataset.setTheme : "cinema"; persistAndRender(); }));
-    $$('[data-clear-progress]').forEach((button) => button.addEventListener("click", () => { state.progress = {}; pushedProgressAt.clear(); apiFetch("/api/catalog-progress", { method: "DELETE" }).catch(() => {}); persistAndRender(); }));
+    $$('[data-clear-progress]').forEach((button) => button.addEventListener("click", () => { state.progress = {}; persistAndRender(); }));
     $$('[data-catalog-genre]').forEach((button) => button.addEventListener("click", () => {
       const genre = normalizeCatalogGenre(button.dataset.catalogGenre);
       state.catalogGenre = normalizeCatalogGenre(state.catalogGenre) === genre ? "" : genre;

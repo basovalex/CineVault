@@ -93,19 +93,6 @@ final class CineVaultAPI {
         _ = try await send(request, expecting: EmptyResponse.self)
     }
 
-    func fetchCatalogProgress() async throws -> [String: CatalogProgressEntry] {
-        let response: CatalogProgressResponse = try await request(path: "api/catalog-progress")
-        return response.items
-    }
-
-    func updateCatalogProgress(contentID: String, entry: CatalogProgressEntry) async throws {
-        let encoded = contentID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? contentID
-        var request = try makeRequest(path: "api/catalog-progress/\(encoded)", method: "PUT")
-        request.httpBody = try JSONEncoder().encode(entry)
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        _ = try await send(request, expecting: EmptyResponse.self)
-    }
-
     func createCatalogRequest(for title: CatalogTitle) async throws -> CatalogRequestResponse {
         var request = try makeRequest(path: "api/catalog/requests", method: "POST")
         request.httpBody = try JSONEncoder().encode(CatalogRequestPayload(title: title))
