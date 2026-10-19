@@ -71,8 +71,17 @@ struct HideTabBarWhileVisible: ViewModifier {
 struct ContentView: View {
     @StateObject private var store = AppStore()
     @StateObject private var chrome = AppChrome()
-    @State private var selectedTab: AppTab = .home
+    @State private var selectedTab: AppTab = Self.initialTab
     @Environment(\.scenePhase) private var scenePhase
+
+    /// Debug builds accept `-cinevault.initialTab catalog` as a launch argument for screenshots.
+    private static var initialTab: AppTab {
+        #if DEBUG
+        AppTab(rawValue: UserDefaults.standard.string(forKey: "cinevault.initialTab") ?? "") ?? .home
+        #else
+        .home
+        #endif
+    }
 
     var body: some View {
         ZStack {

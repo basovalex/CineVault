@@ -13,9 +13,12 @@
 - `EmbedPlayers.swift`: плееры вынесены, добавлен `EmbedProviderPlayerView` (Collaps/Veoveo/Turbo).
 - `ContentView.swift`: 5 вкладок, новая нижняя панель, «Загрузки» и «Настройки».
 
-## Осталось (сборка пока НЕ проходит)
-1. `TitleDetailView.swift`: фон, логотип, «Смотреть», выбор плеера (CineVault → Alloha → Collaps/Veoveo/Turbo) и озвучки, описание, жанры, сезоны, вкладки «Похожие / Актёры / О фильме». Логику взять из старого `CatalogTitleDetailView` (git show main:ios/CineVault/ContentView.swift).
-2. `MineView.swift`: «Избранное» и «История» (store.watchedTitles), кнопка настроек.
-3. Добавить новые .swift-файлы в `CineVault.xcodeproj/project.pbxproj` (PBXBuildFile, PBXFileReference, группа, Sources). Убрать `pug-mascot.png`.
-4. Собрать (`-destination 'generic/platform=iOS Simulator'`), запустить в симуляторе, сверить с макетами.
-5. По желанию: подключить шрифт Rubik (`Font.cine` в Theme.swift).
+## Сделано во второй заход
+- `TitleDetailView.swift` и `MineView.swift`, файлы добавлены в Xcode-проект, сборка проходит.
+- Проверено в симуляторе на живых данных: главная, каталог, поиск, «Моё», карточка, «Продолжить просмотр» из общей истории.
+- Отладочный параметр запуска: `xcrun simctl launch <device> com.cinevault.personal -cinevault.initialTab catalog`.
+
+## Осталось
+1. Проверить касаниями (нужен доступ к симулятору в панели): кнопки баннера после исправления, воспроизведение Alloha/Collaps/Veoveo/Turbo, постеры в подборках главной.
+2. Шрифт Rubik (`Font.cine` в Theme.swift) — по желанию.
+3. Влить `ios-redesign` в `main`.
