@@ -492,6 +492,8 @@ enum PlayerAdBlocker {
         "adriver.ru", "betweendigital.com", "buzzoola.com", "otm-r.com", "mediasniper.ru",
         "videoroll.net", "moevideo.biz", "adhigh.net", "hybrid.ai", "adlook.me", "propellerads.com",
         "exoclick.com", "adsterra.com", "popads.net", "onclickads.net",
+        // Seen in Collaps on 2026-10-19: the pre-roll ad list and its video host
+        "distribrey.com", "hg-delivery.b-cdn.net",
     ]
     private static var ruleList: WKContentRuleList?
     private static var waiting: [WKUserContentController] = []
