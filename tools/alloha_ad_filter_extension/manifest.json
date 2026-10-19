@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
   "name": "CineVault · Alloha ad-list test",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Experimental, device-local replacement of Alloha's ad-list response. Does not affect video requests.",
   "minimum_chrome_version": "111",
   "content_scripts": [
     {
-      "matches": ["https://theatre.stravers.live/*"],
+      "matches": ["https://*.stravers.live/*"],
       "js": ["filter.js"],
       "all_frames": true,
       "run_at": "document_start",

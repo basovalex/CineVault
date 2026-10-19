@@ -2,7 +2,7 @@
 
 Experimental Chromium extension for one observed Alloha ad-list endpoint. It returns
 `{"geoUser":"","list":[]}` for `POST https://pc.alloviewroll.com/lists.php`
-inside `theatre.stravers.live`. It does not block media URLs or alter CineVault.
+inside Alloha frames on `*.stravers.live`. It does not block media URLs or alter CineVault.
 
 This is a local browser experiment, not a server-side feature and not a guarantee
 that Alloha will remain ad-free. It cannot remove ads already embedded into video,
