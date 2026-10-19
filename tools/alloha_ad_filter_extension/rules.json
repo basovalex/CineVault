@@ -1,0 +1,54 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "block"
+    },
+    "condition": {
+      "requestDomains": [
+        "an.yandex.ru",
+        "yabs.yandex.ru",
+        "mc.yandex.ru",
+        "adfox.ru",
+        "adfox.yandex.ru",
+        "doubleclick.net",
+        "googlesyndication.com",
+        "googleadservices.com",
+        "adservice.google.com",
+        "ad.mail.ru",
+        "ads.vk.com",
+        "target.my.com",
+        "r.mradx.net",
+        "adriver.ru",
+        "betweendigital.com",
+        "buzzoola.com",
+        "otm-r.com",
+        "mediasniper.ru",
+        "videoroll.net",
+        "moevideo.biz",
+        "adhigh.net",
+        "hybrid.ai",
+        "adlook.me",
+        "propellerads.com",
+        "exoclick.com",
+        "adsterra.com",
+        "popads.net",
+        "onclickads.net",
+        "distribrey.com",
+        "hg-delivery.b-cdn.net"
+      ],
+      "resourceTypes": [
+        "script",
+        "xmlhttprequest",
+        "media",
+        "image",
+        "sub_frame",
+        "ping",
+        "other",
+        "object",
+        "websocket"
+      ]
+    }
+  }
+]

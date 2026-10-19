@@ -1,16 +1,32 @@
 {
   "manifest_version": 3,
-  "name": "CineVault · Alloha ad-list test",
-  "version": "0.2.0",
-  "description": "Experimental, device-local replacement of Alloha's ad-list response. Does not affect video requests.",
+  "name": "CineVault · без рекламы в плеерах",
+  "version": "0.3.0",
+  "description": "Убирает рекламу в плеерах CineVault: пустой список рекламы Alloha и блокировка известных рекламных сетей во всех плеерах. Видео не трогает.",
   "minimum_chrome_version": "111",
   "content_scripts": [
     {
-      "matches": ["https://*.stravers.live/*"],
-      "js": ["filter.js"],
+      "matches": [
+        "https://*.stravers.live/*"
+      ],
+      "js": [
+        "filter.js"
+      ],
       "all_frames": true,
       "run_at": "document_start",
       "world": "MAIN"
     }
-  ]
+  ],
+  "permissions": [
+    "declarativeNetRequest"
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ad_networks",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  }
 }
