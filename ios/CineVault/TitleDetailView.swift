@@ -110,6 +110,7 @@ struct TitleDetailView: View {
                     .padding(.top, -64)
                     .padding(.bottom, 32)
                 }
+                .frame(width: proxy.size.width)
             }
             .scrollIndicators(.hidden)
             .ignoresSafeArea(edges: .top)
@@ -124,9 +125,11 @@ struct TitleDetailView: View {
 
     private func hero(topInset: CGFloat) -> some View {
         ZStack(alignment: .top) {
-            BackdropArt(title: item)
-                .frame(height: 330 + topInset)
+            // Overlay keeps the fill-scaled backdrop from widening the column past the screen.
+            Color.clear
                 .frame(maxWidth: .infinity)
+                .frame(height: 330 + topInset)
+                .overlay { BackdropArt(title: item) }
                 .clipped()
             LinearGradient(
                 stops: [
