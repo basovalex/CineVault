@@ -2918,11 +2918,15 @@
     } catch { return { ...defaultState, catalogMoodOnly: false, catalogPlayableOnly: false }; }
   }
 
-  function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+  function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); queuePetWatchXp(); }
 
-  // Progress is shared through the backend so "Продолжить просмотр" follows
-  // the viewer between devices. Each entry keeps the newest updatedAt.
   // Watch progress belongs to this browser: "Продолжить просмотр" differs per device.
+  // A finished title still gives the pet experience, a moment after it is saved.
+  let petXpTimer = null;
+  function queuePetWatchXp() {
+    if (petXpTimer) return;
+    petXpTimer = window.setTimeout(() => { petXpTimer = null; awardPetWatchXp(); }, 2000);
+  }
   async function loadCatalogProgress() {
     await loadProgressTitles();
   }
@@ -4623,6 +4627,116 @@
     if (!titleId) return;
     state.history = [titleId, ...state.history.filter((entry) => entry !== titleId)].slice(0, 100);
   }
+  // Each pet recommends in its own taste, eats its own food and grows with
+  // the films you finish. Pet progress is shared through the backend.
+  const PETS = Object.freeze({
+    plush: { name: "Мопс", emoji: "🐶", image: "./assets/pug-mascot.webp", role: "Уютный", taste: "комедии, семейное и мультфильмы", genres: ["комедия", "семейный", "мультфильм", "приключения"], avoid: ["ужасы"], food: "печенька", foodEmoji: "🍪", pick: "Мопс принёс в зубах", love: "Мопс виляет хвостом — это его любимое!", fear: "Мопс прячет нос под лапу…", hungry: "Мопс голодно смотрит на печеньки." },
+    noir: { name: "Нуар", emoji: "🐈‍⬛", role: "Загадочный", taste: "триллеры, детективы и криминал", genres: ["триллер", "детектив", "криминал", "фильм-нуар"], avoid: ["мультфильм", "семейный"], food: "рыбка", foodEmoji: "🐟", pick: "Нуар молча подвинул лапой", love: "Нуар довольно щурится.", fear: "Нуар фыркает и уходит спать.", hungry: "Нуар выразительно смотрит на пустую миску." },
+    pixie: { name: "Пикси", emoji: "🐰", role: "Романтик", taste: "мелодрамы и истории о любви", genres: ["мелодрама", "драма", "комедия", "музыка"], avoid: ["ужасы", "боевик"], food: "морковка", foodEmoji: "🥕", pick: "Пикси принесла", love: "Пикси прыгает от счастья!", fear: "Пикси спряталась в норку…", hungry: "Пикси грызёт пустую морковную ботву." },
+    moti: { name: "Моти", emoji: "🐻", role: "Весельчак", taste: "комедии, экшен и приключения", genres: ["боевик", "комедия", "приключения", "фантастика"], avoid: ["документальный"], food: "мёд", foodEmoji: "🍯", pick: "Моти радостно топает с", love: "Моти хохочет и хлопает лапами!", fear: "Моти зевает — скучновато…", hungry: "Моти ищет бочонок мёда." },
+    owl: { name: "Сова", emoji: "🦉", role: "Эрудит", taste: "классика с высоким рейтингом и документальное", genres: ["документальный", "биография", "история", "драма"], avoid: [], food: "ягоды", foodEmoji: "🫐", pick: "Сова рекомендует к просмотру", love: "Сова одобрительно ухает.", fear: "Сова скептически поднимает бровь.", hungry: "Сова задумчиво считает ягоды. Их ноль." },
+    fox: { name: "Лис", emoji: "🦊", role: "Хитрец", taste: "свежие новинки и скрытые жемчужины", genres: ["фантастика", "триллер", "комедия", "детектив"], avoid: [], food: "виноград", foodEmoji: "🍇", pick: "Лис раскопал", love: "Лис хитро улыбается — отличный выбор.", fear: "Лис пожимает плечами.", hungry: "Лис намекает, что виноград закончился." },
+  });
+  const PET_ACCESSORIES = Object.freeze([[2, "🧣", "Шарфик"], [4, "🕶️", "Очки"], [6, "🎩", "Шляпа"], [8, "👑", "Корона"]]);
+  const PET_HUNGER_PER_HOUR = 4;
+  const PET_WATCH_XP = 20;
+  const PET_FEED_XP = 5;
+
+  function currentPetId() { return PETS[state.companion] ? state.companion : "plush"; }
+  function currentPet() { return PETS[currentPetId()]; }
+  function getPet() { const pet = currentPet(); return [pet.emoji, pet.name, `${pet.role.toLowerCase()} советчик: ${pet.taste}`]; }
+  function petProgress(id = currentPetId()) {
+    const entry = state.pets?.[id];
+    return { xp: Math.max(0, Number(entry?.xp) || 0), fedAt: Number(entry?.fedAt) || 0, awarded: Array.isArray(entry?.awarded) ? entry.awarded : [] };
+  }
+  function petFullness(id = currentPetId()) {
+    const { fedAt } = petProgress(id);
+    if (!fedAt) return 40;
+    return Math.max(0, Math.min(100, Math.round(100 - (Date.now() - fedAt) / 3_600_000 * PET_HUNGER_PER_HOUR)));
+  }
+  function petLevel(xp) { return Math.floor(Math.sqrt(Math.max(0, xp) / 25)) + 1; }
+  function petLevelBounds(level) { return [25 * (level - 1) ** 2, 25 * level ** 2]; }
+  function petAccessories(id = currentPetId()) { const level = petLevel(petProgress(id).xp); return PET_ACCESSORIES.filter(([unlock]) => level >= unlock); }
+  function updatePetProgress(id, change) {
+    const next = { ...petProgress(id), ...change };
+    state.pets = { ...(state.pets || {}), [id]: next, updatedAt: Date.now() };
+    saveState();
+  }
+  function feedPet() {
+    const id = currentPetId();
+    const pet = PETS[id];
+    if (petFullness(id) >= 90) return `${pet.name} уже сыт и довольно дремлет.`;
+    updatePetProgress(id, { fedAt: Date.now(), xp: petProgress(id).xp + PET_FEED_XP });
+    setPetState("snack");
+    return `${pet.name} съел ${pet.food} ${pet.foodEmoji} и стал внимательнее к рекомендациям.`;
+  }
+  // A finished film or episode gives the current pet experience once.
+  function awardPetWatchXp() {
+    const id = currentPetId();
+    const progress = petProgress(id);
+    const awarded = new Set(progress.awarded);
+    let gained = 0;
+    Object.entries(state.progress || {}).forEach(([contentId, entry]) => {
+      const finished = entry?.completed || (Number(entry?.duration) > 0 && Number(entry?.position) / Number(entry.duration) >= .9);
+      if (!finished || awarded.has(contentId)) return;
+      awarded.add(contentId);
+      gained += PET_WATCH_XP;
+    });
+    if (!gained) return;
+    const before = petLevel(progress.xp);
+    const xp = progress.xp + gained;
+    state.pets = { ...(state.pets || {}), [id]: { ...progress, xp, awarded: [...awarded].slice(-300) }, updatedAt: Date.now() };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    if (petLevel(xp) > before) setAssistantCopy(`${PETS[id].name} получил ${petLevel(xp)} уровень! Загляните в настройки — там новый аксессуар.`);
+  }
+  // How much the current pet likes a title; scaled by how well fed it is.
+  function petAffinity(item, id = currentPetId()) {
+    const pet = PETS[id];
+    const tags = new Set(genresForItem(item).map(normalizeCatalogGenre));
+    let score = pet.genres.filter((genre) => tags.has(genre)).length * 1.5 - pet.avoid.filter((genre) => tags.has(genre)).length * 3;
+    const rating = catalogRatingValue(item);
+    if (id === "owl") score += rating >= 8 ? 2.5 : rating >= 7.5 ? 1 : 0;
+    if (id === "fox") {
+      if (Number(item.year) >= new Date().getFullYear() - 1) score += 2;
+      const votes = Number(item.voteCount || 0);
+      if (votes > 0 && votes < 30000 && rating >= 7.2) score += 1.5;
+    }
+    return score * (.5 + petFullness(id) / 200);
+  }
+  function petReaction(item) {
+    const pet = currentPet();
+    const affinity = petAffinity(item);
+    if (affinity >= 2.5) { setAssistantCopy(pet.love); setPetState("happy"); }
+    else if (affinity <= -2) { setAssistantCopy(pet.fear); setPetState("sleep"); }
+  }
+  function petVisual(className = "") {
+    const pet = currentPet();
+    const accessory = petAccessories().slice(-1)[0];
+    const badge = accessory ? `<span class="pet-accessory" aria-hidden="true">${accessory[1]}</span>` : "";
+    const body = pet.image ? `<img class="pet-avatar ${className}" src="${pet.image}" alt="${escapeHtml(pet.name)}">` : `<span class="pet-emoji ${className}" aria-label="${escapeHtml(pet.name)}">${pet.emoji}</span>`;
+    return badge ? `<span class="pet-with-accessory">${body}${badge}</span>` : body;
+  }
+  function syncAssistant() {
+    const pet = currentPet();
+    $("#assistant-name") && ($("#assistant-name").textContent = pet.name);
+    $(".pet-state-snack")?.setAttribute("data-food", pet.foodEmoji);
+    const holder = $("#assistant-pet");
+    if (holder && holder.dataset.pet !== `${currentPetId()}:${petAccessories().length}`) {
+      holder.querySelectorAll(":scope > img, :scope > .pet-emoji, :scope > .pet-with-accessory").forEach((node) => node.remove());
+      holder.insertAdjacentHTML("afterbegin", petVisual("assistant-pet-visual"));
+      holder.dataset.pet = `${currentPetId()}:${petAccessories().length}`;
+      holder.setAttribute("aria-label", `Открыть помощника: ${pet.name}`);
+    }
+    // Reactions and level-ups stay visible for a while instead of being
+    // replaced by the idle line on the next render.
+    if (Date.now() - assistantCopyAt < 12_000) return;
+    const fullness = petFullness();
+    const idle = fullness < 30 ? `${pet.hungry} Покормить можно в настройках.` : `${pet.name} рядом. Любит ${pet.taste} — нажмите, и подберу фильм.`;
+    const copy = $("#assistant-copy");
+    if (copy) copy.textContent = idle;
+  }
+  function setPetState(mode = "idle") { const rail = $("#assistant-rail"); const pet = $("#assistant-pet"); if (!rail || !pet) return; rail.classList.remove("is-sleeping", "is-snacking"); pet.classList.remove("is-sleeping", "is-eating", "is-falling", "is-happy"); if (mode === "sleep") { rail.classList.add("is-sleeping"); pet.classList.add("is-sleeping"); } if (mode === "snack") { rail.classList.add("is-snacking"); pet.classList.add("is-eating"); } if (mode === "fall") pet.classList.add("is-falling"); if (mode === "happy") pet.classList.add("is-happy"); }
+  function startPetStates() { const modes = ["idle", "snack", "idle", "sleep", "idle", "fall", "happy"]; let index = 0; setPetState(modes[index]); window.setInterval(() => { index = (index + 1) % modes.length; setPetState(modes[index]); }, 5200); }
   function persistAndRender() { saveState(); render(); }
   // First launch: the raccoon "picks films" while the catalog loads. Later
   // loads (filters, tabs) show a shimmering skeleton of the page instead.
@@ -4674,7 +4788,7 @@
   function renderCatalogLoading() {
     window.clearInterval(raccoonTimer);
     if (catalogHydrating) {
-      const lines = RACCOON_LINES;
+      const lines = [...RACCOON_LINES, `${currentPet().name} помогает выбирать…`];
       page.innerHTML = `<section class="raccoon-loader" role="status" aria-live="polite"><div class="raccoon-stage"><img class="raccoon-head" src="./assets/raccoon-loader.webp?v=4" alt="" aria-hidden="true" decoding="async"></div><p class="raccoon-text" id="raccoon-text">${escapeHtml(lines[0])}</p><span class="raccoon-bar" aria-hidden="true"><i></i></span></section>`;
       let index = 0;
       raccoonTimer = window.setInterval(() => {
@@ -4939,6 +5053,7 @@
     stopDetailPrebuffer();
     activeTitleId = null;
     app.dataset.theme = state.theme;
+    syncAssistant();
     $("#search").value = searchDraft;
     $$(".nav-item[data-view]").forEach((button) => button.classList.toggle("is-active", button.dataset.view === state.view));
     if (catalogHydrating && ["home", "catalog", "movies", "series", "favorites", "evening", "history"].includes(state.view)) {
@@ -4973,7 +5088,7 @@
       continueShelf,
       discoveryShelf({ id: "new", eyebrow: "", title: "Новинки", description: "Свежие фильмы и сериалы, которые сейчас обсуждают.", items: freshCatalog.slice(0, 12) }),
       topTenShelf(trendingCatalog),
-      discoveryShelf({ id: "personal", eyebrow: "", title: "Советуем вам", description: "Похоже на то, что вам уже понравилось.", items: personalCollectionItems(12) }),
+      discoveryShelf({ id: "personal", eyebrow: "", title: "Мопс советует", description: "Похоже на то, что вам уже понравилось.", items: personalCollectionItems(12) }),
       genreTilesShelf(),
       moodStrip,
       discoveryShelf({ id: "mood", eyebrow: "", title: moodTitle, description: moodDefinition(state.mood)?.description || "Подборка по жанрам и атмосфере.", items: collectionItems("mood", 12) }),
@@ -5146,7 +5261,8 @@
     const childInterest = ["мультфильм", "детский", "аниме", "семейный"].reduce((sum, tag) => sum + (profile.genres.get(tag) || 0), 0);
     const adultInterest = [...profile.genres.entries()].filter(([tag]) => !["мультфильм", "детский", "аниме", "семейный"].includes(tag)).reduce((sum, [, value]) => sum + value, 0);
     const childBiasCorrection = isChildLike && adultInterest > childInterest * 1.25 ? -8 : 0;
-    return genreScore + actorScore + directorScore + countryScore + kindScore + yearScore + runtimeScore + moodScoreValue + qualityScore + childBiasCorrection;
+    const petScore = petAffinity(item) * 1.6;
+    return genreScore + actorScore + directorScore + countryScore + kindScore + yearScore + runtimeScore + moodScoreValue + qualityScore + childBiasCorrection + petScore;
   }
 
   function sortPersonalRecommendations(items) {
@@ -5494,7 +5610,7 @@
       ? `<nav class="catalog-pagination" aria-label="Листать каталог">${previousPageButton}${nextPageButton}</nav>`
       : "";
     const genreFilterMarkup = `<div class="genre-rail-wrap"><div class="genre-list genre-rail" role="group" aria-label="Фильтр по жанру">${genreButtons}</div></div>`;
-    const catalogMarkup = items.length ? `<div class="poster-grid" id="catalog-results" tabindex="-1">${pageItems.slice(0, 16).map((item) => poster(item)).join("")}${pageItems.length > 16 ? `<div id="catalog-lazy-sentinel" class="catalog-lazy-sentinel" aria-hidden="true"></div>` : ""}</div>${paginationMarkup}` : `<div class="empty-state"><div class="empty-pet"><span class="empty-icon" aria-hidden="true">🎬</span></div><h2>${savedView ? savedViewEmpty.title : "Ничего не подошло"}</h2><p>${savedView ? savedViewEmpty.copy : emptyCopy}</p>${savedView ? `<a class="primary-button" href="${routeForView("catalog")}" data-view="catalog">${savedViewEmpty.action}</a>` : '<button class="primary-button" data-catalog-reset type="button">Сбросить фильтры</button>'}</div>`;
+    const catalogMarkup = items.length ? `<div class="poster-grid" id="catalog-results" tabindex="-1">${pageItems.slice(0, 16).map((item) => poster(item)).join("")}${pageItems.length > 16 ? `<div id="catalog-lazy-sentinel" class="catalog-lazy-sentinel" aria-hidden="true"></div>` : ""}</div>${paginationMarkup}` : `<div class="empty-state"><div class="empty-pet">${petVisual()}</div><h2>${savedView ? savedViewEmpty.title : "Ничего не подошло"}</h2><p>${savedView ? savedViewEmpty.copy : emptyCopy}</p>${savedView ? `<a class="primary-button" href="${routeForView("catalog")}" data-view="catalog">${savedViewEmpty.action}</a>` : '<button class="primary-button" data-catalog-reset type="button">Сбросить фильтры</button>'}</div>`;
     const savedViewMarkup = `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div>${catalogMarkup}`;
     page.innerHTML = savedView ? savedViewMarkup : `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls catalog-studio" aria-label="Подобрать фильм"><div class="studio-top"><div class="studio-tabs" role="group" aria-label="Подборки каталога">${collectionButtons}</div><div class="studio-actions">${catalogSortMenuMarkup()}<button class="text-button studio-random" data-catalog-random type="button"${items.length ? "" : " disabled"} title="Открыть случайный фильм из выдачи">Случайный</button></div></div>${genreFilterMarkup}<div class="catalog-result-row">${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}${remoteCatalogLoading ? `<span class="catalog-loading-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span> Обновляю карточки…</span>` : ""}${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${catalogMarkup}`;
     const liveStatus = $("#catalog-live-status");
@@ -5646,14 +5762,38 @@
   }
 
   function renderSettings() {
+    const petId = currentPetId();
+    const pet = PETS[petId];
+    const progress = petProgress(petId);
+    const level = petLevel(progress.xp);
+    const [levelStart, levelEnd] = petLevelBounds(level);
+    const levelPct = Math.round((progress.xp - levelStart) / Math.max(1, levelEnd - levelStart) * 100);
+    const fullness = petFullness(petId);
+    const mood = fullness >= 70 ? "Сыт и в отличном настроении" : fullness >= 30 ? "Немного проголодался" : pet.hungry;
     const themeCards = THEMES.map((theme) => `<button class="theme-option${state.theme === theme.id ? " is-active" : ""}" data-set-theme="${theme.id}" type="button" aria-pressed="${state.theme === theme.id}"><span class="theme-swatch" aria-hidden="true">${theme.swatch.map((color) => `<i style="background:${color}"></i>`).join("")}</span><strong>${escapeHtml(theme.name)}</strong><small>${escapeHtml(theme.note)}</small></button>`).join("");
-    page.innerHTML = `<div class="page-heading"><div><h1>Настройки</h1><p class="muted">Тема и ваша история просмотра.</p></div></div>
+    const petCards = Object.entries(PETS).map(([id, item]) => {
+      const itemLevel = petLevel(petProgress(id).xp);
+      return `<button class="pet-option${id === petId ? " is-active" : ""}" data-choose-pet="${id}" type="button" aria-pressed="${id === petId}"><span class="pet-option-avatar" aria-hidden="true">${item.image ? `<img src="${item.image}" alt="">` : item.emoji}</span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.role)} · ур. ${itemLevel}</small></button>`;
+    }).join("");
+    const accessories = PET_ACCESSORIES.map(([unlock, icon, label]) => `<span class="pet-accessory-chip${level >= unlock ? " is-unlocked" : ""}" title="${escapeHtml(label)} — с ${unlock} уровня">${level >= unlock ? icon : "🔒"} ${escapeHtml(label)}</span>`).join("");
+    page.innerHTML = `<div class="page-heading"><div><h1>Настройки</h1><p class="muted">Тема, питомец и ваша история просмотра.</p></div></div>
+<section class="settings-section"><h2>Питомец</h2><p class="muted">Питомец подбирает фильмы на свой вкус. Чем он сытее, тем точнее советы, а за досмотренные фильмы он растёт и получает аксессуары.</p>
+<div class="pet-options">${petCards}</div>
+<div class="pet-panel"><div class="pet-panel-avatar">${petVisual("settings-pet-visual")}</div><div class="pet-panel-body"><h3>${escapeHtml(pet.name)} · ${escapeHtml(pet.role)}</h3><p>Любит ${escapeHtml(pet.taste)}. Ест: ${escapeHtml(pet.food)} ${pet.foodEmoji}</p>
+<div class="pet-meter"><span>Сытость</span><i style="--value:${fullness}%"></i><b>${fullness}%</b></div>
+<div class="pet-meter"><span>Уровень ${level}</span><i style="--value:${levelPct}%"></i><b>${progress.xp} XP</b></div>
+<p class="pet-mood" id="pet-mood">${escapeHtml(mood)}</p>
+<div class="pet-actions"><button class="primary-button" id="pet-feed" type="button">Покормить ${pet.foodEmoji}</button><button class="secondary-button" id="pet-recommend" type="button">Что посмотреть?</button></div>
+<div class="pet-accessories">${accessories}</div></div></div></section>
 <section class="settings-section"><h2>Тема</h2><div class="theme-options">${themeCards}</div></section>
 <section class="settings-section"><h2>Просмотр</h2>
 <label class="settings-toggle"><input type="checkbox" id="settings-skip"${state.skipSegments !== false ? " checked" : ""}><span><strong>Пропускать заставки автоматически</strong><small>Если для серии известны тайминги вступления и титров.</small></span></label>
 <div class="settings-row"><div><strong>История просмотра</strong><small>Удалит «Продолжить просмотр» и историю на всех устройствах. Питомец свой опыт сохранит.</small></div><button class="secondary-button danger-button" id="settings-clear-history" type="button">Очистить историю</button></div></section>
 <details class="settings-admin"><summary>Для администратора</summary><div class="settings-grid"><section class="settings-card"><h3>TMDB-каталог</h3><p>${escapeHtml(tmdbStatus)}</p><small class="muted">TMDB добавляет реальные постеры, описания, рейтинги, сезоны и трейлеры. Ключ хранится только локально.</small><p class="attribution">This product uses the TMDB API but is not endorsed or certified by TMDB.</p></section><section class="settings-card"><h3>RUTUBE-плеер</h3><p>Вставь ссылку на разрешённое видео RUTUBE, чтобы открыть его встроенным плеером и сохранять позицию просмотра.</p><div class="provider-input"><input id="rutube-url" type="url" value="${escapeHtml(state.rutubeUrl || "")}" placeholder="https://rutube.ru/video/..." autocomplete="off"><button class="primary-button" id="rutube-open" type="button">Открыть</button></div><button class="secondary-button" id="rutube-test" type="button">Проверить тестовый плеер</button><p id="rutube-feedback" class="muted small" aria-live="polite"></p></section><section class="settings-card settings-card-wide"><h3>Демо: LegalDemoProvider</h3><p>Оффлайн-адаптер для проверки каталога, сезонов, серий и выбора перевода. Он читает только локальные fixtures и не обращается к сайтам, proxy или cookies.</p><div class="provider-input"><input id="hdrezka-query" type="search" value="Тестовый сериал" placeholder="Например, Тестовый сериал" autocomplete="off"><button class="secondary-button" id="hdrezka-search" type="button">Искать</button></div><div class="provider-input hdrezka-episode-inputs"><label>Сезон <input id="hdrezka-season" type="number" min="1" value="1"></label><label>Серия <input id="hdrezka-episode" type="number" min="1" value="1"></label></div><p id="hdrezka-feedback" class="muted small" aria-live="polite"></p><div id="hdrezka-results"></div></section></div></details>`;
     bindPageActions();
+    $$("[data-choose-pet]").forEach((button) => button.addEventListener("click", () => { state.companion = button.dataset.choosePet; saveState(); syncAssistant(); setAssistantCopy(`${currentPet().name} теперь с вами. Любит ${currentPet().taste}.`); setPetState("happy"); renderSettings(); }));
+    $("#pet-feed")?.addEventListener("click", () => { const message = feedPet(); setAssistantCopy(message); renderSettings(); const moodLine = $("#pet-mood"); if (moodLine) moodLine.textContent = message; });
+    $("#pet-recommend")?.addEventListener("click", () => $("#assistant-recommend")?.click());
     $("#settings-skip")?.addEventListener("change", (event) => { state.skipSegments = event.currentTarget.checked; saveState(); });
     $("#settings-clear-history")?.addEventListener("click", (event) => {
       const button = event.currentTarget;
@@ -5694,6 +5834,7 @@
     }
     stopDetailPrebuffer();
     const enteringTitle = activeTitleId !== id;
+    if (enteringTitle) petReaction(item);
     // Loading metadata and episodes finishes after the page is already open.
     // Rebuilding the detail DOM must not throw the reader back to the top.
     const preservedScrollY = enteringTitle ? 0 : window.scrollY;
@@ -6442,7 +6583,7 @@
     let position = existing?.position || 0;
     let playing = false;
     let timer;
-    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal" role="dialog" aria-modal="true" aria-labelledby="player-title"><div class="modal-head"><div><div class="eyebrow">CineVault · источник не подключён</div><h2 id="player-title">${escapeHtml(item.title)}${episodeNumber ? ` · S${String(selectedSeason).padStart(2, "0")}E${String(episodeNumber).padStart(2, "0")}` : ""}</h2></div><button class="icon-button" id="player-close" type="button" aria-label="Закрыть">×</button></div>${playerSeriesMarkup(item, episodeNumber)}<div class="player-stage player-stage-empty" style="--player:${item.poster}"><div class="player-center"><div class="player-pet"><span class="empty-icon" aria-hidden="true">🎬</span></div><strong>Видеоисточник ещё не подключён</strong><span>Эта карточка готова к разрешённому MP4/HLS-потоку</span></div></div><div class="player-toolbar is-disabled"><div class="player-actions"><button class="primary-button" type="button" disabled>▶ Воспроизвести</button><button class="secondary-button" type="button" disabled>⛶ Полный экран</button></div></div><div class="notice"><strong>Для ${escapeHtml(item.title)} пока нет разрешённого видеопотока.</strong> Когда появится лицензированный MP4/HLS-источник, здесь появятся доступные варианты качества и озвучки.</div></section></div>`;
+    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal" role="dialog" aria-modal="true" aria-labelledby="player-title"><div class="modal-head"><div><div class="eyebrow">CineVault · источник не подключён</div><h2 id="player-title">${escapeHtml(item.title)}${episodeNumber ? ` · S${String(selectedSeason).padStart(2, "0")}E${String(episodeNumber).padStart(2, "0")}` : ""}</h2></div><button class="icon-button" id="player-close" type="button" aria-label="Закрыть">×</button></div>${playerSeriesMarkup(item, episodeNumber)}<div class="player-stage player-stage-empty" style="--player:${item.poster}"><div class="player-center"><div class="player-pet">${petVisual()}</div><strong>Видеоисточник ещё не подключён</strong><span>Эта карточка готова к разрешённому MP4/HLS-потоку</span></div></div><div class="player-toolbar is-disabled"><div class="player-actions"><button class="primary-button" type="button" disabled>▶ Воспроизвести</button><button class="secondary-button" type="button" disabled>⛶ Полный экран</button></div></div><div class="notice"><strong>Для ${escapeHtml(item.title)} пока нет разрешённого видеопотока.</strong> Когда появится лицензированный MP4/HLS-источник, здесь появятся доступные варианты качества и озвучки.</div></section></div>`;
     bindPlayerSeriesSelectors(item, episodeNumber);
     $("#player-close").addEventListener("click", returnFromPlayer);
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) $("#player-close").click(); });
@@ -6864,6 +7005,7 @@
       const item = items[Math.floor(Math.random() * items.length)];
       if (item) openTitleRoute(item.id);
     });
+    $("#settings-pet")?.addEventListener("click", openCompanion);
     $("#rutube-open")?.addEventListener("click", () => { const input = $("#rutube-url"); const feedback = $("#rutube-feedback"); const videoId = extractRutubeVideoId(input?.value); if (!videoId) { feedback.textContent = "Нужна прямая ссылка RUTUBE на видео или embed-код."; return; } state.rutubeUrl = input.value.trim(); saveState(); openRutubePlayer(videoId, "RUTUBE-видео", `rutube-${videoId}`); });
     $("#rutube-test")?.addEventListener("click", () => openRutubePlayer(RUTUBE_SAMPLE_ID, "Тестовый плеер RUTUBE", `rutube-demo-${RUTUBE_SAMPLE_ID}`));
     $("#hdrezka-search")?.addEventListener("click", runHdrezkaSearch);
@@ -6871,6 +7013,7 @@
   }
 
   function getTitleFromPage() { return activeTitleId || $("[data-demo-play]")?.dataset.demoPlay || "desperate-housewives"; }
+  function openCompanion() { const popover = $("#companion-popover"); if (popover) popover.hidden = !popover.hidden; }
 
   function hideSearchSuggestions() {
     const popup = $("#search-suggestions");
@@ -6888,6 +7031,8 @@
       : `<p class="search-suggestions-empty">По запросу «${escapeHtml(query)}» ничего не найдено. Измени запрос или открой каталог.</p>`;
   }
 
+  $("#companion-open")?.addEventListener("click", openCompanion);
+  $$(".pet-choice").forEach((button) => button.addEventListener("click", () => { state.companion = button.dataset.pet; $$(".pet-choice").forEach((item) => item.classList.toggle("is-selected", item === button)); $("#companion-popover").hidden = true; persistAndRender(); }));
   searchDraft = state.query;
   $("#search").addEventListener("input", (event) => {
     searchDraft = event.target.value;
@@ -6951,9 +7096,13 @@
     if (video && !isTextControl) event.preventDefault();
   });
 
+  $("#assistant-collapse")?.addEventListener("click", (event) => { const collapsed = $("#assistant-rail").classList.toggle("is-collapsed"); event.currentTarget.setAttribute("aria-expanded", String(!collapsed)); event.currentTarget.setAttribute("aria-label", collapsed ? "Развернуть помощника" : "Свернуть помощника"); });
+  $("#assistant-pet")?.addEventListener("click", () => { assistantPaginationDismissed = true; $("#assistant-rail").classList.remove("is-collapsed", "is-pagination-collapsed"); setPetState("happy"); setAssistantCopy("Я выберу вариант по твоему вкусу, настроению и истории просмотра."); });
+  $("#assistant-recommend")?.addEventListener("click", () => { setAssistantCopy("Секунду, ищу что-нибудь подходящее…"); const pick = nextRecommendation(); if (!pick) { setAssistantCopy("Пока не нашёл подходящих вариантов."); return; } setPetState("happy"); setAssistantCopy(`${currentPet().pick} «${pick.title}».`); openTitleRoute(pick.id, { recommendation: true }); });
 
   // Card images fade in once loaded; until then a shimmer placeholder shows.
   document.addEventListener("load", (event) => { if (event.target instanceof HTMLImageElement) event.target.classList.add("is-loaded"); }, true);
+  startPetStates();
   // Solid top bar once the page scrolls past the hero's top edge.
   const syncScrolledHeader = () => app.classList.toggle("is-scrolled", window.scrollY > 24);
   window.addEventListener("scroll", syncScrolledHeader, { passive: true });
