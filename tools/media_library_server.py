@@ -2897,9 +2897,18 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
         # Do not let a browser keep an old SPA bundle after a deployment: an
         # already-open tab could otherwise retain obsolete playback behaviour
         # when navigating from Favorites into a title card.
-        request_path = urllib.parse.urlsplit(self.path).path
-        if request_path in {"/index.html", "/app.js", "/styles.css", "/sw.js"}:
+        # The page and the service worker are always fetched fresh; they name the
+        # bundle with a ?v= version, and a versioned bundle never changes, so the
+        # browser may keep it instead of downloading half a megabyte each visit.
+        request_url = urllib.parse.urlsplit(self.path)
+        request_path = request_url.path
+        versioned = "v=" in request_url.query
+        if request_path in {"/app.js", "/styles.css"} and versioned:
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        elif request_path in {"/index.html", "/app.js", "/styles.css", "/sw.js"}:
             self.send_header("Cache-Control", "no-store, max-age=0")
+        elif request_path.startswith("/assets/") and self.command in {"GET", "HEAD"}:
+            self.send_header("Cache-Control", "public, max-age=604800")
         super().end_headers()
 
     def log_request(self, code="-", size="-") -> None:
