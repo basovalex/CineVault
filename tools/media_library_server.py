@@ -839,6 +839,34 @@ class KinopoiskOnDemandUpdater:
             return payload
 
 
+# What the site and the app ask for first. Loading the 100 MB catalog happens on
+# the first catalog request anyway; asking once, shortly after start, moves that
+# work to a moment when no viewer is waiting. One request at a time with pauses,
+# so the warm-up never competes with real visitors for the server's CPU or memory.
+CATALOG_WARMUP_PATHS = (
+    "/api/catalog/index?limit=500",
+    "/api/catalog?collection=trending&sort=popular&limit=50",
+    "/api/catalog/facets",
+    "/api/catalog?page=1&limit=50&sort=popular&collection=popular",
+    "/api/catalog?page=1&limit=50&sort=new&collection=new",
+)
+CATALOG_WARMUP_DELAY_SECONDS = 15
+CATALOG_WARMUP_PAUSE_SECONDS = 3
+
+
+def warm_catalog(port: int) -> None:
+    time.sleep(CATALOG_WARMUP_DELAY_SECONDS)
+    started = time.monotonic()
+    for path in CATALOG_WARMUP_PATHS:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=180) as response:
+                response.read()
+        except (OSError, urllib.error.URLError):
+            pass  # A failed warm-up only means the first visitor waits, as before.
+        time.sleep(CATALOG_WARMUP_PAUSE_SECONDS)
+    print(f"Catalog warm-up: done in {time.monotonic() - started:.0f}s", flush=True)
+
+
 def slugify(value: str) -> str:
     normalized = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ]+", "-", value.strip().lower()).strip("-")
     return normalized[:80] or "title"
@@ -3685,6 +3713,7 @@ def main() -> None:
     else:
         print("Kinopoisk playback refresh: disabled.", flush=True)
     print("Browser MP4 export: disabled; online playback remains available.", flush=True)
+    threading.Thread(target=warm_catalog, args=(args.port,), name="catalog-warmup", daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
