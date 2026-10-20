@@ -173,7 +173,7 @@ private fun TvHome(onOpen: (CatalogTitle) -> Unit) {
     LaunchedEffect(hero?.id) { if (hero != null) { delay(150); runCatching { heroFocus.requestFocus() } } }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(28.dp)) {
         item {
-            Box(Modifier.fillMaxWidth().height(440.dp)) {
+            Box(Modifier.fillMaxWidth().height(380.dp)) {
                 if (hero == null) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         if (CineStore.homeLoading) CircularProgressIndicator(color = Cine.Accent)

@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.os.SystemClock
+import android.view.MotionEvent
 import android.view.OrientationEventListener
 import android.view.View
 import android.view.ViewGroup
@@ -50,6 +52,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -267,13 +276,34 @@ fun NativeVideoPlayer(source: PlaybackSource, tvMode: Boolean = false) {
     )
 }
 
+private fun tapCenter(view: View) {
+    val x = view.width / 2f
+    val y = view.height / 2f
+    val time = SystemClock.uptimeMillis()
+    listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP).forEachIndexed { index, action ->
+        val motion = MotionEvent.obtain(time, time + index * 50L, action, x, y, 0)
+        view.dispatchTouchEvent(motion)
+        motion.recycle()
+    }
+}
+
 /** Alloha, Collaps, Veoveo, Turbo: the provider's page inside an iframe, as on the website. */
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 @Composable
 fun EmbedWebPlayer(url: String, tvMode: Boolean = false, onTouch: () -> Unit = {}) {
     val context = LocalContext.current
     var pageStarted by remember(url) { mutableStateOf(false) }
-    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+    val webRef = remember { arrayOfNulls<WebView>(1) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(tvMode) { if (tvMode) runCatching { focus.requestFocus() } }
+    // A remote cannot press buttons inside the provider's page, and its keys stop at the app's
+    // own focus. OK taps the middle of the player instead, which is play/pause in these players.
+    val remoteOk = Modifier.focusRequester(focus).focusable().onPreviewKeyEvent { event ->
+        val ok = event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.MediaPlayPause
+        if (ok && event.type == KeyEventType.KeyUp) webRef[0]?.let(::tapCenter)
+        ok
+    }
+    Box(Modifier.fillMaxSize().background(Color.Black).then(if (tvMode) remoteOk else Modifier), contentAlignment = Alignment.Center) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
@@ -291,6 +321,7 @@ fun EmbedWebPlayer(url: String, tvMode: Boolean = false, onTouch: () -> Unit = {
                     isVerticalScrollBarEnabled = false
                     isHorizontalScrollBarEnabled = false
                     setOnTouchListener { _, _ -> onTouch(); false }
+                    webRef[0] = this
                     webViewClient = object : WebViewClient() {
                         override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) {
                             pageStarted = true
