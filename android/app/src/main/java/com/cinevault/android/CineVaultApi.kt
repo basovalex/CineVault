@@ -35,7 +35,30 @@ data class CatalogTitle(
     val genres: List<String>,
     val seasons: List<Int>,
     val sources: List<PlaybackSource> = emptyList(),
+    val backdrop: String? = null,
+    val logo: String? = null,
+    val imdbRating: Double = 0.0,
+    val ageRating: String = "",
+    val tagline: String = "",
+    val runtime: Int = 0,
+    val actors: List<String> = emptyList(),
+    val directors: List<String> = emptyList(),
+    val countries: List<String> = emptyList(),
+) {
+    val isSeries: Boolean get() = kind == "series"
+}
+
+/// One external player for a title. Alloha lists its voices; Collaps, Veoveo and
+/// Turbo give one embed where voice, season and episode are chosen inside the player.
+data class PlayerProvider(
+    val id: String,
+    val name: String,
+    val translations: List<VoiceOption>,
+    val embedUrl: String?,
+    val voices: List<String>,
 )
+
+data class CatalogFacets(val total: Int, val movies: Int, val series: Int, val genres: Map<String, Int>)
 
 data class CatalogPage(
     val items: List<CatalogTitle>,
@@ -118,6 +141,38 @@ object CineVaultApi {
         result.optJSONObject("entry")?.let(::parseTitle)
     }
 
+    suspend fun catalogFacets(type: String = ""): CatalogFacets = withContext(Dispatchers.IO) {
+        val json = request("/api/catalog/facets" + if (type.isBlank()) "" else "?type=${enc(type)}")
+        val genres = json.optJSONObject("genres") ?: JSONObject()
+        CatalogFacets(
+            total = json.optInt("total"), movies = json.optInt("movies"), series = json.optInt("series"),
+            genres = (0 until genres.length()).mapNotNull { genres.names()?.optString(it) }
+                .filter(String::isNotBlank).associateWith { genres.optInt(it) },
+        )
+    }
+
+    suspend fun playerProviders(kinopoiskId: Int): List<PlayerProvider> = withContext(Dispatchers.IO) {
+        val providers = request("/api/player-options?kinopoisk=$kinopoiskId").optJSONArray("providers") ?: JSONArray()
+        (0 until providers.length()).mapNotNull { index ->
+            val item = providers.optJSONObject(index) ?: return@mapNotNull null
+            val id = item.optString("id").takeIf(String::isNotBlank) ?: return@mapNotNull null
+            val translations = item.optJSONArray("translations") ?: JSONArray()
+            val voices = item.optJSONArray("voices") ?: JSONArray()
+            PlayerProvider(
+                id = id,
+                name = item.optString("name").ifBlank { id },
+                translations = (0 until translations.length()).mapNotNull { t ->
+                    val row = translations.optJSONObject(t) ?: return@mapNotNull null
+                    val url = row.optString("embedUrl")
+                    if (!url.startsWith("https://")) return@mapNotNull null
+                    VoiceOption(row.optString("id", "$t"), row.optString("name"), row.optString("quality"), url)
+                },
+                embedUrl = item.optString("embedUrl").takeIf { it.startsWith("https://") },
+                voices = (0 until voices.length()).map { voices.optString(it) }.filter(String::isNotBlank),
+            ).takeIf { it.translations.isNotEmpty() || it.embedUrl != null }
+        }
+    }
+
     suspend fun allohaOptions(kinopoiskId: Int): List<VoiceOption> = withContext(Dispatchers.IO) {
         val json = request("/api/player-options?kinopoisk=$kinopoiskId")
         val providers = json.optJSONArray("providers") ?: JSONArray()
@@ -127,7 +182,7 @@ object CineVaultApi {
         (0 until translations.length()).mapNotNull { index ->
             val item = translations.optJSONObject(index) ?: return@mapNotNull null
             val url = item.optString("embedUrl")
-            if (!url.startsWith("https://theatre.stravers.live/")) return@mapNotNull null
+            if (!Regex("^https://([a-z0-9-]+\\.)*stravers\\.live/").containsMatchIn(url)) return@mapNotNull null
             VoiceOption(item.optString("id", "$index"), item.optString("name"), item.optString("quality"), url)
         }
     }
@@ -286,12 +341,20 @@ object CineVaultApi {
             originalTitle = json.optString("originalTitle"),
             year = json.optInt("year"),
             description = json.optString("description"),
-            poster = json.optString("posterImage").takeIf(String::isNotBlank)
-                ?: json.optString("poster").takeIf(String::isNotBlank),
-            rating = json.optDouble("ratingKinopoisk", json.optDouble("rating", 0.0)),
+            poster = json.text("posterImage") ?: json.text("poster"),
+            rating = json.optDouble("ratingKinopoisk", json.optDouble("rating", 0.0)).takeUnless(Double::isNaN) ?: 0.0,
             votes = json.optInt("voteCount"),
             genres = (0 until tags.length()).map { tags.optString(it) }.filter(String::isNotBlank),
             seasons = (0 until seasons.length()).map { seasons.optInt(it) },
+            backdrop = json.text("backdropImage"),
+            logo = json.text("logoImage"),
+            imdbRating = json.optString("imdbRating").toDoubleOrNull() ?: json.optDouble("imdbRating", 0.0).takeUnless(Double::isNaN) ?: 0.0,
+            ageRating = json.opt("ageRating")?.toString()?.takeUnless { it == "null" }.orEmpty(),
+            tagline = json.optString("tagline"),
+            runtime = json.optString("runtime").toIntOrNull() ?: 0,
+            actors = json.optJSONArray("actors").strings(),
+            directors = json.optJSONArray("directors").strings(),
+            countries = json.optJSONArray("countries").strings(),
             sources = (0 until sources.length()).mapNotNull { index ->
                 val source = sources.optJSONObject(index) ?: return@mapNotNull null
                 val url = resolveMediaURL(source.optString("url"))
@@ -304,8 +367,19 @@ object CineVaultApi {
         )
     }
 
+    // One malformed card must not sink the whole page, and with it a home shelf.
     private fun JSONArray?.toTitles(): List<CatalogTitle> =
-        (0 until (this?.length() ?: 0)).mapNotNull { index -> this?.optJSONObject(index)?.let(::parseTitle) }
+        (0 until (this?.length() ?: 0)).mapNotNull { index ->
+            this?.optJSONObject(index)?.let { runCatching { parseTitle(it) }.getOrNull() }
+                ?.takeIf { it.id.isNotBlank() && it.title.isNotBlank() }
+        }
+
+    /** optString turns a JSON null into the text "null"; treat that, and blanks, as missing. */
+    private fun JSONObject.text(key: String): String? =
+        if (isNull(key)) null else optString(key).takeIf { it.isNotBlank() && it != "null" }
+
+    private fun JSONArray?.strings(): List<String> =
+        (0 until (this?.length() ?: 0)).map { this!!.optString(it) }.filter(String::isNotBlank)
 
     private fun enc(value: String): String = URLEncoder.encode(value, "UTF-8")
 }
