@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.os.Build
 import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.OrientationEventListener
@@ -23,6 +24,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -72,11 +74,16 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
+import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.delay
@@ -89,6 +96,10 @@ data class PlayRequest(
     val embedUrl: String? = null,
     val providerName: String = "",
     val hint: String = "",
+    /** On TV, what to switch an Alloha series to once its page is up: season, episode, quality ("720"). */
+    val season: Int? = null,
+    val episode: Int? = null,
+    val quality: String? = null,
 )
 
 /**
@@ -106,11 +117,21 @@ object PlayerAdBlocker {
         "exoclick.com", "adsterra.com", "popads.net", "onclickads.net",
         // Seen in Collaps: the pre-roll ad list and its video host
         "distribrey.com", "hg-delivery.b-cdn.net",
+        // Collaps pre-roll as of Oct 2026: ad controller, VAST server, VPAID loader, creatives and their pixels
+        "vuegenesisvue.com", "ufouxbwn.com", "timing-js-menu.xyz", "agl011.art", "b5c1d2e8c9982e3b965a27ac72ru7284cc.com",
+        // Veoveo pre-roll: redirector, VAST list and video host
+        "aj2635.bid", "franecki.net", "quickcore.fun", "veselchaga.link", "skorobeyka.link", "sosilapu.org",
     )
 
-    fun blocks(host: String?): Boolean {
+    // Ad hosts rotate every few days, the VAST/VPAID plumbing in front of them does not: a video-ad list
+    // is an .xml document or a /vast endpoint, and nothing a player needs to show the film is either.
+    private val adPaths = listOf("/vast", "/getads", "/vpaid/", "linearvpaid", "/event-init-player", "load-xml")
+
+    fun blocks(host: String?, path: String? = null): Boolean {
         val value = host?.lowercase() ?: return false
-        return adHosts.any { value == it || value.endsWith(".$it") }
+        if (adHosts.any { value == it || value.endsWith(".$it") }) return true
+        val lowered = path?.lowercase() ?: return false
+        return lowered.endsWith(".xml") || adPaths.any { lowered.contains(it) }
     }
 
     val empty: WebResourceResponse get() = WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
@@ -179,7 +200,7 @@ private fun ImmersiveSystemBars(enabled: Boolean) {
         } else {
             controller?.show(WindowInsetsCompat.Type.systemBars())
         }
-        onDispose { controller?.show(WindowInsetsCompat.Type.systemBars()) }
+        onDispose { if (context.findActivity() !is TvActivity) controller?.show(WindowInsetsCompat.Type.systemBars()) }
     }
 }
 
@@ -217,8 +238,8 @@ fun PlayerScreen(request: PlayRequest, onBack: () -> Unit, tvMode: Boolean = fal
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
-                    request.embedUrl != null -> EmbedWebPlayer(request.embedUrl, tvMode, onTouch)
-                    request.source != null -> NativeVideoPlayer(request.source, tvMode)
+                    request.embedUrl != null -> if (tvMode) TvEmbedPlayer(request) else EmbedWebPlayer(request.embedUrl, onTouch = onTouch)
+                    request.source != null -> NativeVideoPlayer(request.title, request.source, tvMode)
                 }
             }
             if (!landscape && !tvMode && request.hint.isNotBlank()) {
@@ -236,18 +257,37 @@ fun PlayerScreen(request: PlayRequest, onBack: () -> Unit, tvMode: Boolean = fal
     }
 }
 
+/**
+ * The Android emulator's virtual "goldfish" decoders turn many H.264 streams into green or rainbow
+ * stripes. On an emulator the software decoder that ships with Android goes first; on a real device
+ * the codec list is left exactly as the system gives it.
+ */
+private val emulatorSafeCodecs = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+    val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+    if (Build.HARDWARE == "ranchu" || Build.HARDWARE == "goldfish") decoders.sortedBy { it.name.contains("goldfish") } else decoders
+}
+
+/**
+ * CineVault's own streams, through Media3. A stream that will not play gets one fresh link from the
+ * server (the old one may have expired); if that does not help either, a retry button takes over.
+ */
 @Composable
-fun NativeVideoPlayer(source: PlaybackSource, tvMode: Boolean = false) {
+fun NativeVideoPlayer(title: CatalogTitle, source: PlaybackSource, tvMode: Boolean = false) {
     val context = LocalContext.current
-    val player = remember(source.url) {
+    var current by remember(source.url) { mutableStateOf(source) }
+    var failure by remember(source.url) { mutableStateOf<String?>(null) }
+    var refreshed by remember(source.url) { mutableStateOf(false) }
+    var attempt by remember(source.url) { mutableIntStateOf(0) }
+    val retryFocus = remember { FocusRequester() }
+    val player = remember(current.url, attempt) {
         val httpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent("CineVault Android/1.0")
-            .setDefaultRequestProperties(CineVaultApi.playbackRequestProperties(source.url))
-        val exo = ExoPlayer.Builder(context)
+            .setDefaultRequestProperties(CineVaultApi.playbackRequestProperties(current.url))
+        val exo = ExoPlayer.Builder(context, DefaultRenderersFactory(context).setMediaCodecSelector(emulatorSafeCodecs))
             .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, httpFactory)))
             .build()
-        val itemBuilder = MediaItem.Builder().setUri(source.url)
-        if (source.type.contains("hls", ignoreCase = true) || source.url.substringBefore('?').endsWith(".m3u8", true)) {
+        val itemBuilder = MediaItem.Builder().setUri(current.url)
+        if (current.type.contains("hls", ignoreCase = true) || current.url.substringBefore('?').endsWith(".m3u8", true)) {
             itemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
         }
         exo.setMediaItem(itemBuilder.build())
@@ -255,28 +295,60 @@ fun NativeVideoPlayer(source: PlaybackSource, tvMode: Boolean = false) {
         exo.playWhenReady = true
         exo
     }
-    DisposableEffect(player) { onDispose { player.release() } }
-    AndroidView(
-        modifier = Modifier.fillMaxSize().then(if (tvMode) Modifier.focusable() else Modifier),
-        factory = { viewContext ->
-            PlayerView(viewContext).apply {
-                layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                useController = true
-                controllerShowTimeoutMs = 4_000
-                setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
-                this.player = player
-                if (tvMode) {
-                    isFocusable = true
-                    isFocusableInTouchMode = true
-                    requestFocus()
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) { failure = error.errorCodeName }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener); player.release() }
+    }
+    LaunchedEffect(failure) {
+        val reason = failure ?: return@LaunchedEffect
+        val kinopoiskId = title.kinopoiskId
+        if (!refreshed && kinopoiskId != null && current.url.startsWith("http")) {
+            refreshed = true
+            val fresh = runCatching { CineVaultApi.refreshPlayback(kinopoiskId, force = true) }.getOrNull()
+                ?.sources?.filter { !it.isEmbed }.orEmpty()
+            val replacement = fresh.firstOrNull { it.id == current.id }
+                ?: fresh.firstOrNull { it.voice == current.voice && it.quality == current.quality } ?: fresh.firstOrNull()
+            if (replacement != null) { current = replacement; failure = null; return@LaunchedEffect }
+        }
+        android.util.Log.w("NativeVideoPlayer", "playback failed: $reason")
+        runCatching { retryFocus.requestFocus() }
+    }
+    Box(Modifier.fillMaxSize()) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize().then(if (tvMode) Modifier.focusable() else Modifier),
+            factory = { viewContext ->
+                PlayerView(viewContext).apply {
+                    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                    useController = true
+                    controllerShowTimeoutMs = 4_000
+                    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                    this.player = player
+                    if (tvMode) {
+                        isFocusable = true
+                        isFocusableInTouchMode = true
+                        requestFocus()
+                    }
                 }
+            },
+            update = { it.player = player },
+        )
+        if (failure != null && (refreshed || title.kinopoiskId == null || !current.url.startsWith("http"))) {
+            Column(
+                Modifier.align(Alignment.Center).padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Не удалось воспроизвести видео", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Text(failure.orEmpty(), color = Cine.Muted, fontSize = 13.sp)
+                PrimaryButton("Повторить", { failure = null; attempt++ }, Modifier.focusRequester(retryFocus))
             }
-        },
-        update = { it.player = player },
-    )
+        }
+    }
 }
 
-private fun tapCenter(view: View) {
+internal fun tapCenter(view: View) {
     val x = view.width / 2f
     val y = view.height / 2f
     val time = SystemClock.uptimeMillis()
@@ -290,27 +362,19 @@ private fun tapCenter(view: View) {
 /** Alloha, Collaps, Veoveo, Turbo: the provider's page inside an iframe, as on the website. */
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 @Composable
-fun EmbedWebPlayer(url: String, tvMode: Boolean = false, onTouch: () -> Unit = {}) {
+fun EmbedWebPlayer(url: String, tvMode: Boolean = false, onTouch: () -> Unit = {}, remote: EmbedRemote? = null) {
     val context = LocalContext.current
     var pageStarted by remember(url) { mutableStateOf(false) }
-    val webRef = remember { arrayOfNulls<WebView>(1) }
-    val focus = remember { FocusRequester() }
-    LaunchedEffect(tvMode) { if (tvMode) runCatching { focus.requestFocus() } }
-    // A remote cannot press buttons inside the provider's page, and its keys stop at the app's
-    // own focus. OK taps the middle of the player instead, which is play/pause in these players.
-    val remoteOk = Modifier.focusRequester(focus).focusable().onPreviewKeyEvent { event ->
-        val ok = event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.MediaPlayPause
-        if (ok && event.type == KeyEventType.KeyUp) webRef[0]?.let(::tapCenter)
-        ok
-    }
-    Box(Modifier.fillMaxSize().background(Color.Black).then(if (tvMode) remoteOk else Modifier), contentAlignment = Alignment.Center) {
+    // On TV the remote's keys belong to the app's controls (TvEmbedPlayer), never to the page:
+    // a page holding the focus would swallow Back, among others.
+    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
                 val container = FrameLayout(viewContext)
                 val webView = WebView(viewContext).apply {
-                    isFocusable = true
-                    isFocusableInTouchMode = true
+                    isFocusable = !tvMode
+                    isFocusableInTouchMode = !tvMode
                     setBackgroundColor(android.graphics.Color.BLACK)
                     layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                     settings.javaScriptEnabled = true
@@ -321,14 +385,17 @@ fun EmbedWebPlayer(url: String, tvMode: Boolean = false, onTouch: () -> Unit = {
                     isVerticalScrollBarEnabled = false
                     isHorizontalScrollBarEnabled = false
                     setOnTouchListener { _, _ -> onTouch(); false }
-                    webRef[0] = this
+                    remote?.webView = this
                     webViewClient = object : WebViewClient() {
                         override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) {
                             pageStarted = true
                         }
 
-                        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? =
-                            if (PlayerAdBlocker.blocks(request?.url?.host)) PlayerAdBlocker.empty else null
+                        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                            val blocked = PlayerAdBlocker.blocks(request?.url?.host, request?.url?.path)
+                            if (BuildConfig.DEBUG || android.util.Log.isLoggable("PlayerWeb", android.util.Log.DEBUG)) android.util.Log.d("PlayerWeb", "${if (blocked) "BLOCK" else "load "} ${request?.method} ${request?.url?.host}${request?.url?.path?.take(60)}")
+                            return if (blocked) PlayerAdBlocker.empty else null
+                        }
                     }
                     webChromeClient = object : WebChromeClient() {
                         private var customView: View? = null
@@ -356,6 +423,10 @@ fun EmbedWebPlayer(url: String, tvMode: Boolean = false, onTouch: () -> Unit = {
                         }
                     }
                     CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                    if (remote != null && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                        WebViewCompat.addWebMessageListener(this, "cvRemote", setOf("*")) { _, message, _, _, reply -> remote.onMessage(message.data, reply) }
+                        WebViewCompat.addDocumentStartJavaScript(this, TV_REMOTE_JS, setOf("*"))
+                    }
                     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                         // Alloha's ad list is replaced with an empty one (filter.js, shared with iOS and the extension).
                         for (asset in listOf("filter.js", "alloha-layout.js")) {
@@ -371,7 +442,6 @@ fun EmbedWebPlayer(url: String, tvMode: Boolean = false, onTouch: () -> Unit = {
                         allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></body></html>
                     """.trimIndent()
                     loadDataWithBaseURL(BuildConfig.SERVER_URL.trimEnd('/') + "/", html, "text/html", "UTF-8", null)
-                    if (tvMode) requestFocus()
                 }
                 container.addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
                 container

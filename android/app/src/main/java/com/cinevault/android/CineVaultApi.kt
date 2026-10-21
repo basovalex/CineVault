@@ -278,6 +278,23 @@ object CineVaultApi {
     }
 
     private fun request(path: String, method: String = "GET", body: String? = null): JSONObject {
+        val started = android.os.SystemClock.elapsedRealtime()
+        try {
+            return requestOnce(path, method, body)
+        } catch (error: Exception) {
+            val elapsed = android.os.SystemClock.elapsedRealtime() - started
+            android.util.Log.w("CineVaultApi", "$method ${path.take(120)} failed after $elapsed ms: $error")
+            // A connection that is refused, reset or closed straight away (a server or a network just
+            // waking up) is worth one more try; a request that already waited long is not.
+            if (method == "GET" && error is java.io.IOException && error !is java.net.SocketTimeoutException && elapsed < 12_000) {
+                Thread.sleep(700)
+                return requestOnce(path, method, body)
+            }
+            throw error
+        }
+    }
+
+    private fun requestOnce(path: String, method: String, body: String?): JSONObject {
         val connection = URL("$baseURL$path").openConnection() as HttpURLConnection
         try {
             connection.requestMethod = method

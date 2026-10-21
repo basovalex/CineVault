@@ -10,7 +10,9 @@
 ./gradlew assembleDebug
 ```
 
-APK появится в `app/build/outputs/apk/debug/app-debug.apk`. `local.properties` содержит путь к SDK и не попадает в Git.
+APK появится в `app/build/outputs/apk/debug/app-debug.apk`. Для передачи и обычного использования собирай release: `./gradlew assembleRelease` → `app/build/outputs/apk/release/app-release.apk`. Он сжат R8, подписан debug-ключом (ставится поверх debug-сборки) и в 3–4 раза быстрее стартует.
+
+На эмуляторе: если каталог не грузится с `UnknownHostException`, запусти его с `-dns-server 1.1.1.1,8.8.8.8`. Нативный плеер на эмуляторе сам предпочитает программный декодер — виртуальный `goldfish` даёт зелёные полосы. Лог запросов встроенных плееров включается так: `adb shell setprop log.tag.PlayerWeb DEBUG`. `local.properties` содержит путь к SDK и не попадает в Git.
 
 Gradle читает Basic Auth из `../ios/Secrets.xcconfig`, если файл есть на этой машине. Значения встраиваются в APK, поэтому debug APK следует оставлять для личного использования и передавать только доверенным людям. Исходные значения в репозиторий не копируются.
 

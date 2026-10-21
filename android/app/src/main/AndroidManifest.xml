@@ -4,6 +4,7 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
     <application
+        android:name=".CineVaultApplication"
         android:allowBackup="false"
         android:label="CineVault"
         android:icon="@mipmap/ic_launcher"

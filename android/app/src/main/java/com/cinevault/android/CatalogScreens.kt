@@ -35,6 +35,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -60,43 +63,77 @@ import kotlinx.coroutines.delay
 
 private fun formatCount(value: Int): String = String.format("%,d", value).replace(',', ' ')
 
+/**
+ * A server-paged catalog list shared by the phone and TV catalogs: the first page loads
+ * when the kind or genre changes, the next ones as the grid nears its end.
+ */
+@Stable
+class CatalogFeed {
+    var items by mutableStateOf<List<CatalogTitle>>(emptyList())
+        private set
+    var loading by mutableStateOf(false)
+        private set
+    var error by mutableStateOf<String?>(null)
+        private set
+    internal var request by mutableIntStateOf(0)
+        private set
+    internal var page = 0
+    internal var pages = 1
+
+    fun reset() { items = emptyList(); page = 0; pages = 1; error = null; loading = false; request++ }
+
+    /** Starts over from the current page after a failure. */
+    fun retry() { error = null; request++ }
+
+    internal suspend fun loadNext(kind: String, genre: String, current: Int) {
+        loading = true
+        try {
+            val result = CineVaultApi.catalog(page + 1, "", kind, genre, "popular")
+            if (current == request) {
+                items = (items + result.items).distinctBy { it.id }; page = result.page; pages = result.pages
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled // a newer request replaced this one; that is not an error
+        } catch (failure: Exception) {
+            error = failure.message ?: "Каталог не загрузился"
+        } finally {
+            loading = false
+        }
+    }
+}
+
+/** Keeps [CatalogFeed] filled: [prefetch] titles ahead of the last visible one are always on their way. */
+@Composable
+fun rememberCatalogFeed(kind: String, genre: String, grid: LazyGridState, prefetch: Int = 12): CatalogFeed {
+    val feed = remember { CatalogFeed() }
+    LaunchedEffect(kind, genre) {
+        feed.reset()
+        grid.scrollToItem(0)
+    }
+    LaunchedEffect(feed.request) {
+        val current = feed.request
+        // Re-checked whenever the position, the loading flag or the list changes, so a page that
+        // arrives while the grid is already near its end pulls the next one without another scroll.
+        snapshotFlow { Triple(grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0, feed.loading, feed.items.size) }.collect { (last, loading, size) ->
+            if (current != feed.request || loading || feed.page >= feed.pages || feed.error != null) return@collect
+            if (feed.page > 0 && last < size - prefetch) return@collect
+            feed.loadNext(kind, genre, current)
+        }
+    }
+    return feed
+}
+
 @Composable
 fun CatalogScreen(bottomPadding: PaddingValues, onOpen: (CatalogTitle) -> Unit) {
     var kind by rememberSaveable { mutableStateOf("movie") }
     var genre by rememberSaveable { mutableStateOf("") }
-    var items by remember { mutableStateOf<List<CatalogTitle>>(emptyList()) }
-    var page by remember { mutableStateOf(0) }
-    var pages by remember { mutableStateOf(1) }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var request by remember { mutableStateOf(0) }
     val grid = rememberLazyGridState()
+    val feed = rememberCatalogFeed(kind, genre, grid)
 
-    LaunchedEffect(Unit) { CineStore.loadFacets("movie"); CineStore.loadFacets("series"); CineStore.loadFacets("") }
-    LaunchedEffect(kind, genre) {
-        items = emptyList(); page = 0; pages = 1; error = null; request++
-        grid.scrollToItem(0)
-    }
-    // Next page as the grid nears its end.
-    LaunchedEffect(request) {
-        val current = request
-        snapshotFlow { grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }.collect { last ->
-            if (current != request || loading || page >= pages || error != null) return@collect
-            if (page > 0 && last < items.size - 12) return@collect
-            loading = true
-            try {
-                val result = CineVaultApi.catalog(page + 1, "", kind, genre, "rating")
-                if (current == request) {
-                    items = (items + result.items).distinctBy { it.id }; page = result.page; pages = result.pages
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled // a newer request replaced this one; that is not an error
-            } catch (failure: Exception) {
-                error = failure.message ?: "Каталог не загрузился"
-            } finally {
-                loading = false
-            }
-        }
+    // Genres and counts are the side dish: they wait for the first page so the two do not queue at the server.
+    val firstPageDone = feed.items.isNotEmpty() || feed.error != null
+    LaunchedEffect(firstPageDone) {
+        if (firstPageDone) { CineStore.loadFacets(kind); CineStore.loadFacets(""); CineStore.loadFacets(if (kind == "movie") "series" else "movie") }
     }
     val genres = CineStore.facets[kind]?.genres.orEmpty().entries.sortedByDescending { it.value }.take(16).map { it.key }
     val movies = CineStore.facets[""]?.movies ?: CineStore.facets["movie"]?.total
@@ -121,11 +158,15 @@ fun CatalogScreen(bottomPadding: PaddingValues, onOpen: (CatalogTitle) -> Unit) 
                 }
             }
         }
-        items(items, key = { it.id }) { title -> PosterCard(title, { onOpen(title) }) }
-        if (loading || error != null) item(span = { GridItemSpan(maxLineSpan) }) {
+        items(feed.items, key = { it.id }) { title -> PosterCard(title, { onOpen(title) }) }
+        if (feed.loading || feed.error != null) item(span = { GridItemSpan(maxLineSpan) }) {
             Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
-                if (error != null) {
-                    SecondaryButton("Повторить", { error = null; request++ }, Modifier.fillMaxWidth())
+                val failure = feed.error
+                if (failure != null) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(failure, color = Cine.Muted, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        SecondaryButton("Повторить", { feed.retry() }, Modifier.fillMaxWidth())
+                    }
                 } else CircularProgressIndicator(color = Cine.Accent)
             }
         }

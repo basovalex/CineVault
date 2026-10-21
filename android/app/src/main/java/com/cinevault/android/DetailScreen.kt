@@ -61,7 +61,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** A way to watch a title: CineVault's own stream, Alloha with its voices, or another embed. */
 private data class PlayerChoice(val id: String, val name: String, val provider: PlayerProvider? = null)
@@ -85,7 +87,7 @@ fun DetailScreen(initial: CatalogTitle, onBack: () -> Unit, onOpen: (CatalogTitl
     LaunchedEffect(initial.id) {
         runCatching { CineVaultApi.title(initial.id) }.onSuccess { item = it }
         val genre = item.genres.firstOrNull().orEmpty()
-        similar = runCatching { CineVaultApi.catalog(1, "", item.kind, genre, "rating").items.filter { it.id != item.id }.take(15) }.getOrDefault(emptyList())
+        similar = runCatching { CineVaultApi.catalog(1, "", item.kind, genre, "popular").items.filter { it.id != item.id }.take(15) }.getOrDefault(emptyList())
     }
     LaunchedEffect(item.kinopoiskId, reload) {
         val id = item.kinopoiskId ?: run { providersLoading = false; return@LaunchedEffect }
@@ -112,7 +114,11 @@ fun DetailScreen(initial: CatalogTitle, onBack: () -> Unit, onOpen: (CatalogTitl
         when {
             selected.id == "cinevault" -> scope.launch {
                 starting = true
-                val fresh = item.kinopoiskId?.let { runCatching { CineVaultApi.refreshPlayback(it) }.getOrNull() } ?: item
+                // The server may take a while to re-check a link; the one we already have is usually still good,
+                // and the player asks for a fresh one itself if it is not. The request is a job of its own because
+                // a blocking call cannot be cut short: we simply stop waiting for it.
+                val refresh = item.kinopoiskId?.let { id -> async { runCatching { CineVaultApi.refreshPlayback(id) }.getOrNull() } }
+                val fresh = refresh?.let { withTimeoutOrNull(4_000) { it.await() } } ?: item
                 val sources = fresh.sources.filter { !it.isEmbed }.ifEmpty { item.sources.filter { !it.isEmbed } }
                 val source = sources.firstOrNull { it.label.ifBlank { "Оригинал" } == voice } ?: sources.firstOrNull()
                 starting = false

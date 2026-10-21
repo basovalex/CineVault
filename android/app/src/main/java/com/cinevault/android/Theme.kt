@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
 
 // Design tokens shared with the website and the iOS app: near-black surfaces,
 // grey secondary text, yellow ratings, green primary action.
@@ -209,17 +210,22 @@ fun BackdropArt(title: CatalogTitle, modifier: Modifier = Modifier) {
     }
 }
 
-/** Logo artwork when available, otherwise the title set large. */
+/** Logo artwork when available, otherwise (or if the logo will not load) the title set large. */
 @Composable
 fun TitleLogo(title: CatalogTitle, maxWidth: Dp = 250.dp, maxHeight: Dp = 76.dp, fontSize: Int = 32) {
+    val name: @Composable () -> Unit = {
+        Text(title.title, color = Color.White, fontSize = fontSize.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = (fontSize + 4).sp)
+    }
     if (!title.logo.isNullOrBlank()) {
-        AsyncImage(
+        SubcomposeAsyncImage(
             model = CineVaultApi.absoluteMediaURL(title.logo), contentDescription = title.title,
             contentScale = ContentScale.Fit, alignment = Alignment.CenterStart,
             modifier = Modifier.width(maxWidth).height(maxHeight),
+            loading = {},
+            error = { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) { name() } },
         )
     } else {
-        Text(title.title, color = Color.White, fontSize = fontSize.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = (fontSize + 4).sp)
+        name()
     }
 }
 

@@ -7,8 +7,8 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -43,13 +43,19 @@ data class SavedTitle(
 }
 
 /** Which player and voice a title was last opened with, and when. Kept on this device only. */
-data class WatchEntry(val title: SavedTitle, val providerId: String, val translationName: String?, val updatedAt: Long) {
-    fun toJson(): JSONObject = JSONObject().put("title", title.toJson()).put("providerId", providerId).put("translationName", translationName).put("updatedAt", updatedAt)
+data class WatchEntry(
+    val title: SavedTitle, val providerId: String, val translationName: String?, val updatedAt: Long,
+    /** For series watched in Alloha on TV: where the viewer stopped. */
+    val season: Int? = null, val episode: Int? = null,
+) {
+    fun toJson(): JSONObject = JSONObject().put("title", title.toJson()).put("providerId", providerId).put("translationName", translationName)
+        .put("updatedAt", updatedAt).put("season", season).put("episode", episode)
 
     companion object {
         fun fromJson(json: JSONObject) = WatchEntry(
             SavedTitle.fromJson(json.optJSONObject("title") ?: JSONObject()), json.optString("providerId"),
             json.optString("translationName").takeIf { it.isNotBlank() && it != "null" }, json.optLong("updatedAt"),
+            json.optInt("season").takeIf { it > 0 }, json.optInt("episode").takeIf { it > 0 },
         )
     }
 }
@@ -107,10 +113,27 @@ object CineStore {
     fun lastWatch(id: String): WatchEntry? = history[id]
 
     /** Embedded players keep the position themselves, so only the moment and the choice are recorded. */
-    fun recordOpened(title: CatalogTitle, providerId: String, translationName: String? = null) {
-        history[title.id] = WatchEntry(SavedTitle.of(title), providerId, translationName, System.currentTimeMillis())
+    fun recordOpened(title: CatalogTitle, providerId: String, translationName: String? = null, season: Int? = null, episode: Int? = null) {
+        val previous = history[title.id]
+        history[title.id] = WatchEntry(
+            SavedTitle.of(title), providerId, translationName, System.currentTimeMillis(),
+            season ?: previous?.season, episode ?: previous?.episode,
+        )
         saveHistory()
     }
+
+    /** The episode now playing (reported by the TV player), so that "Продолжить" opens it next time. */
+    fun recordEpisode(titleId: String, season: Int?, episode: Int, translationName: String?) {
+        val entry = history[titleId] ?: return
+        if (entry.season == season && entry.episode == episode && (translationName == null || entry.translationName == translationName)) return
+        history[titleId] = entry.copy(season = season, episode = episode, translationName = translationName ?: entry.translationName, updatedAt = System.currentTimeMillis())
+        saveHistory()
+    }
+
+    /** The video quality last chosen on TV ("720"), offered first next time; empty means automatic. */
+    var preferredQuality: String
+        get() = prefs.getString("quality", "").orEmpty()
+        set(value) { prefs.edit().putString("quality", value).apply() }
 
     fun removeFromHistory(id: String) {
         history.remove(id)
@@ -126,45 +149,61 @@ object CineStore {
 
     private var homeLoaded = false
 
+    // The collections the home screen is made of, as (sort, collection); the order is the shelves' order.
+    private val homeQueries = listOf(
+        "popular" to "popular", "new" to "new", "popular" to "evening",
+        "popular" to "anime", "popular" to "tense", "popular" to "together",
+    )
+
     suspend fun loadHome(force: Boolean = false) {
         if (homeLoading || (homeLoaded && !force)) return
         homeLoading = true
         homeError = null
         try {
-            // Each collection loads on its own: one that fails only leaves its shelf out.
-            val pages = coroutineScope {
-                listOf(
-                    "popular" to "popular", "new" to "new", "rating" to "evening",
-                    "rating" to "anime", "rating" to "tense", "rating" to "together",
-                ).map { (sort, collection) ->
-                    async { runCatching { CineVaultApi.catalog(1, "", "", "", sort, collection) } }
-                }.map { it.await() }
+            // Each collection loads on its own and appears as soon as it arrives: a slow or failed
+            // one neither holds the others back nor leaves more than its own shelf out.
+            val loaded = Array<List<CatalogTitle>?>(homeQueries.size) { null }
+            val failures = mutableListOf<Throwable>()
+            coroutineScope {
+                homeQueries.forEachIndexed { index, (sort, collection) ->
+                    launch {
+                        runCatching { CineVaultApi.catalog(1, "", "", "", sort, collection).items }
+                            .onSuccess { loaded[index] = it; publishHome(loaded) }
+                            .onFailure { failures += it }
+                    }
+                }
             }
-            val loaded = pages.map { it.getOrNull()?.items.orEmpty() }
-            if (loaded.all { it.isEmpty() }) {
-                homeError = pages.firstNotNullOfOrNull { it.exceptionOrNull()?.message } ?: "Подборки пустые"
+            if (loaded.all { it.isNullOrEmpty() }) {
+                homeError = failures.firstOrNull()?.message ?: "Подборки пустые"
                 return
             }
-            val candidates = loaded.flatten().distinctBy { it.id }
-            val watchedGenres = recentlyWatched.take(10).flatMap { it.title.genres }.map { it.lowercase() }.groupingBy { it }.eachCount()
-            val watchedIds = history.keys
-            val personal = candidates.filter { it.id !in watchedIds }
-                .sortedByDescending { title -> title.genres.sumOf { watchedGenres[it.lowercase()] ?: 0 } * 2.0 + title.rating }
-                .take(20)
-            homeShelves = listOf(
-                Shelf("personal", "Советуем вам", if (watchedGenres.isEmpty()) "Первые рекомендации — со временем подстроятся под просмотры" else "Похоже на то, что вы уже смотрели", personal),
-                Shelf("popular", "Популярное", "Сначала карточки с большим числом оценок Kinopoisk", loaded[0]),
-                Shelf("recent", "Новое и обсуждаемое", "Свежие карточки, о которых уже голосуют", loaded[1]),
-                Shelf("evening", "На один вечер", "Фильмы, которые удобно включить сегодня", loaded[2]),
-                Shelf("anime", "Аниме", "Анимационные фильмы и сериалы", loaded[3]),
-                Shelf("together", "Для двоих", "Романтика и истории для совместного вечера", loaded[5]),
-                Shelf("tense", "Держит в напряжении", "Триллеры, детективы и криминальные истории", loaded[4]),
-            ).filter { it.items.isNotEmpty() }
-            val heroPool = (personal.take(3) + loaded[1].take(6)).distinctBy { it.id }
-            homeHero = (heroPool.filter { it.backdrop != null }.ifEmpty { heroPool }).take(6)
             homeLoaded = true
         } finally {
             homeLoading = false
+        }
+    }
+
+    /** Builds the shelves from whatever has arrived so far; the hero is picked once, from the first titles. */
+    private fun publishHome(loaded: Array<List<CatalogTitle>?>) {
+        fun at(index: Int) = loaded[index].orEmpty()
+        val candidates = loaded.flatMap { it.orEmpty() }.distinctBy { it.id }
+        val watchedGenres = recentlyWatched.take(10).flatMap { it.title.genres }.map { it.lowercase() }.groupingBy { it }.eachCount()
+        val watchedIds = history.keys
+        val personal = candidates.filter { it.id !in watchedIds }
+            .sortedByDescending { title -> title.genres.sumOf { watchedGenres[it.lowercase()] ?: 0 } * 2.0 + title.rating }
+            .take(20)
+        homeShelves = listOf(
+            Shelf("personal", "Советуем вам", if (watchedGenres.isEmpty()) "Первые рекомендации — со временем подстроятся под просмотры" else "Похоже на то, что вы уже смотрели", personal),
+            Shelf("popular", "Популярное", "Сначала карточки с большим числом оценок Kinopoisk", at(0)),
+            Shelf("recent", "Новое и обсуждаемое", "Свежие карточки, о которых уже голосуют", at(1)),
+            Shelf("evening", "На один вечер", "Фильмы, которые удобно включить сегодня", at(2)),
+            Shelf("anime", "Аниме", "Анимационные фильмы и сериалы", at(3)),
+            Shelf("together", "Для двоих", "Романтика и истории для совместного вечера", at(5)),
+            Shelf("tense", "Держит в напряжении", "Триллеры, детективы и криминальные истории", at(4)),
+        ).filter { it.items.isNotEmpty() }
+        if (homeHero.isEmpty()) {
+            val heroPool = (personal.take(3) + at(1).take(6)).distinctBy { it.id }
+            homeHero = (heroPool.filter { it.backdrop != null }.ifEmpty { heroPool }).take(6)
         }
     }
 

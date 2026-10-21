@@ -1,6 +1,11 @@
 package com.cinevault.android
 
+import android.app.UiModeManager
+import android.content.Context
+import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -65,6 +70,13 @@ private sealed interface Route {
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Many TV boxes and file managers open the ordinary launcher entry: on a TV that is the TV app.
+        if (isTelevision()) {
+            super.onCreate(savedInstanceState)
+            startActivity(Intent(this, TvActivity::class.java))
+            finish()
+            return
+        }
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
@@ -138,4 +150,11 @@ private fun CineVaultTabBar(selection: AppTab, modifier: Modifier = Modifier, on
             }
         }
     }
+}
+
+private fun Context.isTelevision(): Boolean {
+    val uiMode = getSystemService(UiModeManager::class.java)?.currentModeType
+    return uiMode == Configuration.UI_MODE_TYPE_TELEVISION ||
+        packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
+        !packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)
 }
