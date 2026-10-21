@@ -136,7 +136,7 @@ class MediaLibraryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.library.create_upload("Test", 0, 0, "", "secret.exe", io.BytesIO(b"x"))
 
-    def test_application_shell_is_never_cached(self):
+    def test_versioned_bundle_is_cached_but_unversioned_bundle_is_fresh(self):
         app_js = Path(self.temp_dir.name) / "app.js"
         app_js.write_text("console.log('fresh');", encoding="utf-8")
         handler = lambda *args, **kwargs: MediaLibraryHandler(*args, directory=self.temp_dir.name, **kwargs)
@@ -149,7 +149,9 @@ class MediaLibraryTests(unittest.TestCase):
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             response = opener.open(f"http://127.0.0.1:{server.server_port}/app.js?v=test", timeout=3)
             self.assertEqual(response.read(), b"console.log('fresh');")
-            self.assertEqual(response.headers["Cache-Control"], "no-store, max-age=0")
+            self.assertEqual(response.headers["Cache-Control"], "public, max-age=31536000, immutable")
+            unversioned = opener.open(f"http://127.0.0.1:{server.server_port}/app.js", timeout=3)
+            self.assertEqual(unversioned.headers["Cache-Control"], "no-store, max-age=0")
         finally:
             server.shutdown()
             server.server_close()

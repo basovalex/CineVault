@@ -1306,7 +1306,10 @@ def imported_catalog_index(catalog_path: Path = CATALOG_IMPORTS_PATH, limit: int
             item_year = 0
         return item_rating, item_year
 
-    selected = sorted(items, key=score, reverse=True)[:max(1, min(1000, int(limit or 500)))]
+    count = max(1, min(1000, int(limit or 500)))
+    popular = sorted((item for item in items if item.get("popularRank")), key=lambda item: int(item["popularRank"]))[:(count + 1) // 2]
+    audience = sorted(items, key=lambda item: (int(item.get("voteCount") or 0), score(item)), reverse=True)
+    selected = list({str(item["id"]): item for item in popular + audience}.values())[:count]
     return [{key: item[key] for key in CATALOG_INDEX_FIELDS if key in item} for item in selected]
 
 
@@ -1329,12 +1332,12 @@ def catalog_confidence_rating(item: Dict[str, Any]) -> float:
     """Shrink tiny-sample ratings toward a neutral prior for discovery order."""
     try:
         rating_value = float(item.get("ratingKinopoisk") or item.get("rating") or item.get("imdbRating") or 0)
-        votes = max(0, int(item.get("voteCount") or item.get("imdbVoteCount") or 0))
+        votes = max(0, int(item.get("voteCount") or 0))
     except (TypeError, ValueError):
         return 0.0
     if rating_value <= 0:
         return 0.0
-    return (rating_value * votes + 6.8 * 500) / (votes + 500)
+    return (rating_value * votes + 6.8 * 25000) / (votes + 25000)
 
 
 def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
@@ -1354,7 +1357,7 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
     kind = str(params.get("type", params.get("kind", [""]))[0]).strip().casefold()
     collection = str(params.get("collection", [""])[0]).strip().casefold()
     collection = {"romance": "together", "thrill": "tense"}.get(collection, collection)
-    sort = str(params.get("sort", ["rating"])[0]).strip().casefold()
+    sort = str(params.get("sort", ["popular"])[0]).strip().casefold()
     if collection in {"popular", "trending"} and sort == "rating":
         sort = "popular"
     if kind in {"movies", "film", "films"}:
@@ -1433,7 +1436,7 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
         except (TypeError, ValueError):
             return 10 ** 9
     if sort in {"popular", "trending"}:
-        filtered.sort(key=lambda item: (bool(query) or not unverified(item), -popular_rank(item), votes(item), rating(item), year(item)), reverse=True)
+        filtered.sort(key=lambda item: (-popular_rank(item), votes(item), rating(item), bool(query) or not unverified(item), year(item)), reverse=True)
     elif sort == "votes":
         filtered.sort(key=lambda item: (bool(query) or not unverified(item), votes(item), rating(item), year(item)), reverse=True)
     elif sort == "new":

@@ -239,7 +239,7 @@ class CatalogIndexTest(unittest.TestCase):
 
     def test_page_filters_sorts_and_hides_dead_cards(self):
         visibility = (frozenset({2}), frozenset({4}))
-        page = self.index.page({"genre": ["драма"]}, visibility)
+        page = self.index.page({"genre": ["драма"], "sort": ["rating"]}, visibility)
         self.assertEqual([item["id"] for item in page["items"]], ["a", "kinopoisk-3"])  # verified first
         self.assertFalse(page["items"][1]["playbackVerified"])
         everything = self.index.page({}, visibility)
@@ -252,6 +252,22 @@ class CatalogIndexTest(unittest.TestCase):
         series_facets = self.index.facets(visibility, "series")
         self.assertEqual((series_facets["total"], series_facets["genres"]), (1, {"комедия": 1}))
         self.assertEqual(self.index.facets(visibility, "movie")["genres"]["драма"], 2)
+
+    def test_default_catalog_prioritizes_audience_not_raw_rating(self):
+        page = self.index.page({}, (frozenset({1}), frozenset()))
+        self.assertEqual(page["items"][0]["id"], "kinopoisk-3")
+
+    def test_discovery_includes_popular_now_and_widely_rated_titles(self):
+        rows = self.index.discovery(3, (frozenset(), frozenset()))
+        self.assertEqual(rows[0]["id"], "kinopoisk-3")
+        self.assertEqual(len({item["id"] for item in rows}), 3)
+
+    def test_rating_does_not_borrow_imdb_votes(self):
+        from tools.catalog_index import confidence_rating
+        tiny = {"ratingKinopoisk": 9.9, "voteCount": 5, "imdbVoteCount": 2000000}
+        hit = {"ratingKinopoisk": 8.5, "voteCount": 500000}
+        self.assertLess(confidence_rating(tiny), confidence_rating(hit))
+        self.assertEqual(confidence_rating(tiny), server.catalog_confidence_rating(tiny))
 
     def test_item_lookup_and_upsert_after_refresh(self):
         from tools.catalog_index import upsert_entry

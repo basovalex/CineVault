@@ -30,7 +30,7 @@ if str(ROOT) not in sys.path:
 
 INDEX_FILENAME = "catalog_index.sqlite3"
 ALLOHA_FILENAME = "catalog_alloha.jsonl"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 EDITORIAL_TAGS = {"уютно", "для нас", "на вечер", "напряжённо", "атмосферно", "классика"}
 EVENING_GENRES = ("уютно", "на вечер", "комедия", "драма", "мелодрама", "приключения", "семейный")
 TENSE_GENRES = ("триллер", "детектив", "ужасы", "криминал")
@@ -54,10 +54,10 @@ def _float(value: Any) -> float:
 def confidence_rating(item: Dict[str, Any]) -> float:
     """Same shrinkage as media_library_server.catalog_confidence_rating."""
     rating = _float(item.get("ratingKinopoisk") or item.get("rating") or item.get("imdbRating"))
-    votes = _int(item.get("voteCount") or item.get("imdbVoteCount"))
+    votes = _int(item.get("voteCount"))
     if rating <= 0:
         return 0.0
-    return (rating * votes + 6.8 * 500) / (votes + 500)
+    return (rating * votes + 6.8 * 25000) / (votes + 25000)
 
 
 def item_genres(item: Dict[str, Any]) -> list[str]:
@@ -365,7 +365,7 @@ class CatalogIndex:
         kind = str(params.get("type", params.get("kind", [""]))[0]).strip().casefold()
         collection = str(params.get("collection", [""])[0]).strip().casefold()
         collection = {"romance": "together", "thrill": "tense"}.get(collection, collection)
-        sort = str(params.get("sort", ["rating"])[0]).strip().casefold()
+        sort = str(params.get("sort", ["popular"])[0]).strip().casefold()
         if collection in {"popular", "trending"} and sort == "rating":
             sort = "popular"
         kind = {"movies": "movie", "film": "movie", "films": "movie", "serial": "series", "serials": "series", "tv": "series"}.get(kind, kind)
@@ -412,8 +412,8 @@ class CatalogIndex:
         verified_first = "" if query else "verified DESC, "
         rank = "COALESCE(c.popular_rank, 1000000000)"
         order = {
-            "popular": f"{verified_first}{rank} ASC, c.votes DESC, c.confidence DESC, c.year DESC",
-            "trending": f"{verified_first}{rank} ASC, c.votes DESC, c.confidence DESC, c.year DESC",
+            "popular": f"{rank} ASC, c.votes DESC, c.confidence DESC, {verified_first}c.year DESC",
+            "trending": f"{rank} ASC, c.votes DESC, c.confidence DESC, {verified_first}c.year DESC",
             "votes": f"{verified_first}c.votes DESC, c.confidence DESC, c.year DESC",
             "new": f"{verified_first}c.year DESC, {rank} ASC, c.votes DESC, c.confidence DESC",
             "year": f"{verified_first}c.year DESC, c.confidence DESC",
@@ -462,12 +462,15 @@ class CatalogIndex:
         with self._lock:
             db = self._connection()
             self._load_sets(db, visibility)
-            rows = db.execute(
-                f"SELECT c.source, c.summary_json, {self.VERIFIED} AS verified FROM cards c WHERE {self.VISIBLE} "
-                "ORDER BY c.confidence DESC, c.year DESC, c.rowid LIMIT ?",
-                (max(1, min(1000, int(limit or 500))),),
-            ).fetchall()
-            return [self._summary(row) for row in rows]
+            count = max(1, min(1000, int(limit or 500)))
+            select = f"SELECT c.source, c.summary_json, {self.VERIFIED} AS verified FROM cards c WHERE {self.VISIBLE} "
+            popular = db.execute(select + "AND c.popular_rank IS NOT NULL ORDER BY c.popular_rank, c.id LIMIT ?", ((count + 1) // 2,)).fetchall()
+            audience = db.execute(select + "ORDER BY c.votes DESC, c.confidence DESC, c.id LIMIT ?", (count,)).fetchall()
+            result = {}
+            for row in popular + audience:
+                item = self._summary(row)
+                result.setdefault(item["id"], item)
+            return list(result.values())[:count]
 
     def item(self, identifier: str, visibility: Optional[tuple], include_hidden: bool = False) -> Dict[str, Any]:
         needle = str(identifier).strip()

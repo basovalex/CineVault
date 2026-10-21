@@ -2324,7 +2324,7 @@
 }
   };
 
-  const defaultState = { view: "home", theme: "cinema", companion: "plush", pets: {}, mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "rating", catalogPage: 1, favorites: [], watchlist: [], progress: {}, ratings: {}, history: [], recommendationHistory: [], tasteMemory: [], offline: {}, voiceSelections: {}, playbackSelections: {}, playerVolume: 1, playerMuted: false, rutubeUrl: "", skipSegments: true };
+  const defaultState = { view: "home", theme: "cinema", companion: "plush", pets: {}, mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "popular", catalogPage: 1, favorites: [], watchlist: [], progress: {}, ratings: {}, history: [], recommendationHistory: [], tasteMemory: [], offline: {}, voiceSelections: {}, playbackSelections: {}, playerVolume: 1, playerMuted: false, rutubeUrl: "", skipSegments: true };
   const ROUTE_PATHS = Object.freeze({ home: "/", catalog: "/catalog/", movies: "/movies/", series: "/series/", library: "/library/", favorites: "/favorites/", evening: "/evening/", history: "/history/", settings: "/settings/" });
   const ROUTE_VIEWS = Object.freeze(Object.fromEntries(Object.entries(ROUTE_PATHS).map(([view, path]) => [path, view])));
   let state = loadState();
@@ -2475,7 +2475,7 @@
         collection: String(state.catalogCollection || ""),
         moodOnly: Boolean(state.catalogMoodOnly),
         playableOnly: Boolean(state.catalogPlayableOnly),
-        sort: String(state.catalogSort || "rating"),
+        sort: String(state.catalogSort || "popular"),
       },
       ...extra,
     };
@@ -2504,7 +2504,7 @@
     state.catalogCollection = String(context.collection || "");
     state.catalogMoodOnly = Boolean(context.moodOnly);
     state.catalogPlayableOnly = Boolean(context.playableOnly);
-    state.catalogSort = String(context.sort || "rating");
+    state.catalogSort = String(context.sort || "popular");
   }
 
   function restoreCatalogPosition(historyState) {
@@ -2804,7 +2804,7 @@
         if (initial || state.view !== "home") render();
         return;
       }
-      const params = new URLSearchParams({ page: String(pageNumber), limit: "50", sort: state.catalogSort || "rating" });
+      const params = new URLSearchParams({ page: String(pageNumber), limit: "50", sort: state.catalogSort || "popular" });
       if (state.query) params.set("search", state.query);
       if (savedIds) params.set("ids", savedIds.join(","));
       if (state.catalogGenre) params.set("genre", state.catalogGenre);
@@ -2910,6 +2910,8 @@
       loaded.catalogGenre = "";
       loaded.catalogCollection = "";
       loaded.catalogPage = 1;
+      // Start each visit with popular titles; the user can still choose a rating sort.
+      loaded.catalogSort = "popular";
       // These legacy filters are intentionally no longer part of the catalog UI.
       loaded.catalogMoodOnly = false;
       loaded.catalogPlayableOnly = false;
@@ -4744,7 +4746,7 @@
   let raccoonTimer = null;
   // A menu of our own instead of a native <select>: Chrome on Windows would not open
   // the native list here, and this one looks and behaves the same everywhere.
-  const CATALOG_SORTS = [["rating", "По рейтингу"], ["year", "Сначала новые"], ["title", "По алфавиту"]];
+  const CATALOG_SORTS = [["popular", "Популярное"], ["votes", "Больше оценок"], ["rating", "По рейтингу"], ["year", "Сначала новые"], ["title", "По алфавиту"]];
   function catalogSortMenuMarkup() {
     const current = CATALOG_SORTS.find(([value]) => value === state.catalogSort) || CATALOG_SORTS[0];
     const options = CATALOG_SORTS.map(([value, label]) => `<button type="button" role="option" aria-selected="${value === current[0]}" data-catalog-sort-value="${value}">${label}</button>`).join("");
@@ -4893,7 +4895,7 @@
 
   function discoveryItems() { return discoveryCatalog.length ? discoveryCatalog : catalog; }
 
-  // Today's picks for the home hero: stable for a day and mood instead of a
+  // Today's picks for the home hero: stable for a day instead of a
   // new random title on every render.
   let homeFeatureIndex = 0;
   function stableHash(value) {
@@ -4911,7 +4913,7 @@
     const withBackdrop = ranked.filter((item) => item.backdropImage && String(item.description || "").length >= 60);
     const complete = withBackdrop.length >= count ? withBackdrop : ranked.filter((item) => item.posterImage && String(item.description || "").length >= 60);
     const pool = (complete.length >= count ? complete : ranked).slice(0, 30);
-    const seed = `${new Date().toISOString().slice(0, 10)}:${state.mood}`;
+    const seed = new Date().toISOString().slice(0, 10);
     return [...pool].sort((left, right) => stableHash(`${seed}:${left.id}`) - stableHash(`${seed}:${right.id}`)).slice(0, count);
   }
 
@@ -5081,7 +5083,6 @@
   function renderHome() {
     const picks = homeFeaturePicks();
     const continueItems = Object.entries(state.progress).map(([contentId, progress]) => ({ item: getTitleForProgress(contentId, progress), progress: { ...progress, contentId } })).filter((entry) => entry.item && !entry.progress.completed && isRealProgress(entry.progress)).sort((a, b) => b.progress.updatedAt - a.progress.updatedAt);
-    const moodTitle = moodDefinition(state.mood)?.title || state.mood;
     const continueShelf = continueItems.length ? `<section class="discovery-shelf" aria-labelledby="shelf-continue"><div class="section-header discovery-shelf-header"><div><h2 id="shelf-continue">Продолжить просмотр</h2></div><button class="text-button" data-view="history" type="button">Вся история ›</button></div><div class="discovery-rail landscape-rail">${continueItems.slice(0, 12).map(({ item, progress }) => continueCard(item, progress)).join("")}</div></section>` : "";
     const moodStrip = `<section class="home-mood-strip" aria-label="Настроение"><span class="home-mood-label">Настроение вечера</span><div class="mood-row" role="group" aria-label="Настроение">${["уютно", "романтично", "смеяться", "напряжённо"].map((mood) => `<button class="mood-button ${state.mood === mood ? "is-active" : ""}" data-mood="${mood}" type="button" aria-pressed="${state.mood === mood}">${escapeHtml(moodDefinition(mood)?.shortLabel || mood)}</button>`).join("")}</div></section>`;
     const shelves = [
@@ -5091,7 +5092,7 @@
       discoveryShelf({ id: "personal", eyebrow: "", title: "Мопс советует", description: "Похоже на то, что вам уже понравилось.", items: personalCollectionItems(12) }),
       genreTilesShelf(),
       moodStrip,
-      discoveryShelf({ id: "mood", eyebrow: "", title: moodTitle, description: moodDefinition(state.mood)?.description || "Подборка по жанрам и атмосфере.", items: collectionItems("mood", 12) }),
+      `<div id="home-mood-results">${homeMoodMarkup()}</div>`,
       discoveryShelf({ id: "evening", eyebrow: "", title: "На один вечер", description: "Фильмы, которые удобно включить сегодня.", items: collectionItems("evening", 12) }),
       discoveryShelf({ id: "anime", eyebrow: "", title: "Аниме", description: "Сериалы и фильмы с жанром «аниме».", items: collectionItems("anime", 12) }),
     ].filter(Boolean).join("");
@@ -5099,6 +5100,27 @@
     const feature = $(".home-feature");
     progressiveBackground(feature, "--feature-image", feature?.dataset.featureImage);
     bindPageActions();
+  }
+
+  function homeMoodMarkup() {
+    return discoveryShelf({ id: "mood", eyebrow: "", title: moodDefinition().title, description: moodDefinition().description, items: collectionItems("mood", 12) });
+  }
+
+  function selectMood(mood) {
+    if (!Object.hasOwn(moodDefinitions, mood) || state.mood === mood) return;
+    state.mood = mood;
+    saveState();
+    const results = state.view === "home" && $("#home-mood-results");
+    if (!results) { render(); return; }
+    // Keep the hero, other rails, their images and the focused mood button intact.
+    $$('[data-mood]').forEach((button) => {
+      const selected = button.dataset.mood === mood;
+      button.classList.toggle("is-active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+    results.innerHTML = homeMoodMarkup();
+    $('[data-open-collection]', results)?.addEventListener("click", () => openCatalogCollection("mood"));
+    hydrateLazyPosters();
   }
 
   const catalogGenreAliases = { "экшен": "боевик", "семейное": "семейный", "романтика": "мелодрама" };
@@ -5168,7 +5190,7 @@
   }
 
   function discoveryScore(item, collectionId = "popular") {
-    const base = confidenceCatalogRating(item) * 3 + Math.max(0, Number(item.year || 0) - 2000) * .04 + itemLocalInterest(item) * 2;
+    const base = confidenceCatalogRating(item) * 3 + audienceScore(item) + Math.max(0, Number(item.year || 0) - 2000) * .04 + itemLocalInterest(item) * 2;
     if (collectionId === "mood") return base + moodScore(item) * 3;
     if (collectionId === "romance") return base + moodScore(item, "романтично") * 2;
     if (collectionId === "thrill") return base + moodScore(item, "напряжённо") * 2;
@@ -5254,13 +5276,13 @@
     const averageRuntime = weightedAverage(profile.runtimes);
     const yearScore = averageYear && Number(item.year) ? Math.max(0, 4 - Math.abs(Number(item.year) - averageYear) / 12) : 0;
     const runtimeScore = averageRuntime && Number(item.runtime) ? Math.max(0, 2 - Math.abs(Number(item.runtime) - averageRuntime) / 45) : 0;
-    const moodScoreValue = moodScore(item) * .45;
-    const qualityScore = confidenceCatalogRating(item) * 1.4;
+    const moodScoreValue = 0; // Mood belongs only to its own shelf.
+    const qualityScore = confidenceCatalogRating(item) * 1.4 + audienceScore(item);
     const tags = new Set(genresForItem(item).map(normalizeCatalogGenre));
     const isChildLike = tags.has("мультфильм") || tags.has("детский") || tags.has("аниме");
     const childInterest = ["мультфильм", "детский", "аниме", "семейный"].reduce((sum, tag) => sum + (profile.genres.get(tag) || 0), 0);
     const adultInterest = [...profile.genres.entries()].filter(([tag]) => !["мультфильм", "детский", "аниме", "семейный"].includes(tag)).reduce((sum, [, value]) => sum + value, 0);
-    const childBiasCorrection = isChildLike && adultInterest > childInterest * 1.25 ? -8 : 0;
+    const childBiasCorrection = isChildLike && (childInterest === 0 || adultInterest > childInterest * 1.25) ? -8 : 0;
     const petScore = petAffinity(item) * 1.6;
     return genreScore + actorScore + directorScore + countryScore + kindScore + yearScore + runtimeScore + moodScoreValue + qualityScore + childBiasCorrection + petScore;
   }
@@ -5287,12 +5309,7 @@
       .map((entry) => String(entry?.id || entry))
       .filter(Boolean));
     const freshPool = ranked.filter((item) => !recentIds.has(item.id));
-    const pool = (freshPool.length >= limit ? freshPool : ranked).slice(0, Math.min(36, ranked.length));
-    for (let index = pool.length - 1; index > 0; index -= 1) {
-      const swapIndex = Math.floor(Math.random() * (index + 1));
-      [pool[index], pool[swapIndex]] = [pool[swapIndex], pool[index]];
-    }
-    return pool.slice(0, limit);
+    return (freshPool.length >= limit ? freshPool : ranked).slice(0, limit);
   }
 
   function catalogCollectionDefinition(collectionId = state.catalogCollection) {
@@ -5398,12 +5415,19 @@
   function confidenceCatalogRating(item) {
     const rating = catalogRatingValue(item);
     if (!rating) return 0;
-    const votes = Math.max(0, Number(item?.voteCount || item?.imdbVoteCount || 0));
-    return (rating * votes + 6.8 * 500) / (votes + 500);
+    const votes = Math.max(0, Number(item?.voteCount || 0));
+    return (rating * votes + 6.8 * 25000) / (votes + 25000);
+  }
+
+  function audienceScore(item) {
+    const votes = Math.max(0, Number(item?.voteCount || 0));
+    const rank = Number(item?.popularRank || 0);
+    const shortFilm = item.kind === "movie" && Number(item.runtime) > 0 && Number(item.runtime) < 40;
+    return Math.log10(1 + votes) * 1.5 + (rank > 0 ? 3 / (1 + rank / 50) : 0) - (shortFilm ? 6 : 0);
   }
 
   function isCredibleRecommendation(item) {
-    return Number(item?.voteCount || item?.imdbVoteCount || 0) >= 500
+    return Number(item?.voteCount || 0) >= 500
       && Boolean(item?.posterImage && String(item?.description || "").length >= 60);
   }
 
@@ -5428,11 +5452,13 @@
         || (historyPosition.get(String(left.id)) ?? Number.MAX_SAFE_INTEGER) - (historyPosition.get(String(right.id)) ?? Number.MAX_SAFE_INTEGER)
         || String(left.title || "").localeCompare(String(right.title || ""), "ru"));
     }
-    const sort = ["rating", "year", "title"].includes(state.catalogSort) ? state.catalogSort : "rating";
+    const sort = ["popular", "votes", "rating", "year", "title"].includes(state.catalogSort) ? state.catalogSort : "popular";
     return [...items].sort((left, right) => {
+      if (sort === "popular") return (Number(left.popularRank) || 1e9) - (Number(right.popularRank) || 1e9) || Number(right.voteCount || 0) - Number(left.voteCount || 0) || confidenceCatalogRating(right) - confidenceCatalogRating(left);
+      if (sort === "votes") return Number(right.voteCount || 0) - Number(left.voteCount || 0) || confidenceCatalogRating(right) - confidenceCatalogRating(left);
       if (sort === "title") return String(left.title || "").localeCompare(String(right.title || ""), "ru");
       if (sort === "year") return Number(right.year || 0) - Number(left.year || 0) || catalogRatingValue(right) - catalogRatingValue(left);
-      return catalogRatingValue(right) - catalogRatingValue(left) || Number(right.year || 0) - Number(left.year || 0);
+      return confidenceCatalogRating(right) - confidenceCatalogRating(left) || Number(right.year || 0) - Number(left.year || 0);
     });
   }
 
@@ -5483,7 +5509,7 @@
     state.catalogCollection = "";
     state.catalogMoodOnly = false;
     state.catalogPlayableOnly = false;
-    state.catalogSort = "rating";
+    state.catalogSort = "popular";
     resetCatalogPage();
     const search = $("#search");
     if (search) search.value = "";
@@ -5493,7 +5519,7 @@
 
   function openCatalogCollection(collectionId) {
     state.catalogCollection = collectionId;
-    state.catalogSort = collectionId === "new" ? "new" : "rating";
+    state.catalogSort = collectionId === "new" ? "new" : "popular";
     state.catalogMoodOnly = false;
     state.catalogGenre = "";
     state.query = "";
@@ -6749,7 +6775,7 @@
       if (item) refreshDetailPlayback(item, { force: true });
     }));
     $$('[data-open-source-import]').forEach((button) => button.addEventListener("click", () => { const item = getTitle(button.dataset.openSourceImport); if (item) openCatalogSourceImport(item); }));
-    $$('[data-home-genre]').forEach((button) => button.addEventListener("click", () => { state.catalogCollection = ""; state.catalogSort = "rating"; state.catalogMoodOnly = false; state.query = ""; searchDraft = ""; state.catalogGenre = normalizeCatalogGenre(button.dataset.homeGenre); resetCatalogPage(); saveState(); navigateToView("catalog", { preserveCatalogFilters: true }); }));
+    $$('[data-home-genre]').forEach((button) => button.addEventListener("click", () => { state.catalogCollection = ""; state.catalogSort = "popular"; state.catalogMoodOnly = false; state.query = ""; searchDraft = ""; state.catalogGenre = normalizeCatalogGenre(button.dataset.homeGenre); resetCatalogPage(); saveState(); navigateToView("catalog", { preserveCatalogFilters: true }); }));
     $$('[data-feature-pick]').forEach((button) => button.addEventListener("click", () => { homeFeatureIndex = Number(button.dataset.featurePick) || 0; render(); }));
     $('[data-feature-shuffle]')?.addEventListener("click", () => { const total = homeFeaturePicks().length || 1; homeFeatureIndex = (homeFeatureIndex + 1) % total; render(); });
     $$('[data-embed-resume]').forEach((button) => button.addEventListener("click", () => { const item = getTitle(button.dataset.embedResume); if (item) resumeEmbedProvider(item, button.dataset.embedProvider); }));
@@ -6920,7 +6946,7 @@
         render();
       } catch (error) { feedback.textContent = error.message.includes("403") ? "Импорт доступен только администратору backend." : `JSON не импортирован: ${error.message}`; }
     });
-    $$('[data-mood]').forEach((button) => button.addEventListener("click", () => { state.mood = button.dataset.mood; persistAndRender(); }));
+    $$('[data-mood]').forEach((button) => button.addEventListener("click", () => { selectMood(button.dataset.mood); }));
     $$('[data-favorite]').forEach((button) => button.addEventListener("click", () => { const id = button.dataset.favorite; state.favorites = state.favorites.includes(id) ? state.favorites.filter((item) => item !== id) : [...state.favorites, id]; saveState(); renderDetails(id); }));
     $$('[data-watchlist]').forEach((button) => button.addEventListener("click", () => { const id = button.dataset.watchlist; state.watchlist = state.watchlist.includes(id) ? state.watchlist.filter((item) => item !== id) : [...state.watchlist, id]; saveState(); renderDetails(id); }));
     $$('[data-season]').forEach((button) => button.addEventListener("click", () => switchSeason(button.dataset.season)));
