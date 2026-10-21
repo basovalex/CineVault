@@ -290,10 +290,14 @@ fun TvEmbedPlayer(request: PlayRequest) {
     val rootFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
 
-    LaunchedEffect(Unit) { delay(100); runCatching { rootFocus.requestFocus() } }
+    // Focus has to land somewhere in this tree, or the remote's keys go nowhere. With the controls up it belongs
+    // on their first button: a request for the root as well would take it back from there.
+    LaunchedEffect(Unit) { delay(100); if (!controls) runCatching { rootFocus.requestFocus() } }
     LaunchedEffect(osd) { if (osd.isNotEmpty()) { delay(1_100); osd = "" } }
     LaunchedEffect(controls) {
-        if (controls) { delay(60); runCatching { playFocus.requestFocus() } } else runCatching { rootFocus.requestFocus() }
+        if (controls) {
+            repeat(20) { delay(60); if (runCatching { playFocus.requestFocus() }.isSuccess) return@LaunchedEffect }
+        } else runCatching { rootFocus.requestFocus() }
     }
     // The controls step aside after a while of playing, unless a list is open or the film is paused.
     LaunchedEffect(controls, touched, panel, state?.paused) {
@@ -332,7 +336,20 @@ fun TvEmbedPlayer(request: PlayRequest) {
     val episode = state?.episode?.id?.toIntOrNull()
     LaunchedEffect(season, episode) { if (episode != null) CineStore.recordEpisode(request.title.id, season, episode, state?.translation?.name) }
 
-    fun seek(seconds: Int) { remote.send("seek:$seconds"); osd = if (seconds > 0) "+$seconds с" else "−${-seconds} с" }
+    // A held arrow repeats dozens of times a second, and each seek flushes the provider's buffers: sent one by
+    // one they can leave its sound and picture apart for the rest of the film. The presses add up and are
+    // carried out as a single seek once the keys settle.
+    var pendingSeek by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    LaunchedEffect(pendingSeek) {
+        if (pendingSeek == 0) return@LaunchedEffect
+        delay(250)
+        remote.send("seek:$pendingSeek")
+        pendingSeek = 0
+    }
+    fun seek(seconds: Int) {
+        pendingSeek += seconds
+        osd = if (pendingSeek >= 0) "+$pendingSeek с" else "−${-pendingSeek} с"
+    }
     fun toggle() { if (remote.state == null) remote.webView?.let(::tapCenter) else remote.send("toggle") }
     fun next() { remote.send("next"); osd = "Следующая серия" }
     fun prev() { remote.send("prev"); osd = "Предыдущая серия" }
