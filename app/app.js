@@ -5328,15 +5328,52 @@
     return `${personalMatch} ${moodMatch ? `Подходит под настроение: ${moodMatch}.` : ""}${rating ? ` Рейтинг в каталоге — ${rating.toFixed(1)}.` : ""}`.trim();
   }
 
-  function catalogSearchText(item) {
-    const tags = Array.isArray(item.tags) ? item.tags : [];
-    return [item.title, item.originalTitle, item.description, ...genresForItem(item), ...tags, ...(item.countries || []), ...(item.actors || []), ...(item.directors || [])].filter(Boolean).join(" ").toLocaleLowerCase("ru-RU");
+  // Search answers with titles, not with every card whose description contains the letters:
+  // "лед" must find «Лёд 2», not «Последний богатырь». Same rules as the server.
+  function searchWords(value) {
+    return String(value || "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е").match(/[\p{L}\p{N}]+/gu) || [];
   }
-
-  function searchMatches(query = state.query) {
-    const needle = String(query || "").trim().toLocaleLowerCase("ru-RU");
-    if (!needle) return [];
-    return sortDiscoveryItems(catalog.filter((item) => catalogSearchText(item).includes(needle)), "popular");
+  // 0 whole title, 1 starts with it, 2 whole words, 3 starts the title, 4 each word starts one,
+  // 5 inside a word (only when nothing better exists), null no match.
+  function titleTier(tokens, title) {
+    const words = searchWords(title);
+    if (!tokens.length || !words.length) return null;
+    const phrase = tokens.join(" ");
+    const text = words.join(" ");
+    if (text === phrase) return 0;
+    if (text.startsWith(`${phrase} `)) return 1;
+    if (` ${text} `.includes(` ${phrase} `)) return 2;
+    if (text.startsWith(phrase)) return 3;
+    if (tokens.every((token) => words.some((word) => word.startsWith(token)))) return 4;
+    if (tokens.every((token) => text.includes(token))) return 5;
+    return null;
+  }
+  function personMatches(tokens, names) {
+    return (names || []).some((name) => {
+      const words = searchWords(name);
+      return words.length && tokens.every((token) => words.some((word) => word.startsWith(token)));
+    });
+  }
+  function searchMatches(query = state.query, items = catalog) {
+    const tokens = searchWords(query);
+    if (!tokens.length) return [];
+    const scored = [];
+    items.forEach((item, position) => {
+      const tiers = [titleTier(tokens, item.title), titleTier(tokens, item.originalTitle)].filter((tier) => tier !== null);
+      if (tiers.length) scored.push({ item, tier: Math.min(...tiers), position });
+    });
+    let hits = scored;
+    if (hits.length && Math.min(...hits.map((entry) => entry.tier)) <= 4) hits = hits.filter((entry) => entry.tier <= 4);
+    if (!hits.length) {
+      // A person's name only when no title fits.
+      hits = items.map((item, position) => ({ item, tier: 6, position }))
+        .filter(({ item }) => personMatches(tokens, item.actors) || personMatches(tokens, item.directors));
+    }
+    const popular = sortDiscoveryItems(hits.map((entry) => entry.item), "popular");
+    const popularOrder = new Map(popular.map((item, index) => [item.id, index]));
+    hits.sort((a, b) => a.tier - b.tier
+      || (a.tier <= 1 ? String(a.item.title).localeCompare(String(b.item.title), "ru") || (Number(a.item.year) || 0) - (Number(b.item.year) || 0) : popularOrder.get(a.item.id) - popularOrder.get(b.item.id)));
+    return hits.map((entry) => entry.item);
   }
 
   function discoveryShelf({ id, eyebrow, title, description, items }) {
@@ -5464,12 +5501,13 @@
 
   function filteredCatalog() {
     if (remoteCatalog.total) return catalog;
-    const query = String(state.query || "").trim().toLocaleLowerCase("ru-RU");
+    const query = String(state.query || "").trim();
+    const queryHits = query ? new Set(searchMatches(query).map((item) => item.id)) : null;
     const selectedGenre = normalizeCatalogGenre(state.catalogGenre);
     const items = catalog.filter((item) => {
       const tags = itemDiscoveryTags(item);
       const genres = genresForItem(item);
-      const queryOkay = !query || catalogSearchText(item).includes(query);
+      const queryOkay = !queryHits || queryHits.has(item.id);
       const genreOkay = !selectedGenre || genres.includes(selectedGenre);
       return catalogViewMatches(item) && matchesCollection(item) && queryOkay && genreOkay;
     });

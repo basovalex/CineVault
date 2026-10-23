@@ -1352,7 +1352,10 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
         for value in raw_value.split(",")
         if value.strip()
     }
-    query = str(params.get("search", [""])[0]).strip().casefold()
+    from tools.catalog_index import person_matches, search_words, title_tier
+
+    search_tokens = search_words(params.get("search", [""])[0])
+    query = " ".join(search_tokens)
     genre = str(params.get("genre", [""])[0]).strip().casefold()
     kind = str(params.get("type", params.get("kind", [""]))[0]).strip().casefold()
     collection = str(params.get("collection", [""])[0]).strip().casefold()
@@ -1385,8 +1388,6 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
         if requested_ids and str(item.get("id", "")) not in requested_ids:
             return False
         if kind and str(item.get("kind", "")).casefold() != kind:
-            return False
-        if query and query not in text(item):
             return False
         if genre and genre not in genres(item):
             return False
@@ -1421,6 +1422,20 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
         return True
 
     filtered = [item for item in items if matches(item)]
+    if search_tokens:
+        # Same rules as the SQLite index: titles first, a person's name only when no title fits.
+        scored = []
+        for position, item in enumerate(filtered):
+            tiers = [tier for tier in (title_tier(search_tokens, item.get("title")), title_tier(search_tokens, item.get("originalTitle"))) if tier is not None]
+            if tiers:
+                scored.append((min(tiers), position, item))
+        if scored and min(entry[0] for entry in scored) <= 4:
+            scored = [entry for entry in scored if entry[0] <= 4]
+        if not scored:
+            scored = [(6, position, item) for position, item in enumerate(filtered)
+                      if person_matches(search_tokens, item.get("actors")) or person_matches(search_tokens, item.get("directors"))]
+        scored.sort(key=lambda entry: (entry[0], entry[1]))
+        filtered = [entry[2] for entry in scored]
     def unverified(item: Dict[str, Any]) -> bool:
         return item.get("playbackVerified") is False
     def rating(item: Dict[str, Any]) -> float:
@@ -1435,7 +1450,9 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
             return int(item.get("popularRank") or 0) or 10 ** 9
         except (TypeError, ValueError):
             return 10 ** 9
-    if sort in {"popular", "trending"}:
+    if search_tokens:
+        pass  # already in order of how well each title answers the query
+    elif sort in {"popular", "trending"}:
         filtered.sort(key=lambda item: (-popular_rank(item), votes(item), rating(item), bool(query) or not unverified(item), year(item)), reverse=True)
     elif sort == "votes":
         filtered.sort(key=lambda item: (bool(query) or not unverified(item), votes(item), rating(item), year(item)), reverse=True)

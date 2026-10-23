@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 import threading
@@ -63,6 +64,60 @@ def confidence_rating(item: Dict[str, Any]) -> float:
 def item_genres(item: Dict[str, Any]) -> list[str]:
     values = item.get("genres") if isinstance(item.get("genres"), list) else item.get("tags", [])
     return sorted({str(value).strip().casefold() for value in values or [] if str(value).strip()})
+
+
+# -- title search ----------------------------------------------------------
+# A query is matched against titles, not against descriptions or genres: "лед"
+# must find «Лёд 2», not every card whose description says "последний".
+
+_WORDS = re.compile(r"\w+")
+_LATIN = re.compile(r"[a-z]")
+
+
+def search_words(value: Any) -> list[str]:
+    """Lower-cased words of a title or query; ё is е and punctuation is a separator."""
+    return _WORDS.findall(str(value or "").casefold().replace("ё", "е"))
+
+
+def title_tier(tokens: list[str], title: Any) -> Optional[int]:
+    """How well a title answers the query, smaller is better; None when it does not.
+
+    0 the whole title        «Лёд»
+    1 title starts with it   «Лёд 2», «Лёд. Продолжение»
+    2 it is whole words      «Золотой лёд»
+    3 it starts the title    «Ледниковый период»
+    4 each word starts one   «Мой лёгкий лёд» for "лег ле"
+    5 inside a word          «Последний» for "лед" (used only when nothing better exists)
+    """
+    words = search_words(title)
+    if not tokens or not words:
+        return None
+    phrase = " ".join(tokens)
+    text = " ".join(words)
+    if text == phrase:
+        return 0
+    if text.startswith(phrase + " "):
+        return 1
+    if (" " + phrase + " ") in (" " + text + " "):
+        return 2
+    if text.startswith(phrase):
+        return 3
+    if all(any(word.startswith(token) for word in words) for token in tokens):
+        return 4
+    if all(token in text for token in tokens):
+        return 5
+    return None
+
+
+def person_matches(tokens: list[str], names: Any) -> bool:
+    """True when every query word starts a word of one actor's or director's name."""
+    if not isinstance(names, list):
+        return False
+    for name in names:
+        words = search_words(name)
+        if words and all(any(word.startswith(token) for word in words) for token in tokens):
+            return True
+    return False
 
 
 def search_text(item: Dict[str, Any]) -> str:
@@ -360,7 +415,7 @@ class CatalogIndex:
 
     def page(self, params: Dict[str, list[str]], visibility: Optional[tuple]) -> Dict[str, Any]:
         requested_ids = [value.strip() for raw in params.get("ids", []) for value in raw.split(",") if value.strip()]
-        query = str(params.get("search", [""])[0]).strip().casefold().replace("ё", "е")
+        tokens = search_words(params.get("search", [""])[0])
         genre = str(params.get("genre", [""])[0]).strip().casefold()
         kind = str(params.get("type", params.get("kind", [""]))[0]).strip().casefold()
         collection = str(params.get("collection", [""])[0]).strip().casefold()
@@ -376,12 +431,14 @@ class CatalogIndex:
         if kind:
             where.append("lower(c.kind) = ?")
             args.append(kind)
-        if len(query) >= 3:
-            where.append("c.id IN (SELECT id FROM card_search WHERE text MATCH ?)")
-            args.append('"{}"'.format(query.replace('"', '""')))
-        elif query:
-            where.append("instr(c.search_text, ?) > 0")
-            args.append(query)
+        # The trigram index only narrows the candidates quickly; titles decide below.
+        for token in tokens:
+            if len(token) >= 3:
+                where.append("c.id IN (SELECT id FROM card_search WHERE text MATCH ?)")
+                args.append('"{}"'.format(token.replace('"', '""')))
+        if tokens and all(len(token) < 3 for token in tokens):
+            where.append("instr(replace(c.title_sort, 'ё', 'е'), ?) > 0")
+            args.append(tokens[0])
         if genre:
             where.append("EXISTS (SELECT 1 FROM card_genres g WHERE g.card_id = c.id AND g.genre = ?)")
             args.append(genre)
@@ -409,7 +466,7 @@ class CatalogIndex:
         elif collection == "together":
             where.append(any_genre(TOGETHER_GENRES))
 
-        verified_first = "" if query else "verified DESC, "
+        verified_first = "" if tokens else "verified DESC, "
         rank = "COALESCE(c.popular_rank, 1000000000)"
         order = {
             "popular": f"{rank} ASC, c.votes DESC, c.confidence DESC, {verified_first}c.year DESC",
@@ -433,6 +490,19 @@ class CatalogIndex:
         with self._lock:
             db = self._connection()
             self._load_sets(db, visibility)
+            if tokens:
+                ranked = self._ranked_ids(db, clause, args, order, tokens)
+                total = len(ranked)
+                pages = max(1, (total + limit - 1) // limit)
+                page = min(page, pages)
+                wanted = ranked[(page - 1) * limit: page * limit]
+                found = {
+                    row["id"]: row for row in db.execute(
+                        f"SELECT c.id, c.source, c.summary_json, {self.VERIFIED} AS verified FROM cards c "
+                        f"WHERE c.id IN ({','.join('?' * len(wanted))})", wanted) if wanted
+                }
+                items = [self._summary(found[identifier]) for identifier in wanted if identifier in found]
+                return {"items": items, "page": page, "limit": limit, "total": total, "pages": pages}
             total = db.execute(f"SELECT COUNT(*) FROM cards c WHERE {clause}", args).fetchone()[0]
             pages = max(1, (total + limit - 1) // limit)
             page = min(page, pages)
@@ -442,6 +512,48 @@ class CatalogIndex:
             ).fetchall()
             items = [self._summary(row) for row in rows]
         return {"items": items, "page": page, "limit": limit, "total": total, "pages": pages}
+
+    # A person's name is a last resort, and only while it stays cheap to check.
+    PEOPLE_CANDIDATE_LIMIT = 4000
+
+    def _ranked_ids(self, db: sqlite3.Connection, clause: str, args: list, order: str, tokens: list[str]) -> list[str]:
+        """Ids answering a text query, best title first; ties keep the requested sort order."""
+        latin = bool(_LATIN.search(" ".join(tokens)))
+        original = ", json_extract(c.summary_json, '$.originalTitle')" if latin else ", NULL"
+        rows = db.execute(
+            f"SELECT c.id, c.title_sort, c.year{original} FROM cards c WHERE {clause} ORDER BY {order}, c.rowid", args).fetchall()
+        scored = []
+        for position, (identifier, title, year, original_title) in enumerate(rows):
+            tiers = [tier for tier in (title_tier(tokens, title), title_tier(tokens, original_title) if latin else None) if tier is not None]
+            if tiers:
+                scored.append((min(tiers), position, str(title or ""), year or 0, identifier))
+        if scored:
+            best = min(entry[0] for entry in scored)
+            if best <= 4:  # a match inside a word only counts when no title has the word itself
+                scored = [entry for entry in scored if entry[0] <= 4]
+            # Franchises read in order: «Лёд», «Лёд 2», «Лёд 3».
+            scored.sort(key=lambda entry: (entry[0], entry[2], entry[3]) if entry[0] <= 1 else (entry[0], entry[1]))
+            return [entry[4] for entry in scored]
+        if len(rows) > self.PEOPLE_CANDIDATE_LIMIT:
+            return []
+        ids = [row[0] for row in rows]
+        people = []
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            people += db.execute(
+                "SELECT c.id, json_extract(c.summary_json, '$.actors'), json_extract(c.summary_json, '$.directors') "
+                f"FROM cards c WHERE c.id IN ({','.join('?' * len(chunk))})", chunk).fetchall()
+        matched = set()
+        for identifier, actors, directors in people:
+            for names in (actors, directors):
+                try:
+                    names = json.loads(names) if isinstance(names, str) else names
+                except ValueError:
+                    continue
+                if person_matches(tokens, names):
+                    matched.add(identifier)
+                    break
+        return [identifier for identifier in ids if identifier in matched]
 
     def facets(self, visibility: Optional[tuple], kind: str = "") -> Dict[str, Any]:
         where = self.VISIBLE + (" AND c.kind = ?" if kind else "")
