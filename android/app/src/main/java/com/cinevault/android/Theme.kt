@@ -231,9 +231,9 @@ fun TitleLogo(title: CatalogTitle, maxWidth: Dp = 250.dp, maxHeight: Dp = 76.dp,
 
 /** "★ 8.0 · IMDb 8.1 · 2026 · фантастика · 2 ч 25 мин" */
 @Composable
-fun MetaLine(title: CatalogTitle, withAge: Boolean = false) {
+fun MetaLine(title: CatalogTitle, withAge: Boolean = false, size: Int = 14) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-        if (title.rating > 0) Text("★ " + String.format("%.1f", title.rating), color = Cine.Rating, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        if (title.rating > 0) Text("★ " + String.format("%.1f", title.rating), color = Cine.Rating, fontSize = size.sp, fontWeight = FontWeight.SemiBold)
         val parts = listOfNotNull(
             title.imdbRating.takeIf { it > 0 }?.let { "IMDb " + String.format("%.1f", it) },
             title.year.takeIf { it > 0 }?.toString(),
@@ -241,10 +241,10 @@ fun MetaLine(title: CatalogTitle, withAge: Boolean = false) {
             if (title.isSeries) title.seasons.size.takeIf { it > 0 }?.let { "$it сез." }
             else title.runtime.takeIf { it > 0 }?.let { if (it >= 60) "${it / 60} ч ${it % 60} мин" else "$it мин" },
         )
-        Text(parts.joinToString(" · "), color = Cine.TextSoft, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Text(parts.joinToString(" · "), color = Cine.TextSoft, fontSize = size.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
         if (withAge && title.ageRating.isNotBlank()) {
             Text(
-                title.ageRating.let { if (it.endsWith("+")) it else "$it+" }, color = Color.White, fontSize = 12.sp,
+                title.ageRating.let { if (it.endsWith("+")) it else "$it+" }, color = Color.White, fontSize = (size - 2).sp,
                 modifier = Modifier.border(BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
             )
         }

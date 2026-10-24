@@ -239,7 +239,7 @@ fun PlayerScreen(request: PlayRequest, onBack: () -> Unit, tvMode: Boolean = fal
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     request.embedUrl != null -> if (tvMode) TvEmbedPlayer(request) else EmbedWebPlayer(request.embedUrl, onTouch = onTouch)
-                    request.source != null -> NativeVideoPlayer(request.title, request.source, tvMode)
+                    request.source != null -> NativeVideoPlayer(request.title, request.source, tvMode, request.quality)
                 }
             }
             if (!landscape && !tvMode && request.hint.isNotBlank()) {
@@ -272,11 +272,13 @@ private val emulatorSafeCodecs = MediaCodecSelector { mimeType, requiresSecureDe
  * server (the old one may have expired); if that does not help either, a retry button takes over.
  */
 @Composable
-fun NativeVideoPlayer(title: CatalogTitle, source: PlaybackSource, tvMode: Boolean = false) {
+fun NativeVideoPlayer(title: CatalogTitle, source: PlaybackSource, tvMode: Boolean = false, quality: String? = null) {
     val context = LocalContext.current
     var current by remember(source.url) { mutableStateOf(source) }
     var failure by remember(source.url) { mutableStateOf<String?>(null) }
     var refreshed by remember(source.url) { mutableStateOf(false) }
+    // While a fresh link is on its way the first error is not the last word: no error box meanwhile.
+    var refreshing by remember(source.url) { mutableStateOf(false) }
     var attempt by remember(source.url) { mutableIntStateOf(0) }
     val retryFocus = remember { FocusRequester() }
     val player = remember(current.url, attempt) {
@@ -289,6 +291,12 @@ fun NativeVideoPlayer(title: CatalogTitle, source: PlaybackSource, tvMode: Boole
         val itemBuilder = MediaItem.Builder().setUri(current.url)
         if (current.type.contains("hls", ignoreCase = true) || current.url.substringBefore('?').endsWith(".m3u8", true)) {
             itemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
+        }
+        // A chosen rung ("1080") holds the stream to frames that wide; one it lacks gives the nearest it has.
+        val width = mapOf("2160" to 3840, "1440" to 2560, "1080" to 1920, "720" to 1280, "480" to 854, "360" to 640)[quality]
+        if (width != null) {
+            exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                .setMaxVideoSize(width + 64, Int.MAX_VALUE).setMinVideoSize((width * 0.85).toInt(), 0).build()
         }
         exo.setMediaItem(itemBuilder.build())
         exo.prepare()
@@ -307,8 +315,10 @@ fun NativeVideoPlayer(title: CatalogTitle, source: PlaybackSource, tvMode: Boole
         val kinopoiskId = title.kinopoiskId
         if (!refreshed && kinopoiskId != null && current.url.startsWith("http")) {
             refreshed = true
+            refreshing = true
             val fresh = runCatching { CineVaultApi.refreshPlayback(kinopoiskId, force = true) }.getOrNull()
                 ?.sources?.filter { !it.isEmbed }.orEmpty()
+            refreshing = false
             val replacement = fresh.firstOrNull { it.id == current.id }
                 ?: fresh.firstOrNull { it.voice == current.voice && it.quality == current.quality } ?: fresh.firstOrNull()
             if (replacement != null) { current = replacement; failure = null; return@LaunchedEffect }
@@ -335,7 +345,8 @@ fun NativeVideoPlayer(title: CatalogTitle, source: PlaybackSource, tvMode: Boole
             },
             update = { it.player = player },
         )
-        if (failure != null && (refreshed || title.kinopoiskId == null || !current.url.startsWith("http"))) {
+        if (refreshing) CircularProgressIndicator(color = Cine.Accent, modifier = Modifier.align(Alignment.Center))
+        else if (failure != null && (refreshed || title.kinopoiskId == null || !current.url.startsWith("http"))) {
             Column(
                 Modifier.align(Alignment.Center).padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -372,6 +383,9 @@ fun EmbedWebPlayer(url: String, tvMode: Boolean = false, onTouch: () -> Unit = {
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
                 val container = FrameLayout(viewContext)
+                // Inspecting a provider's page (chrome://inspect) is switched on from a computer only:
+                // adb shell setprop log.tag.PlayerWeb DEBUG
+                if (BuildConfig.DEBUG || android.util.Log.isLoggable("PlayerWeb", android.util.Log.DEBUG)) WebView.setWebContentsDebuggingEnabled(true)
                 val webView = WebView(viewContext).apply {
                     isFocusable = !tvMode
                     isFocusableInTouchMode = !tvMode

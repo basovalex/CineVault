@@ -160,6 +160,31 @@ internal const val TV_REMOTE_JS = """
   if (window.__cvRemote || !window.cvRemote) return;
   window.__cvRemote = true;
   var channel = window.cvRemote;
+  var provider = typeof location !== 'undefined' && /(^|\.)stravers\.live${'$'}/.test(location.hostname);
+  // The provider's own controls would flash up before the app's take over: they are hidden from the first
+  // frame. What the app presses for the viewer (intro skip) is hidden too but stays in the page, clickable.
+  function chrome() {
+    if (document.getElementById('cv-tv-chrome')) return;
+    var root = document.head || document.documentElement;
+    if (!root) return;
+    var style = document.createElement('style'); style.id = 'cv-tv-chrome';
+    // Alloha's controls and selects; PlayerJS (Turbo): everything over the video but its ad frame.
+    style.textContent = '.allplay__controls,.selects,.allplay__control--overlaid,#oframeplayer>pjsdiv:not(:has(video)),[data-cv-hidden]{opacity:0!important;pointer-events:none!important}';
+    root.appendChild(style);
+  }
+  function outer(node) {
+    var label = text(node);
+    while (node.parentElement && text(node.parentElement) === label) node = node.parentElement;
+    return node;
+  }
+  function hide(node) { if (node && node.setAttribute && !node.hasAttribute('data-cv-hidden')) node.setAttribute('data-cv-hidden', ''); }
+  // Harmless where none of those exist, so it goes in before any of them can show.
+  chrome();
+  // A stream's rungs by their width, since films wider than 16:9 are shorter than their name says (1920×800 is "1080").
+  function rung(level) {
+    var w = level.width || 0, h = level.height || 0;
+    return String(w >= 3200 || h >= 2000 ? 2160 : w >= 2300 || h >= 1300 ? 1440 : w >= 1700 || h >= 1000 ? 1080 : w >= 1100 || h >= 700 ? 720 : w >= 800 || h >= 460 ? 480 : 360);
+  }
   function video() {
     var p = allplay();
     if (p && p.media && p.media.tagName === 'VIDEO') return p.media;
@@ -171,6 +196,67 @@ internal const val TV_REMOTE_JS = """
     return best;
   }
   function allplay() { return window.player && document.getElementById('allplay') ? window.player : null; }
+  // PlayerJS (Turbo and others): its API takes a playlist id "xxx-season-episode-voice"; the tree itself
+  // only lives in the page's encoded config, read once here.
+  function pjs() { var g = window.pljssglobal; return g && g[0] && typeof g[0].api === 'function' ? g[0] : null; }
+  var pjsTree = null;
+  function pjsPlaylist() {
+    if (pjsTree) return pjsTree;
+    var scripts = document.scripts || [], encoded = null;
+    for (var i = 0; i < scripts.length && !encoded; i++) {
+      var m = /new Player(?:js)?\(\s*["']([^"']{200,})["']/.exec(scripts[i].text || '');
+      if (m) encoded = m[1];
+    }
+    if (!encoded) return null;
+    var clean = encoded.replace(/\/\/[A-Za-z0-9+\/]{7}=/g, '');
+    for (var skip = 0; skip < 160 && !pjsTree; skip++) {
+      try {
+        var raw = atob(clean.slice(skip).replace(/[^A-Za-z0-9+\/=]/g, '')), at = raw.indexOf('{"');
+        if (at < 0 || at > 4) continue;
+        var json = JSON.parse(decodeURIComponent(escape(raw.slice(at))));
+        if (json && json.file && json.file.length !== undefined) pjsTree = json.file;
+      } catch (e) {}
+    }
+    return pjsTree;
+  }
+  function pjsValue(label) { return /auto/i.test(label) ? 'auto' : String(parseInt(label, 10) || label); }
+  function pjsState(p, s) {
+    var call = function (name) { try { return p.api(name); } catch (e) { return null; } };
+    var now = String(call('quality') || '');
+    s.qualities = (call('qualities') || []).map(pjsValue);
+    s.quality = now ? pjsValue(now) : '';
+    s.seasons = []; s.episodes = []; s.translations = [];
+    var id = String(call('playlist_id') || ''), parts = id.split('-'), prefix = parts.shift(), path = parts.map(Number);
+    var tree = pjsPlaylist();
+    if (!tree || !path.length) return;
+    var chosen = [];
+    // The playlist id for picking item [index] at [depth]: the rest of the current path is kept where it still
+    // exists (the same voice in the next episode, by name), else it starts at the first item.
+    function target(depth, index) {
+      var ids = path.slice(0, depth).concat([index]), node = null;
+      for (var k = 0; k < ids.length; k++) node = k ? (node && node.folder ? node.folder[ids[k]] : null) : tree[ids[k]];
+      for (var r = depth + 1; r < path.length && node && node.folder; r++) {
+        var keep = 0;
+        for (var q = 0; q < node.folder.length; q++) if (node.folder[q].title === chosen[r]) { keep = q; break; }
+        ids.push(keep); node = node.folder[keep];
+      }
+      return 'pjs:' + prefix + '-' + ids.join('-');
+    }
+    var level = tree;
+    for (var d = 0; d < path.length && level; d++) { chosen[d] = level[path[d]] ? level[path[d]].title : ''; level = level[path[d]] ? level[path[d]].folder : null; }
+    // Every level of the current path is offered, named by what its items' titles say they are.
+    level = tree;
+    for (d = 0; d < path.length && level; d++) {
+      var first = (level[0] || {}).title || '';
+      var kind = /season|сезон/i.test(first) ? 'seasons' : /episode|серия|эпизод/i.test(first) ? 'episodes' : 'translations';
+      s[kind] = level.map(function (item, index) { return {id: target(d, index), name: item.title, active: index === path[d]}; });
+      level = level[path[d]] ? level[path[d]].folder : null;
+    }
+    var eps = s.episodes, at = -1;
+    for (var e = 0; e < eps.length; e++) if (eps[e].active) at = e;
+    s.hasNext = at >= 0 && at < eps.length - 1; s.hasPrev = at > 0;
+    s.pjsNext = s.hasNext ? eps[at + 1].id : ''; s.pjsPrev = s.hasPrev ? eps[at - 1].id : '';
+  }
   function text(node) { return ((node && (node.innerText || node.textContent)) || '').trim(); }
   function visible(node) { var box = node.getBoundingClientRect(); return box.width > 0 && box.height > 0; }
   function items(name) {
@@ -201,13 +287,21 @@ internal const val TV_REMOTE_JS = """
     if (!v && !p) return null;
     var s = {alloha: !!p, time: v ? v.currentTime : 0, duration: v && isFinite(v.duration) ? v.duration : 0, paused: v ? v.paused : true};
     if (p) {
-      try { s.quality = p.hls && p.hls.autoLevelEnabled ? 'auto' : String(p.quality || ''); } catch (e) { s.quality = ''; }
+      var levels = p.hls && p.hls.levels ? p.hls.levels : [];
+      try {
+        var level = levels[p.hls ? p.hls.currentLevel : -1];
+        s.quality = p.hls && p.hls.autoLevelEnabled ? 'auto' : level ? rung(level) : String(p.quality || '');
+      } catch (e) { s.quality = ''; }
+      // The provider's own list, plus any rung the stream carries that the list leaves out.
       s.qualities = [].map.call(document.querySelectorAll('[data-allplay=quality]'), function (b) { return b.value; });
+      for (var i = 0; i < levels.length; i++) { var r = rung(levels[i]); if (s.qualities.indexOf(r) < 0) s.qualities.push(r); }
+      s.qualities.sort(function (a, b) { return Number(b) - Number(a); });
       if (p.hls) s.qualities.unshift('auto');
       s.seasons = items('season'); s.episodes = items('episode'); s.translations = items('translation');
       s.hasNext = !!button('next'); s.hasPrev = !!button('prev');
-    }
+    } else if (pjs()) pjsState(pjs(), s);
     var skip = skipButton();
+    if (skip && provider) hide(outer(skip));
     s.skip = skip ? text(skip) : '';
     s.failed = !!find(/^перезагрузить плеер$/, 1);
     return s;
@@ -217,12 +311,7 @@ internal const val TV_REMOTE_JS = """
     // Watching was explicitly requested in the app; Alloha's resume popup must not block the remote.
     var resume = find(/^продолжить просмотр$/, 2);
     if (resume) resume.click();
-    if (s && s.alloha && !document.getElementById('cv-tv-chrome')) {
-      var style = document.createElement('style'); style.id = 'cv-tv-chrome';
-      // Keep the controls in the DOM for the bridge; only the app's remote-friendly panel is visible.
-      style.textContent = '.allplay__controls,.selects,.allplay__control--overlaid{opacity:0!important;pointer-events:none!important}';
-      (document.head || document.documentElement).appendChild(style);
-    }
+    if (s && s.alloha) chrome();
     if (s) { try { channel.postMessage(JSON.stringify(s)); } catch (e) {} }
   }
   function pick(name, id) {
@@ -244,11 +333,24 @@ internal const val TV_REMOTE_JS = """
     if (name === 'toggle') { if (p) quiet(p.togglePlay()); else if (v) { if (v.paused) quiet(v.play()); else v.pause(); } }
     else if (name === 'seek' && v) { var to = v.currentTime + Number(arg); v.currentTime = Math.max(0, v.duration ? Math.min(v.duration - 1, to) : to); }
     else if (name === 'seekto' && v && v.duration) { v.currentTime = Math.max(0, Math.min(v.duration - 1, Number(arg) * v.duration)); }
+    else if ((name === 'next' || name === 'prev') && !p && pjs()) {
+      var now = {}; pjsState(pjs(), now);
+      var to = name === 'next' ? now.pjsNext : now.pjsPrev;
+      if (to) pjs().api('find', to.slice(4));
+    }
     else if (name === 'next' || name === 'prev') { var b = button(name); if (b) b.click(); }
+    else if (name === 'quality' && !p && pjs()) {
+      var labels = pjs().api('qualities') || [];
+      for (var n = 0; n < labels.length; n++) if (pjsValue(labels[n]) === arg) { pjs().api('quality', n); break; }
+    }
+    else if ((name === 'season' || name === 'episode' || name === 'translation') && arg.indexOf('pjs:') === 0) { if (pjs()) pjs().api('find', arg.slice(4)); }
     else if (name === 'quality' && (arg === 'auto' || arg === '') && p && p.hls) { p.hls.currentLevel = -1; }
     else if (name === 'quality') {
-      var q = document.querySelector('[data-allplay=quality][value="' + arg + '"]');
-      if (q) q.click(); else if (p) { try { p.quality = Number(arg); } catch (e) {} }
+      var q = document.querySelector('[data-allplay=quality][value="' + arg + '"]'), found = -1, all = p && p.hls && p.hls.levels ? p.hls.levels : [];
+      for (var k = 0; k < all.length; k++) if (rung(all[k]) === arg && (found < 0 || (all[k].bitrate || 0) > (all[found].bitrate || 0))) found = k;
+      if (q) q.click();
+      else if (found >= 0) p.hls.currentLevel = found;
+      else if (p) { try { p.quality = Number(arg); } catch (e) {} }
     }
     else if (name === 'season' || name === 'episode' || name === 'translation') pick(name, arg);
     else if (name === 'skip') { var s = skipButton(); if (s) s.click(); }
@@ -265,7 +367,21 @@ private fun clock(seconds: Double): String {
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
 }
 
-private fun qualityLabel(value: String) = if (value == "auto" || value.isBlank()) "Авто" else if (value.toIntOrNull() != null) "${value}p" else value
+internal fun qualityLabel(value: String) = when {
+    value == "auto" || value.isBlank() -> "Авто"
+    value == "2160" -> "4K"
+    value == "1440" -> "2K"
+    value.toIntOrNull() != null -> "${value}p"
+    else -> value
+}
+
+/** The stream's own rung for a wish: the one asked for, else the best below it, else the lowest there is. */
+internal fun closestQuality(wanted: String, available: List<String>): String? {
+    if (wanted == "auto") return "auto".takeIf { it in available }
+    val rungs = available.mapNotNull { it.toIntOrNull() }
+    val target = wanted.toIntOrNull() ?: return null
+    return (rungs.filter { it <= target }.maxOrNull() ?: rungs.minOrNull())?.toString()
+}
 
 private enum class TvPanel { SEASON, EPISODE, VOICE, QUALITY }
 
@@ -322,8 +438,10 @@ fun TvEmbedPlayer(request: PlayRequest) {
         }
         val quality = request.quality
         if (quality != null) {
-            withTimeoutOrNull(30_000) { snapshotFlow { remote.state }.first { (it?.duration ?: 0.0) > 0 && it?.qualities?.contains(quality) == true } }
-            if (remote.state?.quality != quality) remote.send("quality:$quality")
+            val listed = withTimeoutOrNull(30_000) { snapshotFlow { remote.state }.first { (it?.duration ?: 0.0) > 0 && it?.qualities?.isNotEmpty() == true } }
+            val chosen = listed?.let { closestQuality(quality, it.qualities) }
+            if (chosen != null && remote.state?.quality != chosen) remote.send("quality:$chosen")
+            if (chosen != null && chosen != quality) osd = "${qualityLabel(quality)} нет — включаю ${qualityLabel(chosen)}"
         }
     }
     // Alloha's "Упс. Ошибка!" asks for its own reload button, out of a remote's reach: press it, twice at most.
@@ -414,14 +532,14 @@ fun TvEmbedPlayer(request: PlayRequest) {
                         TvButton(if (state?.paused == false) "Пауза" else "Смотреть", true, { toggle() }, playFocus, icon = if (state?.paused == false) Icons.Default.Pause else Icons.Default.PlayArrow)
                         TvButton("10 с", false, { seek(-10) }, icon = Icons.Default.FastRewind)
                         TvButton("10 с", false, { seek(10) }, icon = Icons.Default.FastForward)
-                        if (state?.alloha == true && state.episodes.isNotEmpty()) {
+                        if (state != null && state.episodes.isNotEmpty()) {
                             if (state.hasPrev) TvButton("Пред.", false, { prev() }, icon = Icons.Default.SkipPrevious)
                             if (state.hasNext) TvButton("След. серия", false, { next() }, icon = Icons.Default.SkipNext)
                             if (state.seasons.size > 1) TvButton(state.season?.name ?: "Сезон", false, { panel = TvPanel.SEASON }, icon = Icons.Default.VideoLibrary)
                             TvButton(state.episode?.name ?: "Серия", false, { panel = TvPanel.EPISODE }, icon = Icons.Default.ViewList)
                         }
-                        if (state?.alloha == true && state.translations.size > 1) TvButton("Озвучка", false, { panel = TvPanel.VOICE }, icon = Icons.Default.ClosedCaption)
-                        if (state?.alloha == true && state.qualities.isNotEmpty()) TvButton(qualityLabel(state.quality.takeIf { it.isNotBlank() && it != "0" } ?: "Качество"), false, { panel = TvPanel.QUALITY }, icon = Icons.Default.HighQuality)
+                        if (state != null && state.translations.size > 1) TvButton("Озвучка", false, { panel = TvPanel.VOICE }, icon = Icons.Default.ClosedCaption)
+                        if (state != null && state.qualities.isNotEmpty()) TvButton(qualityLabel(state.quality.takeIf { it.isNotBlank() && it != "0" } ?: "Качество"), false, { panel = TvPanel.QUALITY }, icon = Icons.Default.HighQuality)
                         if (state?.skip?.isNotEmpty() == true) TvButton("Пропустить", false, { skip() }, icon = Icons.Default.Redo)
                     }
                     Text("Стрелки — выбрать · OK — нажать · 0–9 — к 0–90% · ↓ — показать панель при просмотре · Назад — выйти", color = Cine.Muted, fontSize = 14.sp)
