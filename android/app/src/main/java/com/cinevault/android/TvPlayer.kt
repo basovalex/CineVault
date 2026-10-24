@@ -96,6 +96,14 @@ data class EmbedState(
     val skip: String,
     /** The provider's own "Упс. Ошибка!" box is on screen. */
     val failed: Boolean = false,
+    /** Alloha: the stream its page loaded, with the headers it asks for, and the page's address (the Referer). */
+    val stream: String = "",
+    val headers: Map<String, String> = emptyMap(),
+    val page: String = "",
+    /** Alloha: its intro and credits, "0-88,2355-2518". */
+    val skipTimes: String = "",
+    /** Media3: the subtitle tracks, "off" first. */
+    val subtitles: List<EmbedChoice> = emptyList(),
 ) {
     val season get() = seasons.firstOrNull { it.active }
     val episode get() = episodes.firstOrNull { it.active }
@@ -116,7 +124,8 @@ data class EmbedState(
                 seasons = json.optJSONArray("seasons").choices(), episodes = json.optJSONArray("episodes").choices(),
                 translations = json.optJSONArray("translations").choices(),
                 hasNext = json.optBoolean("hasNext"), hasPrev = json.optBoolean("hasPrev"), skip = json.optString("skip"),
-                failed = json.optBoolean("failed"),
+                failed = json.optBoolean("failed"), stream = json.optString("stream"), page = json.optString("page"), skipTimes = json.optString("skipTimes"),
+                headers = json.optJSONObject("headers")?.let { h -> h.keys().asSequence().associateWith { h.optString(it) } }.orEmpty(),
             )
         }.getOrNull()
     }
@@ -127,8 +136,8 @@ data class EmbedState(
  * [TV_REMOTE_JS]; the frame holding the film reports its state here and takes the commands.
  */
 @Stable
-class EmbedRemote {
-    var state by mutableStateOf<EmbedState?>(null)
+class EmbedRemote : TvPlayback {
+    override var state by mutableStateOf<EmbedState?>(null)
         private set
     var webView: WebView? = null
     private var active: JavaScriptReplyProxy? = null
@@ -151,7 +160,7 @@ class EmbedRemote {
         active = reply; activeSeen = now; state = next
     }
 
-    fun send(command: String) {
+    override fun send(command: String) {
         if (log) android.util.Log.d("PlayerWeb", "bridge -> $command (active=${active != null}, frames=${frames.size})")
         val target = active
         (if (target != null) listOf(target) else frames.toList()).forEach { runCatching { it.postMessage(command) } }
@@ -162,7 +171,7 @@ class EmbedRemote {
  * Runs inside every frame of an embedded player on TV. It reports the frame's video (and, in Alloha,
  * its seasons, episodes, voices and qualities) through the cvRemote channel, and carries out the
  * commands the TV controls send back: toggle, seek:±s, seekto:fraction, next, prev, quality:v,
- * season:id, episode:id, translation:id, skip.
+ * season:id, episode:id, translation:id, skip; native:1/0 as the app takes Alloha's stream over and gives it back.
  */
 internal const val TV_REMOTE_JS = """
 (function () {
@@ -170,6 +179,22 @@ internal const val TV_REMOTE_JS = """
   window.__cvRemote = true;
   var channel = window.cvRemote;
   var provider = typeof location !== 'undefined' && /(^|\.)stravers\.live${'$'}/.test(location.hostname);
+  // Alloha's hls.js adds headers of its own to each request of the stream: the app needs them to play it itself.
+  var heads = {}, native = !!window.__cvNative;
+  if (provider && window.XMLHttpRequest) {
+    var setHeader = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+      if (!/^(accept|content-type|range|cache-control|pragma)${'$'}/i.test(name)) heads[name] = String(value);
+      return setHeader.apply(this, arguments);
+    };
+  }
+  // While the app plays the stream, the page's own video stays paused and silent, and stops loading.
+  function hush() {
+    var v = video(), p = allplay();
+    if (v && !v.paused) { v.muted = true; v.pause(); }
+    if (p && p.hls && p.hls.levels && p.hls.levels.length && !p.hls.__cvStopped) { p.hls.__cvStopped = true; try { p.hls.stopLoad(); } catch (e) {} }
+  }
+  document.addEventListener('play', function (e) { if (native && e.target && e.target.tagName === 'VIDEO') { e.target.muted = true; e.target.pause(); } }, true);
   // The provider's own controls would flash up before the app's take over: they are hidden from the first
   // frame. What the app presses for the viewer (intro skip) is hidden too but stays in the page, clickable.
   function chrome() {
@@ -177,8 +202,8 @@ internal const val TV_REMOTE_JS = """
     var root = document.head || document.documentElement;
     if (!root) return;
     var style = document.createElement('style'); style.id = 'cv-tv-chrome';
-    // Alloha's controls and selects; PlayerJS (Turbo): everything over the video but its ad frame.
-    style.textContent = '.allplay__controls,.selects,.allplay__control--overlaid,#oframeplayer>pjsdiv:not(:has(video)),[data-cv-hidden]{opacity:0!important;pointer-events:none!important}';
+    // Alloha's controls and selects; PlayerJS (Turbo): everything over the video but its ad frame; Veoveo's (vidstack) controls and menus.
+    style.textContent = '.allplay__controls,.selects,.allplay__control--overlaid,#oframeplayer>pjsdiv:not(:has(video)),[data-testid^=player-controls],[data-testid^=player-content-contr],[data-testid^=player-settings],[data-testid=player-title],[data-cv-hidden]{opacity:0!important;pointer-events:none!important}';
     root.appendChild(style);
   }
   function outer(node) {
@@ -268,9 +293,12 @@ internal const val TV_REMOTE_JS = """
   }
   function text(node) { return ((node && (node.innerText || node.textContent)) || '').trim(); }
   function visible(node) { var box = node.getBoundingClientRect(); return box.width > 0 && box.height > 0; }
-  function items(name) {
-    return [].map.call(document.querySelectorAll('[data-select^=' + name + '] .select__drop-item'), function (b) {
-      return {id: b.getAttribute('data-id') || '', name: text(b), active: b.classList.contains('active')};
+  // A film's page has two selects starting with "translation": the voice (translationMovie) and the cut
+  // (translationMovieType, theatrical or director's), which stays as Alloha sets it.
+  function items(select) {
+    return [].map.call(document.querySelectorAll(select.split(',').map(function (s) { return s + ' .select__drop-item'; }).join(',')), function (b) {
+      // The first line is the name; a voice's item also carries its best quality ("4K") below it.
+      return {id: b.getAttribute('data-id') || '', name: text(b).split('\n')[0].trim(), active: b.classList.contains('active')};
     });
   }
   function find(pattern, maxChildren) {
@@ -289,6 +317,16 @@ internal const val TV_REMOTE_JS = """
     });
     return candidates[0] || null;
   }
+  // Players that go by their own Play button (vidstack in Veoveo): the stream loads only once it is pressed,
+  // and a video.play() behind their back is paused again at once.
+  function resume(v) { var b = starter(); if (b) b.click(); else if (v) quiet(v.play()); }
+  function starter() {
+    var list = document.querySelectorAll('button[aria-label], [role=button][aria-label]');
+    for (var i = 0; i < list.length; i++) if (/^(play|воспроизвести|смотреть)${'$'}/i.test(list[i].getAttribute('aria-label').trim()) && visible(list[i])) return list[i];
+    return null;
+  }
+  // Veoveo (vidstack) keeps its voices in its own settings menu; the one playing has its tick shown.
+  function vsVoices() { return document.querySelectorAll('[data-testid=player-settings-audio] button.group'); }
   function skipButton() { return find(/^(пропустить (заставку|титры|вступление|интро)|skip intro|skip recap)/, 2); }
   function button(name) { var b = document.querySelector('[data-allplay=' + name + ']'); return b && !b.classList.contains('disabled') && !b.disabled && visible(b) ? b : null; }
   function state() {
@@ -308,16 +346,28 @@ internal const val TV_REMOTE_JS = """
       for (var i = 0; i < levels.length; i++) { var r = rung(levels[i]); if (s.qualities.indexOf(r) < 0) s.qualities.push(r); }
       s.qualities.sort(function (a, b) { return Number(b) - Number(a); });
       if (p.hls && levels.length > 1) s.qualities.unshift('auto');
-      s.seasons = items('season'); s.episodes = items('episode'); s.translations = items('translation');
+      s.seasons = items('[data-select^=season]'); s.episodes = items('[data-select^=episode]'); s.translations = items(VOICES);
+      if (p.hls) { s.stream = p.hls.url || ''; s.headers = heads; s.page = location.href; }
+      // Where the intro and the credits are ("0-88,2355-2518"): its skip buttons only show while the page itself plays.
+      var config = p.config || p.options || {};
+      s.skipTimes = String(config.skipTime || '');
       s.hasNext = !!button('next'); s.hasPrev = !!button('prev');
     } else if (pjs()) pjsState(pjs(), s);
+    else if (vsVoices().length) {
+      s.translations = [].map.call(vsVoices(), function (b, i) {
+        var tick = b.lastElementChild;
+        return {id: 'vs:' + i, name: text(b.firstElementChild || b), active: !!tick && tick !== b.firstElementChild && getComputedStyle(tick).display !== 'none'};
+      });
+    }
     var skip = skipButton();
     if (skip && provider) hide(outer(skip));
     s.skip = skip ? text(skip) : '';
     s.failed = !!find(/^перезагрузить плеер$/, 1);
     return s;
   }
+  var VOICES = '[data-select=translation],[data-select=translationMovie]';
   function report() {
+    if (native) hush();
     var s = state();
     // Watching was explicitly requested in the app; Alloha's resume popup must not block the remote.
     var resume = find(/^продолжить просмотр$/, 2);
@@ -326,8 +376,14 @@ internal const val TV_REMOTE_JS = """
     if (s) { try { channel.postMessage(JSON.stringify(s)); } catch (e) {} }
   }
   function pick(name, id) {
-    var b = document.querySelector('[data-select^=' + name + '] .select__drop-item[data-id="' + id + '"]');
+    var b = document.querySelector((name === 'translation' ? VOICES : '[data-select^=' + name + ']').split(',').map(function (s) { return s + ' .select__drop-item[data-id="' + id + '"]'; }).join(','));
     if (b) b.click();
+  }
+  // PlayerJS opens another item paused: it goes on playing if the last one was.
+  function pjsFind(id, v) {
+    var playing = v && !v.paused;
+    pjs().api('find', id);
+    if (playing) setTimeout(function () { var now = video(); if (pjs() && (!now || now.paused)) try { pjs().api('play'); } catch (e) {} }, 1500);
   }
   function quiet(promise) { if (promise && promise.catch) promise.catch(function () {}); }
   setInterval(report, 1000);
@@ -341,22 +397,40 @@ internal const val TV_REMOTE_JS = """
     var command = String(event.data), at = command.indexOf(':');
     var name = at < 0 ? command : command.slice(0, at), arg = at < 0 ? '' : command.slice(at + 1);
     var v = video(), p = allplay();
-    if (name === 'toggle') { if (p) quiet(p.togglePlay()); else if (v) { if (v.paused) quiet(v.play()); else v.pause(); } }
-    else if (name === 'play') { if (p) { if (!v || v.paused) quiet(p.togglePlay()); } else if (pjs()) { try { pjs().api('play'); } catch (e) {} } else if (v && v.paused) quiet(v.play()); }
+    if (name === 'native') {
+      native = arg === '1';
+      if (native) hush();
+      else if (p) {
+        if (v) v.muted = false;
+        if (p.hls && p.hls.__cvStopped) { p.hls.__cvStopped = false; try { p.hls.startLoad(v ? v.currentTime : -1); } catch (e) {} }
+      }
+    }
+    else if (name === 'toggle') { if (p) quiet(p.togglePlay()); else if (!v || v.paused) resume(v); else v.pause(); }
+    else if (name === 'play') {
+      if (p) { if (!v || v.paused) quiet(p.togglePlay()); }
+      else if (pjs()) { try { pjs().api('play'); } catch (e) {} }
+      else if (!v || v.paused) resume(v);
+    }
     else if (name === 'seek' && v) { var to = v.currentTime + Number(arg); v.currentTime = Math.max(0, v.duration ? Math.min(v.duration - 1, to) : to); }
     else if (name === 'seekabs' && v) { v.currentTime = Math.max(0, Number(arg)); }
     else if (name === 'seekto' && v && v.duration) { v.currentTime = Math.max(0, Math.min(v.duration - 1, Number(arg) * v.duration)); }
     else if ((name === 'next' || name === 'prev') && !p && pjs()) {
       var now = {}; pjsState(pjs(), now);
       var to = name === 'next' ? now.pjsNext : now.pjsPrev;
-      if (to) pjs().api('find', to.slice(4));
+      if (to) pjsFind(to.slice(4), v);
     }
     else if (name === 'next' || name === 'prev') { var b = button(name); if (b) b.click(); }
     else if (name === 'quality' && !p && pjs()) {
       var labels = pjs().api('qualities') || [];
       for (var n = 0; n < labels.length; n++) if (pjsValue(labels[n]) === arg) { pjs().api('quality', n); break; }
     }
-    else if ((name === 'season' || name === 'episode' || name === 'translation') && arg.indexOf('pjs:') === 0) { if (pjs()) pjs().api('find', arg.slice(4)); }
+    else if (name === 'translation' && arg.indexOf('vs:') === 0) {
+      // Another voice reloads the stream, paused: it goes on playing if it was.
+      var vb = vsVoices()[Number(arg.slice(3))], playing = v && !v.paused;
+      if (vb) vb.click();
+      if (playing) setTimeout(function () { var now = video(); if (now && now.paused) resume(now); }, 1500);
+    }
+    else if ((name === 'season' || name === 'episode' || name === 'translation') && arg.indexOf('pjs:') === 0) { if (pjs()) pjsFind(arg.slice(4), v); }
     else if (name === 'quality' && (arg === 'auto' || arg === '') && p && p.hls) { p.hls.currentLevel = -1; }
     else if (name === 'quality') {
       var q = document.querySelector('[data-allplay=quality][value="' + arg + '"]'), found = -1, all = p && p.hls && p.hls.levels ? p.hls.levels : [];
@@ -380,6 +454,14 @@ private fun clock(seconds: Double): String {
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
 }
 
+private fun foreignVoice(name: String) = Regex("english|original|оригинал|субтитр|subtitle|украин|ukr", RegexOption.IGNORE_CASE).containsMatchIn(name)
+
+private fun dubRank(name: String) = when {
+    name.contains("дублир", ignoreCase = true) || name.contains("дубляж", ignoreCase = true) -> 0
+    name.contains("18+") -> 2
+    else -> 1
+}
+
 internal fun qualityLabel(value: String) = when {
     value == "auto" || value.isBlank() -> "Авто"
     value == "2160" -> "4K"
@@ -397,7 +479,7 @@ internal fun closestQuality(wanted: String, available: List<String>): String? {
 }
 
 /** What sits over the film instead of the bar: the episode strip at the bottom, or one list from the right. */
-private enum class TvPanel { EPISODES, VOICE, QUALITY }
+private enum class TvPanel { EPISODES, VOICE, QUALITY, SUBTITLES }
 
 /**
  * Whether this TV decodes AV1 in hardware. Alloha's 2K and 4K are AV1 (1080p and below are H.264): without such a
@@ -414,23 +496,36 @@ internal val hardwareAv1: Boolean by lazy {
 
 /** The qualities this TV can play smoothly. */
 internal fun playable(qualities: List<String>): List<String> = qualities.filter { hardwareAv1 || (it.toIntOrNull() ?: 0) <= 1080 }
+    .sortedByDescending { if (it == "auto") Int.MAX_VALUE else it.toIntOrNull() ?: 0 }
 
 /** The warm accent of the TV screens: progress, ticks, the brand. Focus stays white. */
 internal val TvGold = Color(0xFFE9B46A)
 
 /**
  * An embedded player on TV, with controls of the app's own on top: the provider's page is made for a
- * mouse, so everything a viewer needs from it is repeated here, shaped for a remote.
- *
- * Until the film's first frames a loading screen covers the provider's page, which jumps about meanwhile.
- * With the controls hidden: OK brings them up (on "Пропустить заставку" while an intro runs), left/right
- * wind ±10 s (held: ±30 s), 0–9 jump to that tenth of the film, the remote's ⏭/⏮ change the episode.
- * Back closes whatever is open; with nothing open it leaves the film.
+ * mouse, so everything a viewer needs from it is repeated here, shaped for a remote. Alloha's stream
+ * itself is played by Media3 ([TvAllohaPlayer]).
  */
 @Composable
 fun TvEmbedPlayer(request: PlayRequest) {
     val url = request.embedUrl ?: return
+    if (android.net.Uri.parse(url).host?.let { it == "stravers.live" || it.endsWith(".stravers.live") } == true) return TvAllohaPlayer(request, url)
     val remote = remember(url) { EmbedRemote() }
+    TvPlayerChrome(request, remote, webView = { remote.webView }) { EmbedWebPlayer(url, tvMode = true, remote = remote) }
+}
+
+/**
+ * The app's own controls over any player: a provider's page, Media3, or Alloha's stream in Media3.
+ *
+ * Until the film's first frames a loading screen covers the player, which jumps about meanwhile.
+ * With the controls hidden: OK brings them up (while an intro or credits run, it skips them), left/right
+ * wind ±10 s (held: ±30 s), 0–9 jump to that tenth of the film, the remote's ⏭/⏮ change the episode.
+ * With the controls up the focus is on the film's line: left/right move along it, OK pauses.
+ * Back closes whatever is open; with nothing open it leaves the film.
+ */
+@Composable
+internal fun TvPlayerChrome(request: PlayRequest, remote: TvPlayback, webView: () -> WebView? = { null }, content: @Composable () -> Unit) {
+    val url = request.embedUrl ?: request.source?.url.orEmpty()
     val state = remote.state
     var started by remember(url) { mutableStateOf(false) }
     var controls by remember { mutableStateOf(false) }
@@ -439,15 +534,16 @@ fun TvEmbedPlayer(request: PlayRequest) {
     var osd by remember { mutableStateOf("") }
     val rootFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
+    val timelineFocus = remember { FocusRequester() }
     val skipFocus = remember { FocusRequester() }
 
     LaunchedEffect(Unit) { delay(100); runCatching { rootFocus.requestFocus() } }
     LaunchedEffect(osd) { if (osd.isNotEmpty()) { delay(1_400); osd = "" } }
-    // With the controls up the focus is on "Пропустить заставку" while there is an intro to skip, else on pause.
+    // With the controls up the focus is on "Пропустить заставку" while there is an intro to skip, else on the line.
     LaunchedEffect(controls, panel) {
         if (panel != null) return@LaunchedEffect
         if (controls) {
-            val target = if (remote.state?.skip?.isNotEmpty() == true) skipFocus else playFocus
+            val target = if (remote.state?.skip?.isNotEmpty() == true) skipFocus else if ((remote.state?.duration ?: 0.0) > 0) timelineFocus else playFocus
             // A panel that just closed is still sliding away: the controls take the focus once they are back.
             repeat(20) { attempt -> delay(if (attempt == 0) 200 else 60); if (runCatching { target.requestFocus() }.isSuccess) return@LaunchedEffect }
         } else runCatching { rootFocus.requestFocus() }
@@ -464,9 +560,10 @@ fun TvEmbedPlayer(request: PlayRequest) {
 
     // "Смотреть" on the title card is the only press needed: the film starts as soon as its page is up, the
     // choices made there (voice, season, episode, quality) are carried out, then it goes on from where it stopped.
+    // A player replaced meanwhile (a fresh link) starts this over: the loading screen stays until then.
     LaunchedEffect(remote) {
-        try {
-            withTimeoutOrNull(40_000) { snapshotFlow { remote.state }.first { it != null } } ?: return@LaunchedEffect
+        run setup@{
+            withTimeoutOrNull(40_000) { snapshotFlow { remote.state }.first { it != null } } ?: return@setup
             delay(500)
             for (attempt in 0 until 3) {
                 if (remote.state?.paused == false) break
@@ -474,11 +571,14 @@ fun TvEmbedPlayer(request: PlayRequest) {
                 withTimeoutOrNull(5_000) { snapshotFlow { remote.state }.first { it?.paused == false } }
             }
             // Alloha must have its stream (a quality chosen) before it takes another episode, or it fails.
-            val ready = withTimeoutOrNull(40_000) { snapshotFlow { remote.state }.first { it != null && it.duration > 0 && (!it.alloha || it.quality.isNotBlank() && it.quality != "0") } } ?: return@LaunchedEffect
+            val ready = withTimeoutOrNull(40_000) { snapshotFlow { remote.state }.first { it != null && it.duration > 0 && (!it.alloha || it.quality.isNotBlank() && it.quality != "0") } } ?: return@setup
             delay(600)
             // Alloha's own resume box brings back the voice watched last time; the one chosen on the card wins.
             val voice = request.voice?.lowercase()
             val wanted = voice?.let { name -> ready.translations.firstOrNull { it.name.lowercase() == name } ?: ready.translations.firstOrNull { it.name.lowercase().let { n -> n.contains(name) || name.contains(n) } } }
+                // Nothing chosen and the player starts on English or the original (Veoveo does): a Russian voice, dubbing first.
+                ?: ready.translations.takeIf { voice == null && ready.translation?.name?.let(::foreignVoice) == true }
+                    ?.filterNot { foreignVoice(it.name) }?.minByOrNull { dubRank(it.name) }
             if (wanted != null && remote.state?.translation?.id != wanted.id) {
                 remote.send("translation:${wanted.id}")
                 withTimeoutOrNull(10_000) { snapshotFlow { remote.state }.first { it?.translation?.id == wanted.id && it.duration > 0 } }
@@ -508,13 +608,13 @@ fun TvEmbedPlayer(request: PlayRequest) {
                 remote.send("seekabs:${resume.toInt()}")
                 withTimeoutOrNull(8_000) { snapshotFlow { remote.state }.first { (it?.time ?: 0.0) >= resume - 5 } }
             }
-        } finally {
-            started = true
         }
+        started = true
     }
     // The loading screen goes as soon as the film itself plays: its time runs, it is the episode asked for and,
     // when going on, it is past the second it was left at. It never stays longer than 45 s either.
-    LaunchedEffect(url) { delay(45_000); started = true }
+    var silent by remember(url) { mutableStateOf(false) }
+    LaunchedEffect(url) { delay(45_000); started = true; silent = (remote.state?.duration ?: 0.0) <= 0 }
     LaunchedEffect(url) {
         snapshotFlow { remote.state }.first { now ->
             if (now == null || now.paused || now.time < 1.0) return@first false
@@ -556,10 +656,13 @@ fun TvEmbedPlayer(request: PlayRequest) {
         pendingSeek = 0
     }
     fun seek(seconds: Int) { pendingSeek += seconds }
-    fun toggle() { if (remote.state == null) remote.webView?.let(::tapCenter) else remote.send("toggle") }
+    fun toggle() { if (remote.state == null) webView()?.let(::tapCenter) else remote.send("toggle") }
     fun next() { remote.send("next"); osd = "Следующая серия" }
     fun prev() { remote.send("prev"); osd = "Предыдущая серия" }
-    fun skip() { remote.send("skip"); osd = "Заставка пропущена"; controls = false }
+    fun skip() {
+        val credits = remote.state?.skip?.contains("титры", ignoreCase = true) == true
+        remote.send("skip"); osd = if (credits) "Титры пропущены" else "Заставка пропущена"; controls = false
+    }
 
     Box(
         Modifier.fillMaxSize().background(Color.Black).focusRequester(rootFocus).focusable()
@@ -583,6 +686,10 @@ fun TvEmbedPlayer(request: PlayRequest) {
                         }
                         true
                     }
+                    // While an intro runs, OK skips it, as the hint in the corner says.
+                    (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter) && remote.state?.skip?.isNotEmpty() == true -> {
+                        if (down && event.nativeKeyEvent.repeatCount == 0) skip(); true
+                    }
                     // OK, up and down bring the controls; OK never pauses behind the viewer's back.
                     event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter ||
                         event.key == Key.DirectionUp || event.key == Key.DirectionDown -> { if (down && event.nativeKeyEvent.repeatCount == 0) controls = true; true }
@@ -590,7 +697,7 @@ fun TvEmbedPlayer(request: PlayRequest) {
                 }
             },
     ) {
-        EmbedWebPlayer(url, tvMode = true, remote = remote)
+        content()
 
         // Winding with the controls hidden: the time it lands on, large, over a slim bar.
         val duration = state?.duration ?: 0.0
@@ -603,6 +710,14 @@ fun TvEmbedPlayer(request: PlayRequest) {
                 TvTimeline(state?.time ?: 0.0, duration, target)
             }
         }
+        // A provider that never got its film going (its page refused this title, for one): say so instead of a black screen.
+        if (silent && (state?.duration ?: 0.0) <= 0 && !controls) {
+            Column(Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(16.dp)).padding(horizontal = 32.dp, vertical = 22.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Плеер ${request.providerName} не запустил фильм", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                Text("Назад — выбрать другой плеер на странице фильма", color = Cine.TextSoft, fontSize = 17.sp)
+            }
+        }
         AnimatedVisibility(visible = osd.isNotEmpty(), enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopCenter).padding(top = 40.dp)) { TvPill(osd) }
         // The provider's "Пропустить заставку" can't be pressed with a remote: OK brings up this one, focused.
         if (!controls && started && state?.skip?.isNotEmpty() == true) {
@@ -613,19 +728,22 @@ fun TvEmbedPlayer(request: PlayRequest) {
 
         AnimatedVisibility(visible = controls && panel == null, enter = fadeIn() + androidx.compose.animation.slideInVertically { it / 6 },
             exit = fadeOut() + androidx.compose.animation.slideOutVertically { it / 6 }, modifier = Modifier.fillMaxSize()) {
-            TvPlayerControls(request, state, playFocus, skipFocus, onToggle = ::toggle, onSeek = ::seek, onSkip = ::skip,
-                onEpisodes = { panel = TvPanel.EPISODES }, onVoice = { panel = TvPanel.VOICE }, onQuality = { panel = TvPanel.QUALITY })
+            TvPlayerControls(request, state, playFocus, skipFocus, timelineFocus, onToggle = ::toggle, onSeek = ::seek, onSeekTo = { remote.send("seekabs:${it.toInt()}") },
+                onSkip = ::skip, onEpisodes = { panel = TvPanel.EPISODES }, onVoice = { panel = TvPanel.VOICE }, onQuality = { panel = TvPanel.QUALITY },
+                onSubtitles = { panel = TvPanel.SUBTITLES }, onActivity = { touched = System.currentTimeMillis() })
         }
         AnimatedVisibility(visible = panel == TvPanel.EPISODES, enter = fadeIn() + androidx.compose.animation.slideInVertically { it / 3 },
             exit = fadeOut() + androidx.compose.animation.slideOutVertically { it / 3 }, modifier = Modifier.align(Alignment.BottomCenter)) {
             if (state != null) TvEpisodeStrip(request.title, state, onSeason = { remote.send("season:$it") }, onEpisode = { remote.send("episode:$it"); panel = null; controls = false }, onClose = ::closePanel)
         }
-        AnimatedVisibility(visible = panel == TvPanel.VOICE || panel == TvPanel.QUALITY, enter = androidx.compose.animation.slideInHorizontally { it },
+        AnimatedVisibility(visible = panel == TvPanel.VOICE || panel == TvPanel.QUALITY || panel == TvPanel.SUBTITLES, enter = androidx.compose.animation.slideInHorizontally { it },
             exit = androidx.compose.animation.slideOutHorizontally { it }, modifier = Modifier.align(Alignment.CenterEnd)) {
             if (state != null) {
                 if (panel == TvPanel.QUALITY) TvChoiceList("Качество", playable(state.qualities).map { qualityLabel(it) to (it == state.quality) }, request.providerName, onClose = ::closePanel) { index ->
                     val value = playable(state.qualities)[index]
                     remote.send("quality:$value"); CineStore.preferredQuality = value; panel = null; osd = qualityLabel(value)
+                } else if (panel == TvPanel.SUBTITLES) TvChoiceList("Субтитры", state.subtitles.map { it.name to it.active }, request.providerName, onClose = ::closePanel) { index ->
+                    remote.send("subtitle:${state.subtitles[index].id}"); panel = null
                 } else TvChoiceList("Озвучка", state.translations.map { it.name to it.active }, request.providerName, onClose = ::closePanel) { index ->
                     remote.send("translation:${state.translations[index].id}"); panel = null
                 }
@@ -699,10 +817,78 @@ private fun TvTextAction(text: String, onClick: () -> Unit, focus: FocusRequeste
     )
 }
 
+/**
+ * The film's line, for the remote: in focus it thickens and shows its knob; left/right move a mark along
+ * it (10 s a press, faster held), the film jumps there once the keys rest, or at once on OK. OK with
+ * no mark pauses and plays, like the button below.
+ */
+@Composable
+private fun TvScrubber(time: Double, duration: Double, focus: FocusRequester, onSeekTo: (Double) -> Unit, onToggle: () -> Unit, onActivity: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    var target by remember { mutableStateOf<Double?>(null) }
+    var moves by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    LaunchedEffect(moves) {
+        val to = target ?: return@LaunchedEffect
+        delay(900)
+        onSeekTo(to)
+        delay(700)
+        target = null
+    }
+    val shown = target ?: time
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Box(
+            Modifier.fillMaxWidth().height(30.dp).focusRequester(focus).focusable(interactionSource = interaction)
+                .onPreviewKeyEvent { event ->
+                    val down = event.type == KeyEventType.KeyDown
+                    when (event.key) {
+                        Key.DirectionLeft, Key.DirectionRight -> {
+                            if (down && duration > 0) {
+                                val repeat = event.nativeKeyEvent.repeatCount
+                                val step = if (repeat > 12) 120.0 else if (repeat > 3) 30.0 else 10.0
+                                target = ((target ?: time) + if (event.key == Key.DirectionRight) step else -step).coerceIn(0.0, duration)
+                                moves++
+                                onActivity()
+                            }
+                            true
+                        }
+                        Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                            if (down && event.nativeKeyEvent.repeatCount == 0) {
+                                val to = target
+                                if (to != null) { onSeekTo(to); moves++ } else onToggle()
+                                onActivity()
+                            }
+                            true
+                        }
+                        else -> false
+                    }
+                },
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            val played = if (duration > 0) (time / duration).toFloat().coerceIn(0f, 1f) else 0f
+            val mark = if (duration > 0) (shown / duration).toFloat().coerceIn(0f, 1f) else 0f
+            Box(Modifier.fillMaxWidth().height(if (focused) 10.dp else 6.dp).clip(RoundedCornerShape(5.dp)).background(Color.White.copy(alpha = 0.25f))) {
+                if (target != null) Box(Modifier.fillMaxHeight().fillMaxWidth(mark).background(TvGold.copy(alpha = 0.85f)))
+                Box(Modifier.fillMaxHeight().fillMaxWidth(if (target != null) minOf(played, mark) else played).background(Color.White))
+            }
+            if (focused) Box(Modifier.fillMaxWidth(mark.coerceAtLeast(0.001f)), contentAlignment = Alignment.CenterEnd) {
+                Box(Modifier.size(22.dp).graphicsLayer { translationX = 11.dp.toPx() }.clip(RoundedCornerShape(50))
+                    .background(if (target != null) TvGold else Color.White))
+            }
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(clock(shown), color = if (target != null) TvGold else Color.White, fontSize = if (target != null) 22.sp else 16.sp, fontWeight = if (target != null) FontWeight.SemiBold else FontWeight.Normal)
+            Spacer(Modifier.weight(1f))
+            Text(if (duration > 0) "−" + clock(duration - shown) else "--:--", color = Cine.TextSoft, fontSize = 16.sp)
+        }
+    }
+}
+
 @Composable
 private fun TvPlayerControls(
-    request: PlayRequest, state: EmbedState?, playFocus: FocusRequester, skipFocus: FocusRequester,
-    onToggle: () -> Unit, onSeek: (Int) -> Unit, onSkip: () -> Unit, onEpisodes: () -> Unit, onVoice: () -> Unit, onQuality: () -> Unit,
+    request: PlayRequest, state: EmbedState?, playFocus: FocusRequester, skipFocus: FocusRequester, timelineFocus: FocusRequester,
+    onToggle: () -> Unit, onSeek: (Int) -> Unit, onSeekTo: (Double) -> Unit, onSkip: () -> Unit, onEpisodes: () -> Unit, onVoice: () -> Unit,
+    onQuality: () -> Unit, onSubtitles: () -> Unit, onActivity: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
         // Top: what is playing, and the intro skip where the eye already is.
@@ -718,17 +904,10 @@ private fun TvPlayerControls(
             }
             if (state?.skip?.isNotEmpty() == true) TvTextAction("Пропустить заставку", onSkip, skipFocus, outlined = true)
         }
-        // Bottom: the line, then −10 / pause / +10 in the middle and the film's settings on the right.
-        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(260.dp).background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.88f)))))
-        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 48.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            val time = state?.time ?: 0.0
-            val duration = state?.duration ?: 0.0
-            TvTimeline(time, duration)
-            Row(Modifier.fillMaxWidth()) {
-                Text(clock(time), color = Color.White, fontSize = 16.sp)
-                Spacer(Modifier.weight(1f))
-                Text(if (duration > 0) "−" + clock(duration - time) else "--:--", color = Cine.TextSoft, fontSize = 16.sp)
-            }
+        // Bottom, well above the edge: the line with its times, then −10 / pause / +10 and the film's settings.
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(320.dp).background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f)))))
+        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 56.dp, end = 56.dp, bottom = 64.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            TvScrubber(state?.time ?: 0.0, state?.duration ?: 0.0, timelineFocus, onSeekTo, onToggle, onActivity)
             Box(Modifier.fillMaxWidth()) {
                 Row(Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(22.dp), verticalAlignment = Alignment.CenterVertically) {
                     TvRoundButton(Icons.Default.Replay10, "Назад на 10 секунд", { onSeek(-10) })
@@ -738,6 +917,7 @@ private fun TvPlayerControls(
                 Row(Modifier.align(Alignment.CenterEnd), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (state != null && state.episodes.isNotEmpty()) TvTextAction("Серии", onEpisodes)
                     if (state != null && state.translations.size > 1) TvTextAction("Озвучка", onVoice)
+                    if (state != null && state.subtitles.size > 1) TvTextAction("Субтитры", onSubtitles)
                     if (state != null && playable(state.qualities).size > 1) TvTextAction(qualityLabel(state.quality.takeIf { it.isNotBlank() && it != "0" } ?: "auto").let { if (it == "Авто") "Качество" else it }, onQuality)
                 }
             }

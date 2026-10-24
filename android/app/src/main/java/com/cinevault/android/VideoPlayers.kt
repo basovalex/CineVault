@@ -76,10 +76,12 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
@@ -125,6 +127,8 @@ object PlayerAdBlocker {
         "vuegenesisvue.com", "ufouxbwn.com", "timing-js-menu.xyz", "agl011.art", "b5c1d2e8c9982e3b965a27ac72ru7284cc.com",
         // Veoveo pre-roll: redirector, VAST list and video host
         "aj2635.bid", "franecki.net", "quickcore.fun", "veselchaga.link", "skorobeyka.link", "sosilapu.org",
+        // Veoveo pre-roll as of late Oct 2026: VAST and its tracking, and the creatives' host
+        "konvtriko.org", "gnevizada.org",
     )
 
     // Ad hosts rotate every few days, the VAST/VPAID plumbing in front of them does not: a video-ad list
@@ -243,7 +247,7 @@ fun PlayerScreen(request: PlayRequest, onBack: () -> Unit, tvMode: Boolean = fal
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     request.embedUrl != null -> if (tvMode) TvEmbedPlayer(request) else EmbedWebPlayer(request.embedUrl, onTouch = onTouch)
-                    request.source != null -> NativeVideoPlayer(request.title, request.source, tvMode, request.quality)
+                    request.source != null -> if (tvMode) TvNativePlayer(request, request.source) else NativeVideoPlayer(request.title, request.source, tvMode, request.quality)
                 }
             }
             if (!landscape && !tvMode && request.hint.isNotBlank()) {
@@ -264,12 +268,45 @@ fun PlayerScreen(request: PlayRequest, onBack: () -> Unit, tvMode: Boolean = fal
 /**
  * The Android emulator's virtual "goldfish" decoders turn many H.264 streams into green or rainbow
  * stripes. On an emulator the software decoder that ships with Android goes first; on a real device
- * the codec list is left exactly as the system gives it.
+ * the codec list is left exactly as the system gives it, the hardware decoders first.
+ * Testing the hardware path on an emulator: adb shell setprop log.tag.CineVaultHw DEBUG
  */
 private val emulatorSafeCodecs = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
     val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
-    if (Build.HARDWARE == "ranchu" || Build.HARDWARE == "goldfish") decoders.sortedBy { it.name.contains("goldfish") } else decoders
+    val emulator = Build.HARDWARE == "ranchu" || Build.HARDWARE == "goldfish"
+    if (emulator && !android.util.Log.isLoggable("CineVaultHw", android.util.Log.DEBUG)) decoders.sortedBy { it.name.contains("goldfish") } else decoders
 }
+
+internal fun isHardwareCodec(name: String): Boolean = runCatching {
+    android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS).codecInfos.firstOrNull { it.name == name }?.let {
+        if (Build.VERSION.SDK_INT >= 29) it.isHardwareAccelerated else !name.startsWith("OMX.google") && !name.startsWith("c2.android")
+    }
+}.getOrNull() ?: false
+
+/** Which decoders a stream got, in the log: adb logcat -s CineVaultPlayer */
+private object DecoderLog : AnalyticsListener {
+    override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
+        android.util.Log.i("CineVaultPlayer", "video decoder $decoderName hardware=${isHardwareCodec(decoderName)}")
+    }
+
+    override fun onAudioDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
+        android.util.Log.i("CineVaultPlayer", "audio decoder $decoderName")
+    }
+
+    override fun onDroppedVideoFrames(eventTime: AnalyticsListener.EventTime, droppedFrames: Int, elapsedMs: Long) {
+        android.util.Log.i("CineVaultPlayer", "dropped $droppedFrames frames in $elapsedMs ms")
+    }
+}
+
+/**
+ * Media3 for every stream the app plays itself, CineVault's and Alloha's: decoded by the TV's own
+ * hardware decoder, shown on a SurfaceView, with the sound straight to the audio output. A decoder
+ * that fails to start gives way to the next one.
+ */
+internal fun buildExoPlayer(context: Context, dataSource: DataSource.Factory): ExoPlayer =
+    ExoPlayer.Builder(context, DefaultRenderersFactory(context).setMediaCodecSelector(emulatorSafeCodecs).setEnableDecoderFallback(true))
+        .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource))
+        .build().also { it.addAnalyticsListener(DecoderLog) }
 
 /**
  * CineVault's own streams, through Media3. A stream that will not play gets one fresh link from the
@@ -289,9 +326,7 @@ fun NativeVideoPlayer(title: CatalogTitle, source: PlaybackSource, tvMode: Boole
         val httpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent("CineVault Android/1.0")
             .setDefaultRequestProperties(CineVaultApi.playbackRequestProperties(current.url))
-        val exo = ExoPlayer.Builder(context, DefaultRenderersFactory(context).setMediaCodecSelector(emulatorSafeCodecs))
-            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, httpFactory)))
-            .build()
+        val exo = buildExoPlayer(context, DefaultDataSource.Factory(context, httpFactory))
         val itemBuilder = MediaItem.Builder().setUri(current.url)
         if (current.type.contains("hls", ignoreCase = true) || current.url.substringBefore('?').endsWith(".m3u8", true)) {
             itemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
@@ -377,7 +412,7 @@ internal fun tapCenter(view: View) {
 /** Alloha, Collaps, Veoveo, Turbo: the provider's page inside an iframe, as on the website. */
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 @Composable
-fun EmbedWebPlayer(url: String, tvMode: Boolean = false, onTouch: () -> Unit = {}, remote: EmbedRemote? = null) {
+fun EmbedWebPlayer(url: String, tvMode: Boolean = false, onTouch: () -> Unit = {}, remote: EmbedRemote? = null, nativeStream: Boolean = false) {
     val context = LocalContext.current
     var pageStarted by remember(url) { mutableStateOf(false) }
     // On TV the remote's keys belong to the app's controls (TvEmbedPlayer), never to the page:
@@ -419,6 +454,9 @@ fun EmbedWebPlayer(url: String, tvMode: Boolean = false, onTouch: () -> Unit = {
                         private var customView: View? = null
                         private var customViewCallback: CustomViewCallback? = null
 
+                        // No grey "play" poster of the WebView's own before a video's first frame.
+                        override fun getDefaultVideoPoster(): android.graphics.Bitmap = android.graphics.Bitmap.createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888)
+
                         // The provider's own full-screen button: show its video over everything, sideways.
                         override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                             if (view == null) return
@@ -443,6 +481,8 @@ fun EmbedWebPlayer(url: String, tvMode: Boolean = false, onTouch: () -> Unit = {
                     CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                     if (remote != null && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                         WebViewCompat.addWebMessageListener(this, "cvRemote", setOf("*")) { _, message, _, _, reply -> remote.onMessage(message.data, reply) }
+                        // The app plays Alloha's stream itself (AllohaPlayback): the page keeps quiet from its first frame.
+                        if (nativeStream) WebViewCompat.addDocumentStartJavaScript(this, "window.__cvNative = true;", setOf("https://*.stravers.live"))
                         WebViewCompat.addDocumentStartJavaScript(this, TV_REMOTE_JS, setOf("*"))
                     }
                     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {

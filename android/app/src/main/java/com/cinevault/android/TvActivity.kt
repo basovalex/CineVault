@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -706,7 +707,7 @@ private fun TvDetail(initial: CatalogTitle, onOpen: (CatalogTitle) -> Unit, onPl
             }
             chosen.provider?.embedUrl != null -> {
                 CineStore.recordOpened(item, chosen.id)
-                onPlay(PlayRequest(item, embedUrl = chosen.provider.embedUrl, providerName = chosen.name, resumeAt = resumeFor(last?.season, last?.episode)))
+                onPlay(PlayRequest(item, embedUrl = chosen.provider.embedUrl, providerName = chosen.name, quality = quality?.takeIf(String::isNotBlank), resumeAt = resumeFor(last?.season, last?.episode)))
             }
         }
     }
@@ -739,7 +740,9 @@ private fun TvDetail(initial: CatalogTitle, onOpen: (CatalogTitle) -> Unit, onPl
                             if (loading || ways.isEmpty()) playFocus else null,
                             icon = if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, iconTint = if (favorite) TvGold else Color.White,
                         )
-                        if (ways.size > 1 || voices.size > 1) TvButton("Настройки просмотра", false, { picker = "settings" }, icon = Icons.Default.Tune)
+                        // The voice is one press away; the player is changed apart, and only where there is a choice.
+                        if (voices.size > 1) TvButton("Озвучка", false, { picker = "voice" }, icon = Icons.Default.RecordVoiceOver)
+                        if (ways.size > 1) TvButton("Плеер", false, { picker = "way" }, icon = Icons.Default.Tune)
                     }
                     val settingsLine = listOfNotNull(way?.name, voice).joinToString(" · ")
                     if (settingsLine.isNotBlank()) Text(settingsLine, color = Cine.Muted, fontSize = 15.sp)
@@ -803,8 +806,6 @@ private fun TvDetail(initial: CatalogTitle, onOpen: (CatalogTitle) -> Unit, onPl
     }
 
     when (picker) {
-        "settings" -> TvPickerDialog("Настройки просмотра", listOf("Плеер · ${way?.name.orEmpty()}", "Озвучка · ${voice ?: "в плеере"}"), -1,
-            { picker = if (it == 0) "way" else "voice" }) { picker = null }
         "way" -> TvPickerDialog("Плеер", ways.map { it.name }, ways.indexOf(way), { wayId = ways[it].id; voiceName = null; picker = null }) { picker = null }
         "voice" -> TvPickerDialog("Озвучка", voices, voices.indexOf(voice), { voiceName = voices[it]; picker = null }) { picker = null }
         "season" -> TvPickerDialog("Сезон", episodeCounts.indices.map { "Сезон ${it + 1} · ${episodeCounts[it]} сер." }, season - 1,
