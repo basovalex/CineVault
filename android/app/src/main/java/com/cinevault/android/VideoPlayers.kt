@@ -100,6 +100,8 @@ data class PlayRequest(
     val season: Int? = null,
     val episode: Int? = null,
     val quality: String? = null,
+    /** On TV, the voice chosen on the title card, put back if the provider's resume box brought another. */
+    val voice: String? = null,
 )
 
 /**

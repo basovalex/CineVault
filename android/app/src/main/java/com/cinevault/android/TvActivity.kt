@@ -88,7 +88,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.lazy.grid.itemsIndexed
-import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import kotlinx.coroutines.launch
 
 class TvActivity : ComponentActivity() {
@@ -100,7 +100,14 @@ class TvActivity : ComponentActivity() {
             hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
         }
         CineStore.init(this)
-        setContent { CineVaultTheme { TvRoot() } }
+        setContent {
+            // Every TV gets the same 960-wide layout, whatever its panel (1080p, 4K) and the density it reports.
+            val screen = resources.displayMetrics.let { maxOf(it.widthPixels, it.heightPixels) }
+            val system = androidx.compose.ui.platform.LocalDensity.current
+            CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(screen / 960f, system.fontScale)) {
+                CineVaultTheme { TvRoot() }
+            }
+        }
     }
 }
 
@@ -123,8 +130,11 @@ private sealed interface TvRoute {
 private class TvPageScroll(private val pinned: () -> Boolean = { false }) : BringIntoViewSpec {
     override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
         if (pinned()) return 0f
-        if (offset >= 0f && offset + size <= containerSize) return 0f
-        val target = if (size > containerSize * 0.7f) 0f else containerSize * 0.3f
+        // A poster counts as in view only with its row's heading above and its title below it on screen too.
+        val above = containerSize * 0.1f
+        val below = containerSize * 0.18f
+        if (offset >= above && offset + size + below <= containerSize) return 0f
+        val target = if (size > containerSize * 0.7f) 0f else containerSize * 0.17f
         return offset - target
     }
 }
@@ -144,7 +154,8 @@ private fun TvRoot() {
         null -> Box(Modifier.fillMaxSize().background(Cine.Background)) {
             // The page runs edge to edge behind a slim rail of icons; the rail opens with its labels
             // only while the remote is in it, so it never eats a band of the screen.
-            Box(Modifier.fillMaxSize().padding(start = TvRailWidth)) {
+            // The home page runs under the rail (its artwork reaches the screen's edge); the others start after it.
+            Box(Modifier.fillMaxSize().then(if (section == TvSection.HOME) Modifier else Modifier.padding(start = TvRailWidth))) {
                 when (section) {
                     TvSection.HOME -> TvHome(open) { catalogGenre = it; section = TvSection.CATALOG }
                     TvSection.CATALOG -> TvCatalog(open, catalogGenre)
@@ -269,7 +280,7 @@ private fun TvHome(onOpen: (CatalogTitle) -> Unit, onGenre: (String) -> Unit) {
     LaunchedEffect(heroFocused) { if (heroFocused) list.animateScrollToItem(0) }
     val genres = CineStore.facets["movie"]?.genres.orEmpty().entries.sortedByDescending { it.value }.take(10).map { it.key }
     CompositionLocalProvider(LocalBringIntoViewSpec provides pageScroll) {
-    LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(bottom = 48.dp), verticalArrangement = Arrangement.spacedBy(30.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(bottom = 150.dp), verticalArrangement = Arrangement.spacedBy(30.dp)) {
         item {
             Box(Modifier.fillMaxWidth().height(430.dp)) {
                 if (hero == null) {
@@ -281,7 +292,7 @@ private fun TvHome(onOpen: (CatalogTitle) -> Unit, onGenre: (String) -> Unit) {
                     androidx.compose.animation.Crossfade(hero, label = "hero") { shown -> BackdropArt(shown, Modifier.fillMaxSize()) }
                     Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Cine.Background, 0.5f to Cine.Background.copy(alpha = 0.55f), 1f to Color.Transparent)))
                     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.55f to Color.Transparent, 1f to Cine.Background)))
-                    Column(Modifier.align(Alignment.BottomStart).padding(start = 48.dp, bottom = 34.dp).width(580.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Column(Modifier.align(Alignment.BottomStart).padding(start = TvRailWidth + 48.dp, bottom = 34.dp).width(580.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         TitleLogo(hero, maxWidth = 400.dp, maxHeight = 120.dp, fontSize = 46)
                         MetaLine(hero, withAge = true, size = 17)
                         if (hero.description.isNotBlank()) Text(hero.description, color = Cine.TextSoft, fontSize = 17.sp, lineHeight = 24.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -324,9 +335,9 @@ private fun TvHome(onOpen: (CatalogTitle) -> Unit, onGenre: (String) -> Unit) {
 @Composable
 private fun TvRowSection(label: String, rowScroll: BringIntoViewSpec, content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text(label, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 48.dp))
+        Text(label, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = TvRailWidth + 48.dp))
         CompositionLocalProvider(LocalBringIntoViewSpec provides rowScroll) {
-            LazyRow(contentPadding = PaddingValues(horizontal = 48.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(20.dp), content = content)
+            LazyRow(contentPadding = PaddingValues(start = TvRailWidth + 48.dp, end = 48.dp, top = 12.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(20.dp), content = content)
         }
     }
 }
@@ -347,6 +358,8 @@ private fun TvShelf(label: String, titles: List<CatalogTitle>, onOpen: (CatalogT
 private fun TvPosterGrid(
     titles: List<CatalogTitle>, onOpen: (CatalogTitle) -> Unit, modifier: Modifier = Modifier,
     state: androidx.compose.foundation.lazy.grid.LazyGridState = rememberLazyGridState(),
+    header: androidx.compose.foundation.lazy.grid.LazyGridScope.() -> Unit = {},
+    onFocusTitle: (CatalogTitle) -> Unit = {},
     footer: androidx.compose.foundation.lazy.grid.LazyGridScope.() -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
@@ -355,9 +368,10 @@ private fun TvPosterGrid(
         GridCells.Fixed(5), modifier, state = state, contentPadding = PaddingValues(start = 8.dp, end = 24.dp, top = 12.dp, bottom = 32.dp),
         horizontalArrangement = Arrangement.spacedBy(22.dp), verticalArrangement = Arrangement.spacedBy(26.dp),
     ) {
+        header()
         itemsIndexed(titles, key = { _, title -> title.id }) { index, title ->
             val requester = requesters.getOrPut(title.id) { FocusRequester() }
-            TvPoster(title, { onOpen(title) }, width = null, modifier = Modifier.focusRequester(requester).onPreviewKeyEvent { event ->
+            TvPoster(title, { onOpen(title) }, width = null, modifier = Modifier.focusRequester(requester).onFocusChanged { if (it.isFocused) onFocusTitle(title) }.onPreviewKeyEvent { event ->
                 val step = when (event.key) { Key.DirectionDown -> 1; Key.DirectionUp -> -1; else -> 0 }
                 if (step == 0 || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 val columns = (state.layoutInfo.visibleItemsInfo.maxOfOrNull { it.column } ?: 0) + 1
@@ -367,13 +381,13 @@ private fun TvPosterGrid(
                 val goal = titles.getOrNull(target.coerceAtMost(titles.lastIndex)) ?: return@onPreviewKeyEvent true
                 if (target > titles.lastIndex && index / columns == titles.lastIndex / columns) return@onPreviewKeyEvent false
                 scope.launch {
-                    val shown = state.layoutInfo.visibleItemsInfo.firstOrNull { it.key == goal.id }
-                    val viewport = state.layoutInfo.viewportEndOffset
-                    if (shown == null || shown.offset.y < 0 || shown.offset.y + shown.size.height > viewport) {
-                        val row = state.layoutInfo.visibleItemsInfo.firstOrNull()?.let { it.size.height + 26 } ?: 300
-                        state.animateScrollBy((step * row).toFloat())
+                    // A poster already laid out takes the focus at once (the page follows it); one that is not
+                    // yet is scrolled in by a row first.
+                    if (state.layoutInfo.visibleItemsInfo.none { it.key == goal.id }) {
+                        val row = state.layoutInfo.visibleItemsInfo.firstOrNull { it.key == title.id }?.let { it.size.height + 26 } ?: 300
+                        state.scrollBy((step * row).toFloat())
+                        androidx.compose.runtime.withFrameNanos { }
                     }
-                    androidx.compose.runtime.withFrameNanos { }
                     runCatching { requesters[goal.id]?.requestFocus() }
                 }
                 true
@@ -401,17 +415,25 @@ private fun TvCatalog(onOpen: (CatalogTitle) -> Unit, startGenre: String = "") {
     LaunchedEffect(firstPageDone, kind) { if (firstPageDone) CineStore.loadFacets(kind) }
     val genres = CineStore.facets[kind]?.genres.orEmpty().entries.sortedByDescending { it.value }.take(14).map { it.key }
         .let { if (genre.isNotBlank() && genre !in it) listOf(genre) + it else it }
-    Column(Modifier.fillMaxSize().padding(start = 40.dp, top = 32.dp, end = 16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        TvPageTitle("Каталог", if (genre.isBlank()) "Сначала популярное" else genre.replaceFirstChar { it.uppercase() })
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 6.dp, horizontal = 4.dp)) {
-            item { TvChip("Фильмы", kind == "movie") { kind = "movie"; genre = "" } }
-            item { TvChip("Сериалы", kind == "series") { kind = "series"; genre = "" } }
-            item { Spacer(Modifier.width(18.dp)) }
-            item { TvChip("Все жанры", genre.isEmpty()) { genre = "" } }
-            items(genres) { name -> TvChip(name, genre == name) { genre = name } }
-        }
-        // The next page loads by itself as the focus nears the end of the grid.
-        TvPosterGrid(feed.items, onOpen, state = grid) {
+    var focused by remember { mutableStateOf<CatalogTitle?>(null) }
+    Box(Modifier.fillMaxSize()) {
+        TvAmbient(focused)
+        // The heading and the filters scroll away with the posters: the whole page is one column to walk down.
+        TvPosterGrid(feed.items, onOpen, Modifier.fillMaxSize().padding(start = 40.dp, end = 16.dp), state = grid, onFocusTitle = { focused = it }, header = {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Column(Modifier.padding(top = 32.dp, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                    TvPageTitle("Каталог", if (genre.isBlank()) "Сначала популярное" else genre.replaceFirstChar { it.uppercase() })
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 6.dp, horizontal = 4.dp)) {
+                        item { TvChip("Фильмы", kind == "movie") { kind = "movie"; genre = "" } }
+                        item { TvChip("Сериалы", kind == "series") { kind = "series"; genre = "" } }
+                        item { Spacer(Modifier.width(18.dp)) }
+                        item { TvChip("Все жанры", genre.isEmpty()) { genre = "" } }
+                        items(genres) { name -> TvChip(name, genre == name) { genre = name } }
+                    }
+                }
+            }
+        }) {
+            // The next page loads by itself as the focus nears the end of the grid.
             val failure = feed.error
             if (failure != null) item(span = { GridItemSpan(maxLineSpan) }) {
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -423,6 +445,18 @@ private fun TvCatalog(onOpen: (CatalogTitle) -> Unit, startGenre: String = "") {
             } else if (feed.items.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                 Text("В этом разделе пока ничего нет.", color = Cine.Muted, fontSize = 18.sp)
             }
+        }
+    }
+}
+
+/** The focused title's artwork, faded in behind a grid page (as on Google TV): the page takes the film's mood. */
+@Composable
+private fun TvAmbient(title: CatalogTitle?) {
+    androidx.compose.animation.Crossfade(title, label = "ambient", animationSpec = androidx.compose.animation.core.tween(600)) { shown ->
+        if (shown != null) Box(Modifier.fillMaxSize()) {
+            BackdropArt(shown, Modifier.fillMaxWidth(0.72f).fillMaxHeight(0.8f).align(Alignment.TopEnd).graphicsLayer { alpha = 0.55f })
+            Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Cine.Background, 0.3f to Cine.Background, 0.75f to Cine.Background.copy(alpha = 0.35f), 1f to Color.Transparent)))
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.3f to Color.Transparent, 0.8f to Cine.Background)))
         }
     }
 }
@@ -448,6 +482,8 @@ private fun TvSearch(onOpen: (CatalogTitle) -> Unit) {
         searching = false
     }
     val typed = query.trim().length >= 2
+    var focused by remember { mutableStateOf<CatalogTitle?>(null) }
+    TvAmbient(focused)
     Column(Modifier.fillMaxSize().padding(start = 40.dp, top = 32.dp, end = 16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         TvPageTitle("Поиск")
         Row(
@@ -478,12 +514,14 @@ private fun TvSearch(onOpen: (CatalogTitle) -> Unit) {
             when { !typed -> "Часто смотрят"; searching -> "Ищу…"; results.isEmpty() -> "Ничего не нашлось. Попробуйте другое название или имя актёра."; else -> "Найдено: ${results.size}" },
             color = Cine.Muted, fontSize = 17.sp,
         )
-        TvPosterGrid(if (typed) results else popular, onOpen)
+        TvPosterGrid(if (typed) results else popular, onOpen, onFocusTitle = { focused = it })
     }
 }
 
 @Composable
 private fun TvGrid(titles: List<CatalogTitle>, title: String, subtitle: String, onOpen: (CatalogTitle) -> Unit) {
+    var focused by remember { mutableStateOf<CatalogTitle?>(null) }
+    TvAmbient(focused)
     Column(Modifier.fillMaxSize().padding(start = 40.dp, top = 32.dp, end = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         TvPageTitle(title, subtitle)
         if (titles.isEmpty()) {
@@ -493,7 +531,7 @@ private fun TvGrid(titles: List<CatalogTitle>, title: String, subtitle: String, 
                 Text("Добавьте фильм в избранное или начните смотреть — он появится здесь.", color = Cine.Muted, fontSize = 18.sp)
             }
         }
-        TvPosterGrid(titles, onOpen)
+        TvPosterGrid(titles, onOpen, onFocusTitle = { focused = it })
     }
 }
 
@@ -545,7 +583,9 @@ private fun TvDetail(initial: CatalogTitle, onOpen: (CatalogTitle) -> Unit, onPl
         way?.provider?.translations?.isNotEmpty() == true -> way.provider.translations.map { it.name }
         else -> emptyList()
     }
-    val voice = voices.firstOrNull { it == voiceName } ?: voices.firstOrNull { it == last?.translationName } ?: voices.firstOrNull()
+    // Dubbing comes first unless the viewer chose otherwise here or last time.
+    val voice = voices.firstOrNull { it == voiceName } ?: voices.firstOrNull { it == last?.translationName }
+        ?: voices.firstOrNull { it.contains("дубл", ignoreCase = true) } ?: voices.firstOrNull()
     // CineVault's own sources come one per voice and quality; the qualities offered are the voice's own.
     val voiceSources = if (way?.id == "cinevault") item.sources.filter { !it.isEmbed && it.voice.ifBlank { "Оригинал" } == voice } else emptyList()
     val sourceRungs = voiceSources.mapNotNull { rungOf(it.quality) }.distinct().sortedByDescending { it.toInt() }
@@ -571,7 +611,8 @@ private fun TvDetail(initial: CatalogTitle, onOpen: (CatalogTitle) -> Unit, onPl
                 val translation = chosen.provider.translations.firstOrNull { it.name == voice } ?: chosen.provider.translations.first()
                 CineStore.recordOpened(item, chosen.id, translation.name, if (canPickEpisode) season else null, if (canPickEpisode) episode else null)
                 onPlay(PlayRequest(item, embedUrl = translation.url, providerName = chosen.name,
-                    season = if (canPickEpisode) season else null, episode = if (canPickEpisode) episode else null, quality = quality?.takeIf(String::isNotBlank)))
+                    season = if (canPickEpisode) season else null, episode = if (canPickEpisode) episode else null, quality = quality?.takeIf(String::isNotBlank),
+                    voice = translation.name))
             }
             chosen.provider?.embedUrl != null -> {
                 CineStore.recordOpened(item, chosen.id)

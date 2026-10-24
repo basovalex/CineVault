@@ -290,13 +290,15 @@ internal const val TV_REMOTE_JS = """
       var levels = p.hls && p.hls.levels ? p.hls.levels : [];
       try {
         var level = levels[p.hls ? p.hls.currentLevel : -1];
-        s.quality = p.hls && p.hls.autoLevelEnabled ? 'auto' : level ? rung(level) : String(p.quality || '');
+        // Alloha loads each quality as a stream of its own, a single rung hls.js calls "auto": its own setting tells.
+        var adaptive = p.hls && p.hls.autoLevelEnabled && levels.length > 1;
+        s.quality = adaptive ? 'auto' : p.quality ? String(p.quality) : level ? rung(level) : '';
       } catch (e) { s.quality = ''; }
       // The provider's own list, plus any rung the stream carries that the list leaves out.
       s.qualities = [].map.call(document.querySelectorAll('[data-allplay=quality]'), function (b) { return b.value; });
       for (var i = 0; i < levels.length; i++) { var r = rung(levels[i]); if (s.qualities.indexOf(r) < 0) s.qualities.push(r); }
       s.qualities.sort(function (a, b) { return Number(b) - Number(a); });
-      if (p.hls) s.qualities.unshift('auto');
+      if (p.hls && levels.length > 1) s.qualities.unshift('auto');
       s.seasons = items('season'); s.episodes = items('episode'); s.translations = items('translation');
       s.hasNext = !!button('next'); s.hasPrev = !!button('prev');
     } else if (pjs()) pjsState(pjs(), s);
@@ -331,6 +333,7 @@ internal const val TV_REMOTE_JS = """
     var name = at < 0 ? command : command.slice(0, at), arg = at < 0 ? '' : command.slice(at + 1);
     var v = video(), p = allplay();
     if (name === 'toggle') { if (p) quiet(p.togglePlay()); else if (v) { if (v.paused) quiet(v.play()); else v.pause(); } }
+    else if (name === 'play') { if (p) { if (!v || v.paused) quiet(p.togglePlay()); } else if (pjs()) { try { pjs().api('play'); } catch (e) {} } else if (v && v.paused) quiet(v.play()); }
     else if (name === 'seek' && v) { var to = v.currentTime + Number(arg); v.currentTime = Math.max(0, v.duration ? Math.min(v.duration - 1, to) : to); }
     else if (name === 'seekto' && v && v.duration) { v.currentTime = Math.max(0, Math.min(v.duration - 1, Number(arg) * v.duration)); }
     else if ((name === 'next' || name === 'prev') && !p && pjs()) {
@@ -421,11 +424,27 @@ fun TvEmbedPlayer(request: PlayRequest) {
         delay(6_000)
         controls = false
     }
-    // Choices made on the title card (season, episode, quality) are carried out once Alloha is up.
+    // "Смотреть" on the title card is the only press needed: the film starts as soon as its page is up, then
+    // the choices made there (voice, season, episode, quality) are carried out.
     LaunchedEffect(remote) {
+        withTimeoutOrNull(40_000) { snapshotFlow { remote.state }.first { it != null } } ?: return@LaunchedEffect
+        delay(500)
+        repeat(3) {
+            if (remote.state?.paused == false) return@repeat
+            remote.send("play")
+            withTimeoutOrNull(5_000) { snapshotFlow { remote.state }.first { it?.paused == false } }
+        }
         // Alloha must have its stream (a quality chosen) before it takes another episode, or it fails.
-        val ready = withTimeoutOrNull(40_000) { snapshotFlow { remote.state }.first { it != null && it.alloha && it.duration > 0 && it.quality.isNotBlank() && it.quality != "0" } } ?: return@LaunchedEffect
+        val ready = withTimeoutOrNull(40_000) { snapshotFlow { remote.state }.first { it != null && it.duration > 0 && (!it.alloha || it.quality.isNotBlank() && it.quality != "0") } } ?: return@LaunchedEffect
         delay(800)
+        // Alloha's own resume box brings back the voice watched last time; the one chosen on the card wins.
+        val voice = request.voice?.lowercase()
+        val wanted = voice?.let { name -> ready.translations.firstOrNull { it.name.lowercase() == name } ?: ready.translations.firstOrNull { it.name.lowercase().let { n -> n.contains(name) || name.contains(n) } } }
+        if (wanted != null && remote.state?.translation?.id != wanted.id) {
+            remote.send("translation:${wanted.id}")
+            withTimeoutOrNull(10_000) { snapshotFlow { remote.state }.first { it?.translation?.id == wanted.id && it.duration > 0 } }
+            delay(800)
+        }
         val season = request.season
         if (season != null && ready.season?.id != season.toString() && ready.seasons.any { it.id == season.toString() }) {
             remote.send("season:$season")
@@ -438,7 +457,7 @@ fun TvEmbedPlayer(request: PlayRequest) {
         }
         val quality = request.quality
         if (quality != null) {
-            val listed = withTimeoutOrNull(30_000) { snapshotFlow { remote.state }.first { (it?.duration ?: 0.0) > 0 && it?.qualities?.isNotEmpty() == true } }
+            val listed = withTimeoutOrNull(30_000) { snapshotFlow { remote.state }.first { it?.qualities?.isNotEmpty() == true } }
             val chosen = listed?.let { closestQuality(quality, it.qualities) }
             if (chosen != null && remote.state?.quality != chosen) remote.send("quality:$chosen")
             if (chosen != null && chosen != quality) osd = "${qualityLabel(quality)} нет — включаю ${qualityLabel(chosen)}"
@@ -486,8 +505,10 @@ fun TvEmbedPlayer(request: PlayRequest) {
                     event.key == Key.MediaFastForward -> { if (down) seek(30); true }
                     event.key == Key.MediaRewind -> { if (down) seek(-30); true }
                     controls -> false
-                    event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.MediaPlayPause -> {
-                        if (down && event.nativeKeyEvent.repeatCount == 0) { toggle(); controls = true }
+                    event.key == Key.MediaPlayPause -> { if (down && event.nativeKeyEvent.repeatCount == 0) { toggle(); controls = true }; true }
+                    // OK never pauses behind the viewer's back: it skips an intro on screen, else brings up the panel.
+                    event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter -> {
+                        if (down && event.nativeKeyEvent.repeatCount == 0) { if (state?.skip?.isNotEmpty() == true) skip() else controls = true }
                         true
                     }
                     event.key == Key.DirectionLeft || event.key == Key.DirectionRight -> {
@@ -497,7 +518,7 @@ fun TvEmbedPlayer(request: PlayRequest) {
                         }
                         true
                     }
-                    event.key == Key.DirectionUp -> { if (down) { if (state?.skip?.isNotEmpty() == true) skip() else controls = true }; true }
+                    event.key == Key.DirectionUp -> { if (down) controls = true; true }
                     event.key == Key.DirectionDown -> { if (down) controls = true; true }
                     else -> false
                 }
@@ -509,9 +530,9 @@ fun TvEmbedPlayer(request: PlayRequest) {
             Text(osd, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(12.dp)).padding(horizontal = 20.dp, vertical = 10.dp))
         }
-        // The provider's own "Пропустить заставку" can't be pressed with a remote; this one can (or ↑).
+        // The provider's own "Пропустить заставку" can't be pressed with a remote; OK presses it.
         if (!controls && state?.skip?.isNotEmpty() == true) {
-            Text("↑  ${state.skip}", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
+            Text("OK — ${state.skip.replaceFirstChar { it.lowercase() }}", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.align(Alignment.BottomEnd).padding(36.dp).background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
                     .border(2.dp, Color.White.copy(alpha = 0.7f), RoundedCornerShape(12.dp)).padding(horizontal = 18.dp, vertical = 10.dp))
         }
