@@ -396,8 +396,24 @@ internal fun closestQuality(wanted: String, available: List<String>): String? {
     return (rungs.filter { it <= target }.maxOrNull() ?: rungs.minOrNull())?.toString()
 }
 
-/** What sits over the film besides the bar: the episode strip at the bottom or the settings on the right. */
-private enum class TvPanel { EPISODES, SETTINGS }
+/** What sits over the film instead of the bar: the episode strip at the bottom, or one list from the right. */
+private enum class TvPanel { EPISODES, VOICE, QUALITY }
+
+/**
+ * Whether this TV decodes AV1 in hardware. Alloha's 2K and 4K are AV1 (1080p and below are H.264): without such a
+ * decoder the WebView decodes them on the processor, the picture stutters and the sound drifts, so they are not offered.
+ */
+internal val hardwareAv1: Boolean by lazy {
+    runCatching {
+        android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos.any { codec ->
+            !codec.isEncoder && codec.supportedTypes.any { it.equals("video/av01", ignoreCase = true) } &&
+                (if (android.os.Build.VERSION.SDK_INT >= 29) codec.isHardwareAccelerated else !codec.name.startsWith("OMX.google") && !codec.name.startsWith("c2.android"))
+        }
+    }.getOrDefault(false)
+}
+
+/** The qualities this TV can play smoothly. */
+internal fun playable(qualities: List<String>): List<String> = qualities.filter { hardwareAv1 || (it.toIntOrNull() ?: 0) <= 1080 }
 
 /** The warm accent of the TV screens: progress, ticks, the brand. Focus stays white. */
 internal val TvGold = Color(0xFFE9B46A)
@@ -432,7 +448,8 @@ fun TvEmbedPlayer(request: PlayRequest) {
         if (panel != null) return@LaunchedEffect
         if (controls) {
             val target = if (remote.state?.skip?.isNotEmpty() == true) skipFocus else playFocus
-            repeat(20) { delay(50); if (runCatching { target.requestFocus() }.isSuccess) return@LaunchedEffect }
+            // A panel that just closed is still sliding away: the controls take the focus once they are back.
+            repeat(20) { attempt -> delay(if (attempt == 0) 200 else 60); if (runCatching { target.requestFocus() }.isSuccess) return@LaunchedEffect }
         } else runCatching { rootFocus.requestFocus() }
     }
     // The controls step aside after a while of playing, unless a panel is open or the film is paused.
@@ -442,6 +459,7 @@ fun TvEmbedPlayer(request: PlayRequest) {
         controls = false
     }
     BackHandler(enabled = panel != null) { panel = null }
+    fun closePanel() { panel = null }
     BackHandler(enabled = panel == null && controls) { controls = false }
 
     // "Смотреть" on the title card is the only press needed: the film starts as soon as its page is up, the
@@ -480,7 +498,7 @@ fun TvEmbedPlayer(request: PlayRequest) {
             val quality = request.quality
             if (quality != null) {
                 val listed = withTimeoutOrNull(15_000) { snapshotFlow { remote.state }.first { it?.qualities?.isNotEmpty() == true } }
-                val chosen = listed?.let { closestQuality(quality, it.qualities) }
+                val chosen = listed?.let { closestQuality(quality, playable(it.qualities)) }
                 if (chosen != null && remote.state?.quality != chosen) remote.send("quality:$chosen")
             }
             val resume = request.resumeAt
@@ -494,8 +512,22 @@ fun TvEmbedPlayer(request: PlayRequest) {
             started = true
         }
     }
-    // The loading screen never stays over a film that plays.
+    // The loading screen goes as soon as the film itself plays: its time runs, it is the episode asked for and,
+    // when going on, it is past the second it was left at. It never stays longer than 45 s either.
     LaunchedEffect(url) { delay(45_000); started = true }
+    LaunchedEffect(url) {
+        snapshotFlow { remote.state }.first { now ->
+            if (now == null || now.paused || now.time < 1.0) return@first false
+            val episodeReady = request.episode == null || now.episodes.isEmpty() || now.episode?.id == request.episode.toString()
+            val resume = request.resumeAt
+            val resumeReady = resume == null || resume <= 30 || (now.duration > 0 && resume >= now.duration - 60) || now.time >= resume - 5
+            // A quality switch restarts the stream: the film shows once it is on the quality it will stay on.
+            val wanted = request.quality?.let { closestQuality(it, playable(now.qualities)) }
+            val qualityReady = wanted == null || now.qualities.isEmpty() || now.quality == wanted
+            episodeReady && resumeReady && qualityReady
+        }
+        started = true
+    }
     // Alloha's "Упс. Ошибка!" asks for its own reload button, out of a remote's reach: press it, twice at most.
     var reloads by remember(url) { androidx.compose.runtime.mutableIntStateOf(0) }
     LaunchedEffect(state?.failed) {
@@ -579,20 +611,25 @@ fun TvEmbedPlayer(request: PlayRequest) {
                     .border(1.5.dp, Color.White.copy(alpha = 0.7f), RoundedCornerShape(12.dp)).padding(horizontal = 18.dp, vertical = 10.dp))
         }
 
-        AnimatedVisibility(visible = controls && panel != TvPanel.EPISODES, enter = fadeIn() + androidx.compose.animation.slideInVertically { it / 6 },
+        AnimatedVisibility(visible = controls && panel == null, enter = fadeIn() + androidx.compose.animation.slideInVertically { it / 6 },
             exit = fadeOut() + androidx.compose.animation.slideOutVertically { it / 6 }, modifier = Modifier.fillMaxSize()) {
             TvPlayerControls(request, state, playFocus, skipFocus, onToggle = ::toggle, onSeek = ::seek, onSkip = ::skip,
-                onEpisodes = { panel = TvPanel.EPISODES }, onSettings = { panel = TvPanel.SETTINGS })
+                onEpisodes = { panel = TvPanel.EPISODES }, onVoice = { panel = TvPanel.VOICE }, onQuality = { panel = TvPanel.QUALITY })
         }
         AnimatedVisibility(visible = panel == TvPanel.EPISODES, enter = fadeIn() + androidx.compose.animation.slideInVertically { it / 3 },
             exit = fadeOut() + androidx.compose.animation.slideOutVertically { it / 3 }, modifier = Modifier.align(Alignment.BottomCenter)) {
-            if (state != null) TvEpisodeStrip(request.title, state, onSeason = { remote.send("season:$it") }, onEpisode = { remote.send("episode:$it"); panel = null; controls = false })
+            if (state != null) TvEpisodeStrip(request.title, state, onSeason = { remote.send("season:$it") }, onEpisode = { remote.send("episode:$it"); panel = null; controls = false }, onClose = ::closePanel)
         }
-        AnimatedVisibility(visible = panel == TvPanel.SETTINGS, enter = androidx.compose.animation.slideInHorizontally { it },
+        AnimatedVisibility(visible = panel == TvPanel.VOICE || panel == TvPanel.QUALITY, enter = androidx.compose.animation.slideInHorizontally { it },
             exit = androidx.compose.animation.slideOutHorizontally { it }, modifier = Modifier.align(Alignment.CenterEnd)) {
-            if (state != null) TvPlayerSettings(state, request.providerName,
-                onVoice = { remote.send("translation:$it"); panel = null },
-                onQuality = { value -> remote.send("quality:$value"); CineStore.preferredQuality = value; panel = null; osd = qualityLabel(value) })
+            if (state != null) {
+                if (panel == TvPanel.QUALITY) TvChoiceList("Качество", playable(state.qualities).map { qualityLabel(it) to (it == state.quality) }, request.providerName, onClose = ::closePanel) { index ->
+                    val value = playable(state.qualities)[index]
+                    remote.send("quality:$value"); CineStore.preferredQuality = value; panel = null; osd = qualityLabel(value)
+                } else TvChoiceList("Озвучка", state.translations.map { it.name to it.active }, request.providerName, onClose = ::closePanel) { index ->
+                    remote.send("translation:${state.translations[index].id}"); panel = null
+                }
+            }
         }
 
         // Until the film shows, a calm loading screen instead of the provider's page assembling itself.
@@ -665,7 +702,7 @@ private fun TvTextAction(text: String, onClick: () -> Unit, focus: FocusRequeste
 @Composable
 private fun TvPlayerControls(
     request: PlayRequest, state: EmbedState?, playFocus: FocusRequester, skipFocus: FocusRequester,
-    onToggle: () -> Unit, onSeek: (Int) -> Unit, onSkip: () -> Unit, onEpisodes: () -> Unit, onSettings: () -> Unit,
+    onToggle: () -> Unit, onSeek: (Int) -> Unit, onSkip: () -> Unit, onEpisodes: () -> Unit, onVoice: () -> Unit, onQuality: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
         // Top: what is playing, and the intro skip where the eye already is.
@@ -700,8 +737,8 @@ private fun TvPlayerControls(
                 }
                 Row(Modifier.align(Alignment.CenterEnd), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (state != null && state.episodes.isNotEmpty()) TvTextAction("Серии", onEpisodes)
-                    if (state != null && state.translations.size > 1) TvTextAction("Озвучка", onSettings)
-                    if (state != null && state.qualities.size > 1) TvTextAction(qualityLabel(state.quality.takeIf { it.isNotBlank() && it != "0" } ?: "auto").let { if (it == "Авто") "Качество" else it }, onSettings)
+                    if (state != null && state.translations.size > 1) TvTextAction("Озвучка", onVoice)
+                    if (state != null && playable(state.qualities).size > 1) TvTextAction(qualityLabel(state.quality.takeIf { it.isNotBlank() && it != "0" } ?: "auto").let { if (it == "Авто") "Качество" else it }, onQuality)
                 }
             }
         }
@@ -710,11 +747,11 @@ private fun TvPlayerControls(
 
 /** Seasons and episodes in a strip at the bottom; the one playing is marked "Сейчас" and takes the focus. */
 @Composable
-private fun TvEpisodeStrip(title: CatalogTitle, state: EmbedState, onSeason: (String) -> Unit, onEpisode: (String) -> Unit) {
+private fun TvEpisodeStrip(title: CatalogTitle, state: EmbedState, onSeason: (String) -> Unit, onEpisode: (String) -> Unit, onClose: () -> Unit) {
     val current = remember { FocusRequester() }
     LaunchedEffect(Unit) { delay(80); runCatching { current.requestFocus() } }
     Column(
-        Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.92f))))
+        Modifier.closesOnBack(onClose).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.92f))))
             .padding(top = 60.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (state.seasons.size > 1) androidx.compose.foundation.lazy.LazyRow(contentPadding = PaddingValues(horizontal = 48.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -743,39 +780,29 @@ private fun TvEpisodeStrip(title: CatalogTitle, state: EmbedState, onSeason: (St
     }
 }
 
-/** "Настройки просмотра": voice and quality in one panel from the right. A tick marks what plays now. */
+/** Back closes a panel on its first press, wherever the focus is inside it. */
+private fun Modifier.closesOnBack(onClose: () -> Unit) = onPreviewKeyEvent { event ->
+    if (event.key == Key.Back || event.key == Key.Escape) { if (event.type == KeyEventType.KeyUp) onClose(); true } else false
+}
+
+/** One list from the right (the voices, or the qualities); a tick marks what plays now and has the focus. */
 @Composable
-private fun TvPlayerSettings(state: EmbedState, providerName: String, onVoice: (String) -> Unit, onQuality: (String) -> Unit) {
+private fun TvChoiceList(title: String, options: List<Pair<String, Boolean>>, providerName: String, onClose: () -> Unit, onPick: (Int) -> Unit) {
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { delay(80); runCatching { first.requestFocus() } }
+    val focusIndex = options.indexOfFirst { it.second }.coerceAtLeast(0)
     Column(
-        Modifier.width(380.dp).fillMaxHeight().background(Color(0xF0141317)).padding(horizontal = 22.dp, vertical = 28.dp),
+        Modifier.closesOnBack(onClose).width(380.dp).fillMaxHeight().background(Color(0xF0141317)).padding(horizontal = 22.dp, vertical = 28.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Настройки просмотра", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 10.dp))
-        androidx.compose.foundation.lazy.LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            var focusGiven = false
-            if (state.translations.size > 1) {
-                item { Text("Озвучка", color = Cine.Muted, fontSize = 15.sp, modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)) }
-                val giveFocus = !focusGiven; focusGiven = true
-                items(state.translations.size) { index ->
-                    val voice = state.translations[index]
-                    TvSettingRow(voice.name, voice.active, if (giveFocus && (voice.active || (index == 0 && state.translations.none { it.active }))) first else null) { onVoice(voice.id) }
-                }
-            }
-            if (state.qualities.size > 1) {
-                item { Text("Качество", color = Cine.Muted, fontSize = 15.sp, modifier = Modifier.padding(top = 14.dp, bottom = 2.dp)) }
-                val giveFocus = !focusGiven; focusGiven = true
-                items(state.qualities.size) { index ->
-                    val value = state.qualities[index]
-                    val active = value == state.quality
-                    TvSettingRow(qualityLabel(value), active, if (giveFocus && (active || (index == 0 && state.qualities.none { it == state.quality }))) first else null) { onQuality(value) }
-                }
-            }
-            if (providerName.isNotBlank()) item {
-                Text("Плеер · $providerName", color = Cine.Muted, fontSize = 15.sp, modifier = Modifier.padding(top = 18.dp))
+        Text(title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 10.dp))
+        androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f), state = androidx.compose.foundation.lazy.rememberLazyListState((focusIndex - 2).coerceAtLeast(0)), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(options.size) { index ->
+                val (label, selected) = options[index]
+                TvSettingRow(label, selected, if (index == focusIndex) first else null) { onPick(index) }
             }
         }
+        if (providerName.isNotBlank()) Text("Плеер · $providerName", color = Cine.Muted, fontSize = 15.sp, modifier = Modifier.padding(top = 12.dp))
     }
 }
 

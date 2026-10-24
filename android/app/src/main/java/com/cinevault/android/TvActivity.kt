@@ -39,7 +39,6 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
@@ -512,25 +511,11 @@ private fun TvSearch(onOpen: (CatalogTitle) -> Unit) {
         if (results.isNotEmpty()) { delay(1_500); CineStore.rememberSearch(query) }
     }
     val typed = query.trim().length >= 2
-    // Voice search through the TV's own recognizer (the remote's microphone), where the TV has one.
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val speech = remember {
-        android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")
-            .putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Скажите название фильма или сериала")
-    }
-    val canSpeak = remember { context.packageManager.queryIntentActivities(speech, 0).isNotEmpty() }
-    val listen = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
-        result.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { query = it }
-    }
     val recent = remember(typed) { CineStore.recentSearches }
     var focused by remember { mutableStateOf<CatalogTitle?>(null) }
     TvAmbient(focused)
     Column(Modifier.fillMaxSize().padding(start = 40.dp, top = 32.dp, end = 16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         TvPageTitle("Поиск")
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        if (canSpeak) TvButton("Сказать", true, { runCatching { listen.launch(speech) } }, icon = Icons.Default.Mic)
         Row(
             Modifier.fillMaxWidth(0.6f).clip(RoundedCornerShape(Cine.Radius)).background(Cine.Surface2)
                 .border(BorderStroke(3.dp, if (fieldFocused) Color.White else Color.Transparent), RoundedCornerShape(Cine.Radius))
@@ -554,7 +539,6 @@ private fun TvSearch(onOpen: (CatalogTitle) -> Unit) {
                     },
                 )
             }
-        }
         }
         if (!typed && recent.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)) {
             items(recent) { text -> TvChip(text, false) { query = text } }
@@ -699,7 +683,7 @@ private fun TvDetail(initial: CatalogTitle, onOpen: (CatalogTitle) -> Unit, onPl
     val episode = (episodeChoice ?: last?.episode?.takeIf { season == (last.season ?: 1) } ?: 1).coerceIn(1, episodeCount)
 
     // "Продолжить" goes on from the second it was left at, in the same player and episode.
-    fun resumeFor(s: Int?, e: Int?): Double? = last?.takeIf { it.providerId == way?.id && it.position > 30 && (!item.isSeries || (it.season == s && it.episode == e)) }?.position
+    fun resumeFor(s: Int?, e: Int?): Double? = last?.takeIf { it.providerId == way?.id && it.position > 30 && (it.duration <= 0 || it.position < it.duration - 90) && (!item.isSeries || (it.season == s && it.episode == e)) }?.position
 
     fun start(quality: String?, pickSeason: Int? = null, pickEpisode: Int? = null) {
         val chosen = way ?: return

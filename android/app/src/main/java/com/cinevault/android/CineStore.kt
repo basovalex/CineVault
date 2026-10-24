@@ -143,9 +143,8 @@ object CineStore {
     fun recordProgress(titleId: String, position: Double, duration: Double) {
         val entry = history[titleId] ?: return
         if (duration <= 0 || kotlin.math.abs(entry.position - position) < 5) return
-        // Seen to the end: next time starts over (or the next episode, which the player knows).
-        val stopped = if (duration - position < 90) 0.0 else position
-        history[titleId] = entry.copy(position = stopped, duration = duration, updatedAt = System.currentTimeMillis())
+        // Seen to the end stays so (it tells the recommendations the film was liked); "Продолжить" then starts over.
+        history[titleId] = entry.copy(position = position, duration = duration, updatedAt = System.currentTimeMillis())
         saveHistory()
     }
 
@@ -177,6 +176,9 @@ object CineStore {
     // MARK: Home
 
     private var homeLoaded = false
+    // What the shelves were built from: back from a film or a new favourite, they are built again.
+    private var homeSignature = ""
+    private val currentSignature get() = "${recentlyWatched.firstOrNull()?.let { it.title.id + it.updatedAt / 60_000 }}-${favorites.size}"
 
     // The collections the home screen is made of, as (sort, collection); the order is the shelves' order.
     private val homeQueries = listOf(
@@ -184,8 +186,13 @@ object CineStore {
         "popular" to "anime", "popular" to "tense", "popular" to "together",
     )
 
+    // More candidates for the viewer: popular titles of their favourite genres, and the neighbours of the film
+    // the "because you watched" shelf is about. Keyed by what they were asked for.
+    private val extraPools = mutableMapOf<String, List<CatalogTitle>>()
+
     suspend fun loadHome(force: Boolean = false) {
-        if (homeLoading || (homeLoaded && !force)) return
+        val signature = currentSignature
+        if (homeLoading || (homeLoaded && !force && signature == homeSignature)) return
         homeLoading = true
         homeError = null
         try {
@@ -193,6 +200,7 @@ object CineStore {
             // one neither holds the others back nor leaves more than its own shelf out.
             val loaded = Array<List<CatalogTitle>?>(homeQueries.size) { null }
             val failures = mutableListOf<Throwable>()
+            extraPools.clear()
             coroutineScope {
                 homeQueries.forEachIndexed { index, (sort, collection) ->
                     launch {
@@ -201,32 +209,89 @@ object CineStore {
                             .onFailure { failures += it }
                     }
                 }
+                taste().filterValues { it > 0 }.entries.sortedByDescending { it.value }.take(3).forEach { (genre, _) ->
+                    launch { runCatching { CineVaultApi.catalog(1, "", "", genre, "popular").items }.onSuccess { extraPools["genre:$genre"] = it; publishHome(loaded) } }
+                }
+                becauseAnchor()?.let { anchor ->
+                    anchor.genres.take(2).forEach { genre ->
+                        launch { runCatching { CineVaultApi.catalog(1, "", anchor.kind, genre, "popular").items }.onSuccess { extraPools["anchor:$genre"] = it; publishHome(loaded) } }
+                    }
+                }
             }
             if (loaded.all { it.isNullOrEmpty() }) {
                 homeError = failures.firstOrNull()?.message ?: "Подборки пустые"
                 return
             }
             homeLoaded = true
+            homeSignature = signature
         } finally {
             homeLoading = false
         }
     }
 
+    /**
+     * How much the viewer seems to like each genre. A film seen to 70 % or a series come back to counts double,
+     * one dropped in its first minutes counts against; favourites count too; a fresh evening outweighs an old
+     * one (the weight halves in about two weeks).
+     */
+    private fun taste(): Map<String, Double> {
+        val now = System.currentTimeMillis()
+        val weights = mutableMapOf<String, Double>()
+        recentlyWatched.take(30).forEach { entry ->
+            val days = (now - entry.updatedAt) / 86_400_000.0
+            val fresh = 1.0 / (1.0 + days / 14.0)
+            val signal = when {
+                entry.duration > 0 && entry.progress >= 0.7f -> 2.0
+                (entry.episode ?: 1) >= 2 -> 2.0
+                entry.duration > 0 && entry.progress < 0.1f && days > 1 -> -1.0
+                else -> 1.0
+            }
+            entry.title.genres.forEach { weights.merge(it.lowercase(), signal * fresh, Double::plus) }
+        }
+        favorites.forEach { saved -> saved.genres.forEach { weights.merge(it.lowercase(), 1.5, Double::plus) } }
+        return weights
+    }
+
+    /** The film the "because you watched" shelf is about: the latest one liked, else simply the latest. */
+    private fun becauseAnchor(): SavedTitle? {
+        val withGenres = recentlyWatched.take(10).filter { it.title.genres.isNotEmpty() }
+        return (withGenres.firstOrNull { it.progress >= 0.5f || (it.episode ?: 1) >= 2 } ?: withGenres.firstOrNull())?.title
+    }
+
+    /** How close a title is to one watched: shared genres above all, then the same kind and a near year. */
+    private fun likeness(watched: SavedTitle, other: CatalogTitle): Double {
+        val a = watched.genres.map { it.lowercase() }.toSet()
+        val b = other.genres.map { it.lowercase() }.toSet()
+        if (a.isEmpty() || b.isEmpty()) return 0.0
+        val shared = (a intersect b).size.toDouble() / (a union b).size
+        val kind = if (watched.kind == other.kind) 0.5 else 0.0
+        val era = if (watched.year > 0 && other.year > 0) 0.5 / (1 + kotlin.math.abs(watched.year - other.year) / 5.0) else 0.0
+        return shared * 3 + kind + era + other.rating / 10
+    }
+
     /** Builds the shelves from whatever has arrived so far; the hero is picked once, from the first titles. */
     private fun publishHome(loaded: Array<List<CatalogTitle>?>) {
         fun at(index: Int) = loaded[index].orEmpty()
-        val candidates = loaded.flatMap { it.orEmpty() }.distinctBy { it.id }
-        val watchedGenres = recentlyWatched.take(10).flatMap { it.title.genres }.map { it.lowercase() }.groupingBy { it }.eachCount()
-        val watchedIds = history.keys
+        val candidates = (loaded.flatMap { it.orEmpty() } + extraPools.filterKeys { it.startsWith("genre:") }.values.flatten()).distinctBy { it.id }
+        val taste = taste()
+        val seen = history.keys
         // A new mix every day: the viewer's genres still lead, a daily jitter keeps the same films from sitting on top.
         val day = System.currentTimeMillis() / 86_400_000L
         fun jitter(id: String) = ((id.hashCode().toLong() * 31 + day * 7919).and(0xffff)) / 65_535.0 * 3.0
-        val personal = candidates.filter { it.id !in watchedIds }
-            .sortedByDescending { title -> title.genres.sumOf { watchedGenres[it.lowercase()] ?: 0 } * 2.0 + title.rating + jitter(title.id) }
+        val personal = candidates.filter { it.id !in seen }
+            .sortedByDescending { title -> title.genres.sumOf { taste[it.lowercase()] ?: 0.0 } * 1.5 + title.rating + jitter(title.id) }
             .take(20)
-        homeShelves = listOf(
-            Shelf("personal", "Советуем вам", if (watchedGenres.isEmpty()) "Первые рекомендации — со временем подстроятся под просмотры" else "Похоже на то, что вы уже смотрели", personal),
-            Shelf("popular", "Популярное", "Сначала карточки с большим числом оценок Kinopoisk", at(0)),
+        val anchor = becauseAnchor()
+        val because = anchor?.let { watched ->
+            val lead = personal.take(8).map { it.id }.toSet()
+            (extraPools.filterKeys { it.startsWith("anchor:") }.values.flatten() + candidates).distinctBy { it.id }
+                .filter { it.id !in seen && it.id != watched.id && it.id !in lead }
+                .sortedByDescending { likeness(watched, it) + jitter(it.id) / 3 }.take(18)
+        }.orEmpty()
+        homeShelves = listOfNotNull(
+            Shelf("personal", "Советуем вам", if (taste.isEmpty()) "Первые рекомендации — со временем подстроятся под просмотры" else "По тому, что вы досматриваете и сохраняете", personal),
+            anchor?.let { Shelf("because", "Потому что вы смотрели «${it.title}»", "Похожие по жанру, типу и году", because) },
+            Shelf("popular", "Популярное", "Сейчас популярно на Кинопоиске", at(0)),
             Shelf("recent", "Новое и обсуждаемое", "Свежие карточки, о которых уже голосуют", at(1)),
             Shelf("evening", "На один вечер", "Фильмы, которые удобно включить сегодня", at(2)),
             Shelf("anime", "Аниме", "Анимационные фильмы и сериалы", at(3)),
