@@ -63,7 +63,7 @@ fun Modifier.tvFocus(
     val grow by animateFloatAsState(if (focused) scale else 1f, label = "focus")
     return this
         .graphicsLayer { scaleX = grow; scaleY = grow }
-        .then(if (focused && glow) Modifier.shadow(28.dp, shape, ambientColor = Cine.Accent, spotColor = Cine.Accent) else Modifier)
+        .then(if (focused && glow) Modifier.shadow(28.dp, shape, ambientColor = TvGold, spotColor = TvGold) else Modifier)
         .border(if (focused) BorderStroke(3.dp, Color.White) else BorderStroke(0.dp, Color.Transparent), shape)
         .clip(shape)
         .clickable(interactionSource = interaction, indication = null, onClick = onClick)
@@ -83,15 +83,15 @@ fun TvButton(
     icon: ImageVector? = null, iconTint: Color = Color.White, modifier: Modifier = Modifier,
 ) {
     val (interaction, focused) = rememberFocus()
-    val content = if (focused) Cine.Background else Color.White
+    val content = if (focused || primary) Cine.Background else Color.White
     Row(
         modifier.then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
             .tvFocus(RoundedCornerShape(Cine.Radius), scale = 1.05f, interaction = interaction, onClick = onClick)
-            .background(if (focused) Color.White else if (primary) Cine.Button else Cine.Surface2.copy(alpha = 0.92f))
+            .background(if (focused) Color.White else if (primary) TvGold else Cine.Surface2.copy(alpha = 0.92f))
             .padding(horizontal = 26.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (icon != null) { Icon(icon, null, tint = if (focused) content else iconTint); Spacer(Modifier.width(10.dp)) }
+        if (icon != null) { Icon(icon, null, tint = if (focused || primary) content else iconTint); Spacer(Modifier.width(10.dp)) }
         Text(text, color = content, fontSize = 19.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
@@ -102,7 +102,7 @@ fun TvChip(text: String, selected: Boolean, onClick: () -> Unit) {
     Text(
         text, color = if (focused || selected) Cine.Background else Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium,
         modifier = Modifier.tvFocus(RoundedCornerShape(50), interaction = interaction, onClick = onClick)
-            .background(if (focused) Color.White else if (selected) Cine.Accent else Cine.Surface2).padding(horizontal = 20.dp, vertical = 10.dp),
+            .background(if (focused) Color.White else if (selected) TvGold else Cine.Surface2).padding(horizontal = 20.dp, vertical = 10.dp),
     )
 }
 
@@ -148,9 +148,9 @@ fun TvPickerDialog(title: String, options: List<String>, selected: Int, onPick: 
                             .background(if (focused) Color.White else if (isSelected) Cine.Surface2 else Color.Transparent).padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        val tint = if (focused) Cine.Background else if (isSelected) Cine.Accent else Color.White
+                        val tint = if (focused) Cine.Background else if (isSelected) TvGold else Color.White
                         Text(option, color = tint, fontSize = 19.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                        if (isSelected) Box(Modifier.size(24.dp)) { Icon(Icons.Default.Check, null, tint = if (focused) Cine.Background else Cine.Accent) }
+                        if (isSelected) Box(Modifier.size(24.dp)) { Icon(Icons.Default.Check, null, tint = if (focused) Cine.Background else TvGold) }
                     }
                 }
             }

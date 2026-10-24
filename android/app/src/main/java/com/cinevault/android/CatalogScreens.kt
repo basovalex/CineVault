@@ -85,10 +85,10 @@ class CatalogFeed {
     /** Starts over from the current page after a failure. */
     fun retry() { error = null; request++ }
 
-    internal suspend fun loadNext(kind: String, genre: String, current: Int) {
+    internal suspend fun loadNext(kind: String, genre: String, current: Int, sort: String = "popular") {
         loading = true
         try {
-            val result = CineVaultApi.catalog(page + 1, "", kind, genre, "popular")
+            val result = CineVaultApi.catalog(page + 1, "", kind, genre, sort)
             if (current == request) {
                 items = (items + result.items).distinctBy { it.id }; page = result.page; pages = result.pages
             }
@@ -104,9 +104,9 @@ class CatalogFeed {
 
 /** Keeps [CatalogFeed] filled: [prefetch] titles ahead of the last visible one are always on their way. */
 @Composable
-fun rememberCatalogFeed(kind: String, genre: String, grid: LazyGridState, prefetch: Int = 12): CatalogFeed {
+fun rememberCatalogFeed(kind: String, genre: String, grid: LazyGridState, prefetch: Int = 12, sort: String = "popular"): CatalogFeed {
     val feed = remember { CatalogFeed() }
-    LaunchedEffect(kind, genre) {
+    LaunchedEffect(kind, genre, sort) {
         feed.reset()
         grid.scrollToItem(0)
     }
@@ -117,7 +117,7 @@ fun rememberCatalogFeed(kind: String, genre: String, grid: LazyGridState, prefet
         snapshotFlow { Triple(grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0, feed.loading, feed.items.size) }.collect { (last, loading, size) ->
             if (current != feed.request || loading || feed.page >= feed.pages || feed.error != null) return@collect
             if (feed.page > 0 && last < size - prefetch) return@collect
-            feed.loadNext(kind, genre, current)
+            feed.loadNext(kind, genre, current, sort)
         }
     }
     return feed

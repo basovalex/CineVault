@@ -102,6 +102,8 @@ data class PlayRequest(
     val quality: String? = null,
     /** On TV, the voice chosen on the title card, put back if the provider's resume box brought another. */
     val voice: String? = null,
+    /** On TV, the second to start from ("Продолжить"); none starts where the provider does. */
+    val resumeAt: Double? = null,
 )
 
 /**

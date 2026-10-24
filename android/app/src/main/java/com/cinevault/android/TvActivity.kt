@@ -39,7 +39,9 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -160,7 +162,7 @@ private fun TvRoot() {
                     TvSection.HOME -> TvHome(open) { catalogGenre = it; section = TvSection.CATALOG }
                     TvSection.CATALOG -> TvCatalog(open, catalogGenre)
                     TvSection.SEARCH -> TvSearch(open)
-                    TvSection.MINE -> TvGrid(CineStore.favorites.map { it.asCatalogTitle() } + CineStore.recentlyWatched.map { it.title.asCatalogTitle() }.filter { w -> CineStore.favorites.none { it.id == w.id } }, "Моё", "Избранное и история с этого устройства", open)
+                    TvSection.MINE -> TvMine(open)
                 }
             }
             TvRail(section) { if (it == TvSection.CATALOG) catalogGenre = ""; section = it }
@@ -181,16 +183,16 @@ private fun TvRail(section: TvSection, onSelect: (TvSection) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(Modifier.padding(start = 8.dp, bottom = 28.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(38.dp).clip(RoundedCornerShape(10.dp)).background(Cine.Button), contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.PlayArrow, null, tint = Color.White)
+            Box(Modifier.size(38.dp).clip(RoundedCornerShape(10.dp)).background(TvGold), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.PlayArrow, null, tint = Cine.Background)
             }
-            if (open) { Spacer(Modifier.width(12.dp)); Text("CineVault", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, maxLines = 1) }
+            if (open) { Spacer(Modifier.width(12.dp)); Text("CINEVAULT", color = TvGold, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 3.sp, maxLines = 1) }
         }
         TvSection.entries.forEach { item ->
             val selected = item == section
             val interaction = remember { MutableInteractionSource() }
             val focused by interaction.collectIsFocusedAsState()
-            val tint = when { focused -> Cine.Background; selected -> Cine.Accent; else -> Cine.Muted }
+            val tint = when { focused -> Cine.Background; selected -> TvGold; else -> Cine.Muted }
             Row(
                 Modifier.fillMaxWidth().tvFocus(scale = 1.04f, interaction = interaction) { onSelect(item) }
                     .background(if (focused) Color.White else if (selected) Cine.Surface2 else Color.Transparent).padding(horizontal = 14.dp, vertical = 12.dp),
@@ -228,8 +230,15 @@ private fun TvWideCard(entry: WatchEntry, onClick: () -> Unit) {
     Column(Modifier.width(268.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).tvFocus(RoundedCornerShape(Cine.PosterRadius), scale = 1.08f, glow = true, onClick = onClick)) {
             BackdropArt(title, Modifier.fillMaxSize())
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.5f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.75f))))
-            Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.align(Alignment.BottomStart).padding(10.dp).size(28.dp))
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.8f))))
+            Row(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(24.dp))
+                Spacer(Modifier.weight(1f))
+                if (entry.duration > 0) Text("${tvClock(entry.position)} / ${tvClock(entry.duration)}", color = Color.White, fontSize = 13.sp)
+            }
+            if (entry.progress > 0f) Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(4.dp).background(Color.White.copy(alpha = 0.25f))) {
+                Box(Modifier.fillMaxHeight().fillMaxWidth(entry.progress).background(TvGold))
+            }
         }
         Text(title.title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         val where = when {
@@ -274,8 +283,8 @@ private fun TvHome(onOpen: (CatalogTitle) -> Unit, onGenre: (String) -> Unit) {
     val pageScroll = remember { TvPageScroll { heroFocused } }
     // Focus goes to the hero once, when the first one arrives; the carousel turning never takes it back.
     LaunchedEffect(heroes.isNotEmpty()) { if (heroes.isNotEmpty()) { delay(150); runCatching { heroFocus.requestFocus() } } }
-    // The hero turns to the next title every few seconds, as on Apple TV and Netflix.
-    LaunchedEffect(heroes.size, heroIndex) { if (heroes.size > 1) { delay(9_000); heroIndex = (heroIndex + 1) % heroes.size } }
+    // The hero changes only while nobody is choosing in it: after a while away from it, never under the remote.
+    LaunchedEffect(heroes.size, heroIndex, heroFocused) { if (heroes.size > 1 && !heroFocused) { delay(12_000); heroIndex = (heroIndex + 1) % heroes.size } }
     // On the hero's buttons the page is back at the top, so the title above them is always whole.
     LaunchedEffect(heroFocused) { if (heroFocused) list.animateScrollToItem(0) }
     val genres = CineStore.facets["movie"]?.genres.orEmpty().entries.sortedByDescending { it.value }.take(10).map { it.key }
@@ -285,7 +294,7 @@ private fun TvHome(onOpen: (CatalogTitle) -> Unit, onGenre: (String) -> Unit) {
             Box(Modifier.fillMaxWidth().height(430.dp)) {
                 if (hero == null) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        if (CineStore.homeLoading) CircularProgressIndicator(color = Cine.Accent)
+                        if (CineStore.homeLoading) CircularProgressIndicator(color = TvGold)
                         else Text(CineStore.homeError ?: "", color = Cine.Muted, fontSize = 18.sp)
                     }
                 } else {
@@ -354,6 +363,7 @@ private fun TvShelf(label: String, titles: List<CatalogTitle>, onOpen: (CatalogT
  * A grid of posters walked with the remote. Up and Down keep to the column the focus is in: left to itself,
  * a lazy grid sends Down into a row that is not laid out yet to that row's first poster.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TvPosterGrid(
     titles: List<CatalogTitle>, onOpen: (CatalogTitle) -> Unit, modifier: Modifier = Modifier,
@@ -364,6 +374,8 @@ private fun TvPosterGrid(
 ) {
     val scope = rememberCoroutineScope()
     val requesters = remember { mutableMapOf<String, FocusRequester>() }
+    val gridSpec = remember { TvPageScroll() }
+    CompositionLocalProvider(LocalBringIntoViewSpec provides gridSpec) {
     LazyVerticalGrid(
         GridCells.Fixed(5), modifier, state = state, contentPadding = PaddingValues(start = 8.dp, end = 24.dp, top = 12.dp, bottom = 32.dp),
         horizontalArrangement = Arrangement.spacedBy(22.dp), verticalArrangement = Arrangement.spacedBy(26.dp),
@@ -381,12 +393,12 @@ private fun TvPosterGrid(
                 val goal = titles.getOrNull(target.coerceAtMost(titles.lastIndex)) ?: return@onPreviewKeyEvent true
                 if (target > titles.lastIndex && index / columns == titles.lastIndex / columns) return@onPreviewKeyEvent false
                 scope.launch {
-                    // A poster already laid out takes the focus at once (the page follows it); one that is not
-                    // yet is scrolled in by a row first.
+                    // A poster already laid out takes the focus at once and the page follows it in one smooth move;
+                    // one that is not yet is brought to where that move would put it, then focused.
                     if (state.layoutInfo.visibleItemsInfo.none { it.key == goal.id }) {
-                        val row = state.layoutInfo.visibleItemsInfo.firstOrNull { it.key == title.id }?.let { it.size.height + 26 } ?: 300
-                        state.scrollBy((step * row).toFloat())
-                        androidx.compose.runtime.withFrameNanos { }
+                        val here = state.layoutInfo.visibleItemsInfo.firstOrNull { it.key == title.id }
+                        val gridIndex = (here?.index ?: index) - index + titles.indexOf(goal)
+                        state.animateScrollToItem(gridIndex, -(state.layoutInfo.viewportSize.height * 0.17f).toInt())
                     }
                     runCatching { requesters[goal.id]?.requestFocus() }
                 }
@@ -394,6 +406,7 @@ private fun TvPosterGrid(
             })
         }
         footer()
+    }
     }
 }
 
@@ -409,11 +422,13 @@ private fun TvPageTitle(title: String, subtitle: String? = null) {
 private fun TvCatalog(onOpen: (CatalogTitle) -> Unit, startGenre: String = "") {
     var kind by rememberSaveable { mutableStateOf("movie") }
     var genre by rememberSaveable(startGenre) { mutableStateOf(startGenre) }
+    var sort by rememberSaveable { mutableStateOf("popular") }
+    var picker by remember { mutableStateOf<String?>(null) }
     val grid = rememberLazyGridState()
-    val feed = rememberCatalogFeed(kind, genre, grid)
+    val feed = rememberCatalogFeed(kind, genre, grid, sort = sort)
     val firstPageDone = feed.items.isNotEmpty() || feed.error != null
     LaunchedEffect(firstPageDone, kind) { if (firstPageDone) CineStore.loadFacets(kind) }
-    val genres = CineStore.facets[kind]?.genres.orEmpty().entries.sortedByDescending { it.value }.take(14).map { it.key }
+    val genres = CineStore.facets[kind]?.genres.orEmpty().entries.sortedByDescending { it.value }.take(30).map { it.key }
         .let { if (genre.isNotBlank() && genre !in it) listOf(genre) + it else it }
     var focused by remember { mutableStateOf<CatalogTitle?>(null) }
     Box(Modifier.fillMaxSize()) {
@@ -422,13 +437,14 @@ private fun TvCatalog(onOpen: (CatalogTitle) -> Unit, startGenre: String = "") {
         TvPosterGrid(feed.items, onOpen, Modifier.fillMaxSize().padding(start = 40.dp, end = 16.dp), state = grid, onFocusTitle = { focused = it }, header = {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Column(Modifier.padding(top = 32.dp, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                    TvPageTitle("Каталог", if (genre.isBlank()) "Сначала популярное" else genre.replaceFirstChar { it.uppercase() })
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 6.dp, horizontal = 4.dp)) {
-                        item { TvChip("Фильмы", kind == "movie") { kind = "movie"; genre = "" } }
-                        item { TvChip("Сериалы", kind == "series") { kind = "series"; genre = "" } }
-                        item { Spacer(Modifier.width(18.dp)) }
-                        item { TvChip("Все жанры", genre.isEmpty()) { genre = "" } }
-                        items(genres) { name -> TvChip(name, genre == name) { genre = name } }
+                    TvPageTitle("Каталог")
+                    // The site's filters, made for a remote: the kind, then a genre and an order from short lists.
+                    Row(Modifier.padding(vertical = 4.dp, horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TvChip("Фильмы", kind == "movie") { kind = "movie"; genre = "" }
+                        TvChip("Сериалы", kind == "series") { kind = "series"; genre = "" }
+                        Spacer(Modifier.width(10.dp))
+                        TvSelect("Жанр", genre.ifBlank { "Все жанры" }.replaceFirstChar { it.uppercase() }, { picker = "genre" })
+                        TvSelect("Сортировка", tvSorts.firstOrNull { it.first == sort }?.second ?: "Популярное", { picker = "sort" })
                     }
                 }
             }
@@ -441,18 +457,31 @@ private fun TvCatalog(onOpen: (CatalogTitle) -> Unit, startGenre: String = "") {
                     Text(failure, color = Cine.Muted, fontSize = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             } else if (feed.loading) item(span = { GridItemSpan(maxLineSpan) }) {
-                Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Cine.Accent) }
+                Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = TvGold) }
             } else if (feed.items.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                 Text("В этом разделе пока ничего нет.", color = Cine.Muted, fontSize = 18.sp)
             }
         }
     }
+    when (picker) {
+        "genre" -> {
+            val options = listOf("") + genres.filter { it.isNotBlank() }
+            TvPickerDialog("Жанр", options.map { it.ifBlank { "Все жанры" }.replaceFirstChar { c -> c.uppercase() } }, options.indexOf(genre), { genre = options[it]; picker = null }) { picker = null }
+        }
+        "sort" -> TvPickerDialog("Сортировка", tvSorts.map { it.second }, tvSorts.indexOfFirst { it.first == sort }, { sort = tvSorts[it].first; picker = null }) { picker = null }
+    }
 }
+
+/** The website's catalog orders. */
+private val tvSorts = listOf("popular" to "Популярное", "votes" to "Больше оценок", "rating" to "По рейтингу", "year" to "Сначала новые", "title" to "По алфавиту")
 
 /** The focused title's artwork, faded in behind a grid page (as on Google TV): the page takes the film's mood. */
 @Composable
 private fun TvAmbient(title: CatalogTitle?) {
-    androidx.compose.animation.Crossfade(title, label = "ambient", animationSpec = androidx.compose.animation.core.tween(600)) { shown ->
+    // Only a title the remote rests on changes the picture: running past posters leaves it alone.
+    var shown by remember { mutableStateOf(title) }
+    LaunchedEffect(title) { delay(450); shown = title }
+    androidx.compose.animation.Crossfade(shown, label = "ambient", animationSpec = androidx.compose.animation.core.tween(600)) { shown ->
         if (shown != null) Box(Modifier.fillMaxSize()) {
             BackdropArt(shown, Modifier.fillMaxWidth(0.72f).fillMaxHeight(0.8f).align(Alignment.TopEnd).graphicsLayer { alpha = 0.55f })
             Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Cine.Background, 0.3f to Cine.Background, 0.75f to Cine.Background.copy(alpha = 0.35f), 1f to Color.Transparent)))
@@ -480,14 +509,30 @@ private fun TvSearch(onOpen: (CatalogTitle) -> Unit) {
         delay(400)
         results = runCatching { CineVaultApi.catalog(1, query.trim(), "", "", "popular").items }.getOrDefault(emptyList())
         searching = false
+        if (results.isNotEmpty()) { delay(1_500); CineStore.rememberSearch(query) }
     }
     val typed = query.trim().length >= 2
+    // Voice search through the TV's own recognizer (the remote's microphone), where the TV has one.
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val speech = remember {
+        android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")
+            .putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Скажите название фильма или сериала")
+    }
+    val canSpeak = remember { context.packageManager.queryIntentActivities(speech, 0).isNotEmpty() }
+    val listen = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
+        result.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { query = it }
+    }
+    val recent = remember(typed) { CineStore.recentSearches }
     var focused by remember { mutableStateOf<CatalogTitle?>(null) }
     TvAmbient(focused)
     Column(Modifier.fillMaxSize().padding(start = 40.dp, top = 32.dp, end = 16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         TvPageTitle("Поиск")
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (canSpeak) TvButton("Сказать", true, { runCatching { listen.launch(speech) } }, icon = Icons.Default.Mic)
         Row(
-            Modifier.fillMaxWidth(0.62f).clip(RoundedCornerShape(Cine.Radius)).background(Cine.Surface2)
+            Modifier.fillMaxWidth(0.6f).clip(RoundedCornerShape(Cine.Radius)).background(Cine.Surface2)
                 .border(BorderStroke(3.dp, if (fieldFocused) Color.White else Color.Transparent), RoundedCornerShape(Cine.Radius))
                 .padding(horizontal = 18.dp, vertical = 15.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -495,7 +540,7 @@ private fun TvSearch(onOpen: (CatalogTitle) -> Unit) {
             Icon(Icons.Default.Search, null, tint = if (fieldFocused) Color.White else Cine.Muted)
             Spacer(Modifier.width(12.dp))
             Box(Modifier.weight(1f)) {
-                if (query.isEmpty()) Text("Название фильма, сериала или актёра", color = Cine.Muted, fontSize = 19.sp)
+                if (query.isEmpty()) Text("Фильм, сериал или актёр", color = Cine.Muted, fontSize = 19.sp, maxLines = 1)
                 BasicTextField(
                     query, { query = it }, singleLine = true, textStyle = TextStyle(color = Color.White, fontSize = 19.sp), cursorBrush = SolidColor(Cine.Accent),
                     interactionSource = field,
@@ -510,11 +555,54 @@ private fun TvSearch(onOpen: (CatalogTitle) -> Unit) {
                 )
             }
         }
+        }
+        if (!typed && recent.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)) {
+            items(recent) { text -> TvChip(text, false) { query = text } }
+        }
         Text(
             when { !typed -> "Часто смотрят"; searching -> "Ищу…"; results.isEmpty() -> "Ничего не нашлось. Попробуйте другое название или имя актёра."; else -> "Найдено: ${results.size}" },
             color = Cine.Muted, fontSize = 17.sp,
         )
         TvPosterGrid(if (typed) results else popular, onOpen, onFocusTitle = { focused = it })
+    }
+}
+
+/** "Моё": what was being watched (with where it stopped) and the favourites, apart. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TvMine(onOpen: (CatalogTitle) -> Unit) {
+    val rowScroll = LocalBringIntoViewSpec.current
+    val pageScroll = remember { TvPageScroll() }
+    val watched = CineStore.recentlyWatched
+    val favorites = CineStore.favorites.map { it.asCatalogTitle() }
+    CompositionLocalProvider(LocalBringIntoViewSpec provides pageScroll) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 32.dp, bottom = 150.dp), verticalArrangement = Arrangement.spacedBy(28.dp)) {
+            item { Box(Modifier.padding(start = 40.dp)) { TvPageTitle("Моё", "Хранится на этом телевизоре") } }
+            if (watched.isNotEmpty()) item {
+                TvMineRow("Продолжить и просмотренное", rowScroll) { items(watched, key = { it.title.id }) { entry -> TvWideCard(entry) { onOpen(entry.title.asCatalogTitle()) } } }
+            }
+            if (favorites.isNotEmpty()) item {
+                TvMineRow("Избранное", rowScroll) { items(favorites, key = { it.id }) { title -> TvPoster(title, { onOpen(title) }) } }
+            }
+            if (watched.isEmpty() && favorites.isEmpty()) item {
+                Column(Modifier.padding(start = 40.dp, top = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Icon(Icons.Default.FavoriteBorder, null, tint = Cine.Muted, modifier = Modifier.size(44.dp))
+                    Text("Пока пусто", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Добавьте фильм в избранное или начните смотреть — он появится здесь.", color = Cine.Muted, fontSize = 18.sp)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TvMineRow(label: String, rowScroll: BringIntoViewSpec, content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text(label, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 40.dp))
+        CompositionLocalProvider(LocalBringIntoViewSpec provides rowScroll) {
+            LazyRow(contentPadding = PaddingValues(start = 40.dp, end = 48.dp, top = 12.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(20.dp), content = content)
+        }
     }
 }
 
@@ -533,6 +621,20 @@ private fun TvGrid(titles: List<CatalogTitle>, title: String, subtitle: String, 
         }
         TvPosterGrid(titles, onOpen, onFocusTitle = { focused = it })
     }
+}
+
+/** Dubbing first: "Дублированный" itself, then any dub, then the rest as listed. */
+private fun voiceRank(name: String): Int = when {
+    name.trim().equals("дублированный", ignoreCase = true) -> 0
+    name.contains("дублир", ignoreCase = true) -> 1
+    name.contains("дубляж", ignoreCase = true) -> 2
+    else -> 3
+}
+
+private fun tvClock(seconds: Double): String {
+    val total = seconds.toInt().coerceAtLeast(0)
+    val h = total / 3600; val m = total % 3600 / 60; val sec = total % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
 }
 
 /** A way to watch a title: a provider's player, or CineVault's own stream. */
@@ -583,9 +685,8 @@ private fun TvDetail(initial: CatalogTitle, onOpen: (CatalogTitle) -> Unit, onPl
         way?.provider?.translations?.isNotEmpty() == true -> way.provider.translations.map { it.name }
         else -> emptyList()
     }
-    // Dubbing comes first unless the viewer chose otherwise here or last time.
-    val voice = voices.firstOrNull { it == voiceName } ?: voices.firstOrNull { it == last?.translationName }
-        ?: voices.firstOrNull { it.contains("дубл", ignoreCase = true) } ?: voices.firstOrNull()
+    // Dubbing comes first ("Дублированный" itself before a studio's dub) unless the viewer chose otherwise here or last time.
+    val voice = voices.firstOrNull { it == voiceName } ?: voices.firstOrNull { it == last?.translationName } ?: voices.minByOrNull(::voiceRank)
     // CineVault's own sources come one per voice and quality; the qualities offered are the voice's own.
     val voiceSources = if (way?.id == "cinevault") item.sources.filter { !it.isEmbed && it.voice.ifBlank { "Оригинал" } == voice } else emptyList()
     val sourceRungs = voiceSources.mapNotNull { rungOf(it.quality) }.distinct().sortedByDescending { it.toInt() }
@@ -597,26 +698,31 @@ private fun TvDetail(initial: CatalogTitle, onOpen: (CatalogTitle) -> Unit, onPl
     val episodeCount = episodeCounts.getOrNull(season - 1)?.takeIf { it > 0 } ?: 1
     val episode = (episodeChoice ?: last?.episode?.takeIf { season == (last.season ?: 1) } ?: 1).coerceIn(1, episodeCount)
 
-    fun start(quality: String?) {
+    // "Продолжить" goes on from the second it was left at, in the same player and episode.
+    fun resumeFor(s: Int?, e: Int?): Double? = last?.takeIf { it.providerId == way?.id && it.position > 30 && (!item.isSeries || (it.season == s && it.episode == e)) }?.position
+
+    fun start(quality: String?, pickSeason: Int? = null, pickEpisode: Int? = null) {
         val chosen = way ?: return
+        val atSeason = pickSeason ?: season
+        val atEpisode = pickEpisode ?: episode
         when {
             chosen.id == "cinevault" -> {
                 val sources = voiceSources.ifEmpty { item.sources.filter { !it.isEmbed } }
                 val source = sources.firstOrNull { quality != null && rungOf(it.quality) == quality } ?: sources.firstOrNull() ?: return
                 CineStore.recordOpened(item, "cinevault", voice)
                 // A stream with rungs of its own (HLS) is held to the chosen one by the player itself.
-                onPlay(PlayRequest(item, source = source, providerName = "CineVault", quality = quality?.takeIf { rungOf(source.quality) == null }))
+                onPlay(PlayRequest(item, source = source, providerName = "CineVault", quality = quality?.takeIf { rungOf(source.quality) == null }, resumeAt = resumeFor(null, null)))
             }
             chosen.provider?.translations?.isNotEmpty() == true -> {
                 val translation = chosen.provider.translations.firstOrNull { it.name == voice } ?: chosen.provider.translations.first()
-                CineStore.recordOpened(item, chosen.id, translation.name, if (canPickEpisode) season else null, if (canPickEpisode) episode else null)
+                CineStore.recordOpened(item, chosen.id, translation.name, if (canPickEpisode) atSeason else null, if (canPickEpisode) atEpisode else null)
                 onPlay(PlayRequest(item, embedUrl = translation.url, providerName = chosen.name,
-                    season = if (canPickEpisode) season else null, episode = if (canPickEpisode) episode else null, quality = quality?.takeIf(String::isNotBlank),
-                    voice = translation.name))
+                    season = if (canPickEpisode) atSeason else null, episode = if (canPickEpisode) atEpisode else null, quality = quality?.takeIf(String::isNotBlank),
+                    voice = translation.name, resumeAt = resumeFor(if (canPickEpisode) atSeason else null, if (canPickEpisode) atEpisode else null)))
             }
             chosen.provider?.embedUrl != null -> {
                 CineStore.recordOpened(item, chosen.id)
-                onPlay(PlayRequest(item, embedUrl = chosen.provider.embedUrl, providerName = chosen.name))
+                onPlay(PlayRequest(item, embedUrl = chosen.provider.embedUrl, providerName = chosen.name, resumeAt = resumeFor(last?.season, last?.episode)))
             }
         }
     }
@@ -630,37 +736,66 @@ private fun TvDetail(initial: CatalogTitle, onOpen: (CatalogTitle) -> Unit, onPl
             item { MetaLine(item, withAge = true, size = 17) }
             if (item.description.isNotBlank()) item { Text(item.description, color = Cine.TextSoft, fontSize = 18.sp, lineHeight = 26.sp, maxLines = 4, overflow = TextOverflow.Ellipsis, modifier = Modifier.width(680.dp)) }
             item {
-                Column(Modifier.onFocusChanged { topFocused = it.hasFocus }, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Column(Modifier.padding(top = 6.dp).onFocusChanged { topFocused = it.hasFocus }, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        val resume = resumeFor(if (canPickEpisode) season else last?.season, if (canPickEpisode) episode else last?.episode)
                         when {
-                            loading -> CircularProgressIndicator(color = Cine.Accent)
+                            loading -> CircularProgressIndicator(color = TvGold)
                             ways.isEmpty() -> Text("Для этого тайтла сейчас нет плееров.", color = Cine.Muted, fontSize = 17.sp)
                             else -> TvButton(
-                                if (last != null) "Продолжить" else "Смотреть", true,
-                                { if (way?.id == "alloha" || way?.id == "cinevault") picker = "quality" else start(null) }, playFocus, icon = Icons.Default.PlayArrow,
+                                when { resume != null -> "Продолжить · ${tvClock(resume)}"; last != null -> "Продолжить"; else -> "Смотреть" }, true,
+                                // Only CineVault's own files have qualities to choose ahead; players offer theirs once they play.
+                                { if (way?.id == "cinevault" && sourceRungs.size > 1) picker = "quality" else start(CineStore.preferredQuality.ifBlank { null }) },
+                                playFocus, icon = Icons.Default.PlayArrow,
                             )
                         }
                         val favorite = CineStore.isFavorite(item.id)
                         TvButton(
                             if (favorite) "В избранном" else "В избранное", false, { CineStore.toggleFavorite(item) },
                             if (loading || ways.isEmpty()) playFocus else null,
-                            icon = if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, iconTint = if (favorite) Cine.Accent else Color.White,
+                            icon = if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, iconTint = if (favorite) TvGold else Color.White,
                         )
+                        if (ways.size > 1 || voices.size > 1) TvButton("Настройки просмотра", false, { picker = "settings" }, icon = Icons.Default.Tune)
                     }
-                    if (ways.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        TvSelect("Плеер", way?.name.orEmpty(), { picker = "way" }, enabled = ways.size > 1)
-                        TvSelect("Озвучка", voice ?: "Выбирается в плеере", { picker = "voice" }, enabled = voices.size > 1)
-                        if (canPickEpisode) {
-                            TvSelect("Сезон", "Сезон $season", { picker = "season" }, enabled = episodeCounts.size > 1)
-                            TvSelect("Серия", "Серия $episode", { picker = "episode" }, enabled = episodeCount > 1)
-                        }
-                    }
+                    val settingsLine = listOfNotNull(way?.name, voice).joinToString(" · ")
+                    if (settingsLine.isNotBlank()) Text(settingsLine, color = Cine.Muted, fontSize = 15.sp)
                     if (item.isSeries && way != null && !canPickEpisode && way.id != "cinevault") {
                         Text(
-                            if (way.id == "turbo") "Сезон, серию, озвучку и качество выберете в панели плеера (↓ во время просмотра)."
-                            else "Сезон и серию в этом плеере выбирают внутри него.",
+                            if (way.id == "turbo") "Сезон, серию, озвучку и качество выберете в панели плеера." else "Сезон и серию в этом плеере выбирают внутри него.",
                             color = Cine.Muted, fontSize = 15.sp,
                         )
+                    }
+                }
+            }
+            // A series shows its episodes: OK starts the one chosen; the one stopped at is marked.
+            if (canPickEpisode) item {
+                Column(Modifier.padding(top = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Серии", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.width(8.dp))
+                        if (episodeCounts.size > 1) episodeCounts.indices.forEach { index -> TvChip("Сезон ${index + 1}", season == index + 1) { seasonChoice = index + 1; episodeChoice = null } }
+                    }
+                    CompositionLocalProvider(LocalBringIntoViewSpec provides rowScroll) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(18.dp), contentPadding = PaddingValues(start = 6.dp, end = 40.dp, top = 10.dp, bottom = 10.dp)) {
+                            items((1..episodeCount).toList(), key = { "$season-$it" }) { number ->
+                                val here = last?.season == season && last.episode == number
+                                Column(Modifier.width(210.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).tvFocus(RoundedCornerShape(Cine.PosterRadius), scale = 1.07f, glow = true) {
+                                        episodeChoice = number; start(CineStore.preferredQuality.ifBlank { null }, season, number)
+                                    }) {
+                                        BackdropArt(item, Modifier.fillMaxSize().graphicsLayer { alpha = if (here) 1f else 0.6f })
+                                        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.4f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.8f))))
+                                        Text("$number", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.BottomStart).padding(10.dp))
+                                        if (here) Text("Вы здесь", color = Cine.Background, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).background(Color.White, RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 3.dp))
+                                        if (here && last.progress > 0f) Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(4.dp).background(Color.White.copy(alpha = 0.25f))) {
+                                            Box(Modifier.fillMaxHeight().fillMaxWidth(last.progress).background(TvGold))
+                                        }
+                                    }
+                                    Text("Серия $number", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -684,6 +819,8 @@ private fun TvDetail(initial: CatalogTitle, onOpen: (CatalogTitle) -> Unit, onPl
     }
 
     when (picker) {
+        "settings" -> TvPickerDialog("Настройки просмотра", listOf("Плеер · ${way?.name.orEmpty()}", "Озвучка · ${voice ?: "в плеере"}"), -1,
+            { picker = if (it == 0) "way" else "voice" }) { picker = null }
         "way" -> TvPickerDialog("Плеер", ways.map { it.name }, ways.indexOf(way), { wayId = ways[it].id; voiceName = null; picker = null }) { picker = null }
         "voice" -> TvPickerDialog("Озвучка", voices, voices.indexOf(voice), { voiceName = voices[it]; picker = null }) { picker = null }
         "season" -> TvPickerDialog("Сезон", episodeCounts.indices.map { "Сезон ${it + 1} · ${episodeCounts[it]} сер." }, season - 1,

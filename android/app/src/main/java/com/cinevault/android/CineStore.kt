@@ -47,15 +47,20 @@ data class WatchEntry(
     val title: SavedTitle, val providerId: String, val translationName: String?, val updatedAt: Long,
     /** For series watched in Alloha on TV: where the viewer stopped. */
     val season: Int? = null, val episode: Int? = null,
+    /** Where the viewer stopped in that film or episode, and how long it is (seconds; 0 when unknown). */
+    val position: Double = 0.0, val duration: Double = 0.0,
 ) {
+    val progress: Float get() = if (duration > 0) (position / duration).toFloat().coerceIn(0f, 1f) else 0f
+
     fun toJson(): JSONObject = JSONObject().put("title", title.toJson()).put("providerId", providerId).put("translationName", translationName)
-        .put("updatedAt", updatedAt).put("season", season).put("episode", episode)
+        .put("updatedAt", updatedAt).put("season", season).put("episode", episode).put("position", position).put("duration", duration)
 
     companion object {
         fun fromJson(json: JSONObject) = WatchEntry(
             SavedTitle.fromJson(json.optJSONObject("title") ?: JSONObject()), json.optString("providerId"),
             json.optString("translationName").takeIf { it.isNotBlank() && it != "null" }, json.optLong("updatedAt"),
             json.optInt("season").takeIf { it > 0 }, json.optInt("episode").takeIf { it > 0 },
+            json.optDouble("position", 0.0).takeUnless(Double::isNaN) ?: 0.0, json.optDouble("duration", 0.0).takeUnless(Double::isNaN) ?: 0.0,
         )
     }
 }
@@ -126,7 +131,21 @@ object CineStore {
     fun recordEpisode(titleId: String, season: Int?, episode: Int, translationName: String?) {
         val entry = history[titleId] ?: return
         if (entry.season == season && entry.episode == episode && (translationName == null || entry.translationName == translationName)) return
-        history[titleId] = entry.copy(season = season, episode = episode, translationName = translationName ?: entry.translationName, updatedAt = System.currentTimeMillis())
+        val sameEpisode = entry.season == season && entry.episode == episode
+        history[titleId] = entry.copy(
+            season = season, episode = episode, translationName = translationName ?: entry.translationName, updatedAt = System.currentTimeMillis(),
+            position = if (sameEpisode) entry.position else 0.0, duration = if (sameEpisode) entry.duration else 0.0,
+        )
+        saveHistory()
+    }
+
+    /** The playing position, reported every few seconds by the TV player: "Продолжить" starts from it. */
+    fun recordProgress(titleId: String, position: Double, duration: Double) {
+        val entry = history[titleId] ?: return
+        if (duration <= 0 || kotlin.math.abs(entry.position - position) < 5) return
+        // Seen to the end: next time starts over (or the next episode, which the player knows).
+        val stopped = if (duration - position < 90) 0.0 else position
+        history[titleId] = entry.copy(position = stopped, duration = duration, updatedAt = System.currentTimeMillis())
         saveHistory()
     }
 
@@ -134,6 +153,16 @@ object CineStore {
     var preferredQuality: String
         get() = prefs.getString("quality", "").orEmpty()
         set(value) { prefs.edit().putString("quality", value).apply() }
+
+    /** The last searches typed or said on this device, newest first. */
+    val recentSearches: List<String>
+        get() = runCatching { JSONArray(prefs.getString("searches", "[]")).let { a -> (0 until a.length()).map { a.getString(it) } } }.getOrDefault(emptyList())
+
+    fun rememberSearch(query: String) {
+        val text = query.trim().takeIf { it.length >= 2 } ?: return
+        val list = (listOf(text) + recentSearches.filter { !it.equals(text, ignoreCase = true) }).take(8)
+        prefs.edit().putString("searches", JSONArray(list).toString()).apply()
+    }
 
     fun removeFromHistory(id: String) {
         history.remove(id)
@@ -189,8 +218,11 @@ object CineStore {
         val candidates = loaded.flatMap { it.orEmpty() }.distinctBy { it.id }
         val watchedGenres = recentlyWatched.take(10).flatMap { it.title.genres }.map { it.lowercase() }.groupingBy { it }.eachCount()
         val watchedIds = history.keys
+        // A new mix every day: the viewer's genres still lead, a daily jitter keeps the same films from sitting on top.
+        val day = System.currentTimeMillis() / 86_400_000L
+        fun jitter(id: String) = ((id.hashCode().toLong() * 31 + day * 7919).and(0xffff)) / 65_535.0 * 3.0
         val personal = candidates.filter { it.id !in watchedIds }
-            .sortedByDescending { title -> title.genres.sumOf { watchedGenres[it.lowercase()] ?: 0 } * 2.0 + title.rating }
+            .sortedByDescending { title -> title.genres.sumOf { watchedGenres[it.lowercase()] ?: 0 } * 2.0 + title.rating + jitter(title.id) }
             .take(20)
         homeShelves = listOf(
             Shelf("personal", "Советуем вам", if (watchedGenres.isEmpty()) "Первые рекомендации — со временем подстроятся под просмотры" else "Похоже на то, что вы уже смотрели", personal),
