@@ -3,7 +3,8 @@
 
   // WKWebView injects user scripts into every frame; Chrome already restricts
   // this file through manifest matches. Keep the same provider-only scope.
-  if (location.hostname !== "theatre.stravers.live") return;
+  // Alloha moves between subdomains (theatre., loosening-as., …) of the same host.
+  if (!/(^|\.)stravers\.live$/.test(location.hostname)) return;
 
   // Scope this experiment to the one JSON ad-list request observed in Alloha.
   // In particular, never intercept video manifests, segments, or other ads APIs.

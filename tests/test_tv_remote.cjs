@@ -1,0 +1,24 @@
+const {readFileSync}=require('node:fs');
+const vm=require('node:vm'), assert=require('node:assert/strict'), test=require('node:test');
+const source=readFileSync('android/app/src/main/java/com/cinevault/android/TvPlayer.kt','utf8').split('internal const val TV_REMOTE_JS = """')[1].split('"""')[0];
+test('TV commands reach playback, seek, episode, quality and intro controls',()=>{
+ const actions=[], timers=[]; const video={tagName:'VIDEO',duration:1440,currentTime:60,paused:true,videoWidth:1920,videoHeight:1080,play(){actions.push('play')},pause(){actions.push('pause')}};
+ const button=name=>({tagName:'BUTTON',children:[],disabled:false,classList:{contains(){return false}},getBoundingClientRect(){return {width:200,height:50}},click(){actions.push(name)},innerText:name==='skip'?'Пропустить заставку':''});
+ const player={media:video,quality:720,hls:{currentLevel:1},togglePlay(){actions.push('toggle')}};
+ const nodes={next:button('next'),prev:button('prev'),skip:button('skip'),quality:button('quality'),episode:button('episode')};
+ const document={getElementsByTagName(){return [video,{...video,videoWidth:3840,videoHeight:2160,currentTime:5}]},getElementById(){return {}},querySelector(selector){if(selector.includes('data-allplay=next'))return nodes.next;if(selector.includes('data-allplay=prev'))return nodes.prev;if(selector.includes('data-allplay=quality'))return nodes.quality;if(selector.includes('data-select^=episode'))return nodes.episode;return null},querySelectorAll(selector){return selector.startsWith('button,')?[{...nodes.skip,tagName:'DIV',children:[nodes.skip],click(){actions.push('wrong wrapper')}},nodes.skip]:[]}};
+ const channel={postMessage(){}};
+ const context={document,window:{player,cvRemote:channel},setInterval(fn){timers.push(fn)},setTimeout(fn){fn()}};
+ vm.createContext(context);vm.runInContext(source,context);
+ const send=data=>channel.onmessage({data});
+ send('toggle');send('seek:10');assert.equal(video.currentTime,70);
+ send('seekto:0.5');assert.equal(video.currentTime,720);
+ send('seek:-10000');assert.equal(video.currentTime,0);
+ send('next');send('episode:3');send('quality:1080');send('skip');
+ assert.deepEqual(actions,['toggle','next','episode','quality','skip']);
+ send('quality:auto');assert.equal(player.hls.currentLevel,-1);
+ const resume=button('resume');resume.innerText='Продолжить просмотр';
+ const previousQuery=document.querySelectorAll;
+ document.querySelectorAll=selector=>selector.startsWith('button,')?[{...resume,tagName:'DIV',children:[resume],click(){actions.push('wrong resume wrapper')}},resume]:previousQuery(selector);
+ timers[0]();assert.equal(actions[actions.length-1],'resume');
+});

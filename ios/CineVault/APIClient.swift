@@ -47,8 +47,11 @@ final class CineVaultAPI {
         return try await request(path: "api/catalog", queryItems: query)
     }
 
-    func fetchCatalogFacets() async throws -> CatalogFacets {
-        try await request(path: "api/catalog/facets")
+    func fetchCatalogFacets(kind: String = "") async throws -> CatalogFacets {
+        try await request(
+            path: "api/catalog/facets",
+            queryItems: kind.isEmpty ? [] : [URLQueryItem(name: "type", value: kind)]
+        )
     }
 
     func fetchCatalogTitle(id: String) async throws -> CatalogTitle {

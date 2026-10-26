@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Дизайн-система CineVault</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#00A86B}a:hover{color:#00C07A}
+</style>
+</helmet>
+<div style="width: 1346px; height: 560px; box-sizing: border-box; padding: 40px 48px; background: #0D0C0F; color: #FFFFFF; font-family: Rubik, -apple-system, sans-serif; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 48px;">
+
+  <section style="display: flex; flex-direction: column; gap: 14px;">
+    <h2 style="margin: 0; font-size: 20px; font-weight: 600;">Цвета</h2>
+    <sc-for list="{{colors}}" as="c" hint-placeholder-count="9">
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="width: 40px; height: 40px; border-radius: 10px; background: {{c.hex}}; border: 1px solid rgba(255,255,255,.12);"></div>
+        <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px;">
+          <div style="font-size: 14px; font-weight: 500;">{{c.name}}</div>
+          <div style="font-size: 12px; color: #9CA4AB;">{{c.use}}</div>
+        </div>
+        <code style="font-size: 12px; color: #C9CED4;">{{c.hex}}</code>
+      </div>
+    </sc-for>
+  </section>
+
+  <section style="display: flex; flex-direction: column; gap: 16px;">
+    <h2 style="margin: 0; font-size: 20px; font-weight: 600;">Шрифт Rubik</h2>
+    <div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 30px; font-weight: 600;">Каталог</div><div style="font-size: 12px; color: #9CA4AB;">Заголовок экрана · 30 / 600</div></div>
+    <div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 19px; font-weight: 600;">Продолжить просмотр</div><div style="font-size: 12px; color: #9CA4AB;">Заголовок полки · 19 / 600</div></div>
+    <div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 16px; font-weight: 600;">Смотреть</div><div style="font-size: 12px; color: #9CA4AB;">Кнопка · 16 / 600</div></div>
+    <div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 14px; line-height: 1.5; color: #C9CED4;">Описание фильма и вторичный текст</div><div style="font-size: 12px; color: #9CA4AB;">Текст · 14 / 400, межстрочный 1.5</div></div>
+    <div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 12px; color: #9CA4AB;">2026 · фантастика · 2 ч 25 мин</div><div style="font-size: 12px; color: #9CA4AB;">Метаданные · 12–13 / 400</div></div>
+    <div style="font-size: 12px; color: #9CA4AB; line-height: 1.5;">Скругления: кнопки и поля 14, постеры 10, бейджи 6–8. Отступ от края экрана 20. Касание не меньше 44 × 44.</div>
+  </section>
+
+  <section style="display: flex; flex-direction: column; gap: 16px;">
+    <h2 style="margin: 0; font-size: 20px; font-weight: 600;">Элементы</h2>
+    <button style="height: 50px; border: 0; border-radius: 14px; background: #00875A; color: #FFFFFF; font: 600 16px Rubik, sans-serif; display: flex; align-items: center; justify-content: center; gap: 8px;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="#FFFFFF" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5z"></path></svg>Смотреть</button>
+    <button style="height: 50px; border-radius: 14px; border: 1px solid rgba(255,255,255,.18); background: transparent; color: #FFFFFF; font: 500 16px Rubik, sans-serif;">Скачать</button>
+    <div style="display: flex; gap: 8px;">
+      <span style="height: 34px; padding: 0 14px; border-radius: 17px; background: #FFFFFF; color: #0D0C0F; font-size: 13px; font-weight: 600; display: flex; align-items: center;">Выбрано</span>
+      <span style="height: 34px; padding: 0 14px; border-radius: 17px; border: 1px solid rgba(255,255,255,.12); font-size: 13px; display: flex; align-items: center;">Фильтр</span>
+      <span style="padding: 5px 10px; border-radius: 8px; background: #28262D; font-size: 12px; display: flex; align-items: center;">жанр</span>
+    </div>
+    <div style="display: flex; gap: 12px; align-items: flex-end;">
+      <div style="position: relative; width: 96px; height: 144px; border-radius: 10px; overflow: hidden;">
+        <img src="/_blob/1dc919817c25e12ae06a7c0afcd9d457" alt="Одиссея" style="width: 100%; height: 100%; object-fit: cover; display: block;">
+        <div style="position: absolute; left: 6px; top: 6px; padding: 3px 6px; border-radius: 6px; background: rgba(13,12,15,.78); color: #FFCD1A; font-size: 11px; font-weight: 600;">★ 8.2</div>
+      </div>
+      <div style="width: 200px; display: flex; flex-direction: column; gap: 6px;">
+        <div style="position: relative; height: 112px; border-radius: 12px; overflow: hidden;">
+          <img src="/_blob/f4ae4381dccd0a9751054f0642ed2868" alt="Горничная" style="width: 100%; height: 100%; object-fit: cover; display: block;">
+          <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255,255,255,.2);"><div style="height: 4px; width: 58%; background: #00A86B;"></div></div>
+        </div>
+        <div style="font-size: 12px; color: #9CA4AB;">Постер с оценкой · кадр с прогрессом</div>
+      </div>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1346,"height":560}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      colors: [
+        { name: 'Фон', use: 'Основа всех экранов', hex: '#0D0C0F' },
+        { name: 'Поверхность', use: 'Поля, карточки, сегменты', hex: '#17161B' },
+        { name: 'Поверхность 2', use: 'Выбранный сегмент, бейджи', hex: '#28262D' },
+        { name: 'Текст', use: 'Заголовки и основной текст', hex: '#FFFFFF' },
+        { name: 'Вторичный текст', use: 'Метаданные, подписи', hex: '#9CA4AB' },
+        { name: 'Акцент', use: 'Активная вкладка, ссылки, прогресс', hex: '#00A86B' },
+        { name: 'Кнопка', use: 'Главное действие (белый текст 4.5:1)', hex: '#00875A' },
+        { name: 'Оценка', use: 'Звёзды и рейтинги', hex: '#FFCD1A' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

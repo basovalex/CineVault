@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Поиск</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#00A86B}a:hover{color:#00C07A}
+input::placeholder{color:#9CA4AB}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0D0C0F; color: #FFFFFF; font-family: Rubik, -apple-system, sans-serif;">
+
+  <div style="position: absolute; left: 20px; right: 20px; top: 58px; display: flex; flex-direction: column; gap: 14px;">
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <label style="flex-grow: 1; height: 48px; box-sizing: border-box; padding: 0 14px; display: flex; align-items: center; gap: 10px; border-radius: 14px; border: 1px solid #00A86B; background: #17161B;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9CA4AB" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+        <span class="sr-only" style="position: absolute; width: 1px; height: 1px; overflow: hidden;">Поиск</span>
+        <input value="человек" placeholder="Фильмы, сериалы, актёры" style="flex-grow: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: #FFFFFF; font: 400 16px Rubik, sans-serif;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#3E3C43" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="m9 9 6 6m0-6-6 6" stroke="#0D0C0F" stroke-width="2" stroke-linecap="round"></path></svg>
+      </label>
+      <button style="height: 48px; border: 0; background: transparent; color: #00A86B; font: 500 15px Rubik, sans-serif;">Отмена</button>
+    </div>
+    <div style="display: flex; gap: 8px;">
+      <button style="height: 34px; padding: 0 14px; border-radius: 17px; border: 0; background: #FFFFFF; color: #0D0C0F; font: 600 13px Rubik, sans-serif;">Всё · 38</button>
+      <button style="height: 34px; padding: 0 14px; border-radius: 17px; border: 1px solid rgba(255,255,255,.12); background: transparent; color: #FFFFFF; font: 500 13px Rubik, sans-serif;">Фильмы</button>
+      <button style="height: 34px; padding: 0 14px; border-radius: 17px; border: 1px solid rgba(255,255,255,.12); background: transparent; color: #FFFFFF; font: 500 13px Rubik, sans-serif;">Сериалы</button>
+      <button style="height: 34px; padding: 0 14px; border-radius: 17px; border: 1px solid rgba(255,255,255,.12); background: transparent; color: #FFFFFF; font: 500 13px Rubik, sans-serif;">Актёры</button>
+    </div>
+  </div>
+
+  <div style="position: absolute; left: 20px; right: 20px; top: 192px; display: flex; flex-direction: column; gap: 14px;">
+    <sc-for list="{{results}}" as="r" hint-placeholder-count="5">
+      <a href="Details.dc.html" style="display: flex; gap: 14px; align-items: center; color: #FFFFFF; text-decoration: none;">
+        <img src="{{r.img}}" alt="{{r.title}}" style="flex: 0 0 auto; width: 72px; height: 108px; border-radius: 10px; object-fit: cover; background: #17161B;">
+        <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px;">
+          <div style="font-size: 16px; font-weight: 600; line-height: 1.25;">{{r.title}}</div>
+          <div style="font-size: 13px; color: #9CA4AB;">{{r.meta}}</div>
+          <div style="display: flex; gap: 8px; align-items: center; font-size: 12px;">
+            <span style="color: #FFCD1A; font-weight: 600;">★ {{r.rating}}</span>
+            <span style="padding: 2px 7px; border-radius: 6px; background: #28262D; color: #C9CED4;">{{r.kind}}</span>
+          </div>
+        </div>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9CA4AB" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>
+      </a>
+    </sc-for>
+  </div>
+
+  <nav aria-label="Разделы" style="position: absolute; left: 0; right: 0; bottom: 0; height: 84px; box-sizing: border-box; padding: 8px 8px 0; background: rgba(13,12,15,.94); border-top: 1px solid rgba(255,255,255,.08); display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));">
+    <a href="Main.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #9CA4AB; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="m4 10 8-6 8 6v9a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"></path></svg>Главная</a>
+    <a href="Catalog.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #9CA4AB; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"></rect><rect x="14" y="4" width="6" height="6" rx="1"></rect><rect x="4" y="14" width="6" height="6" rx="1"></rect><rect x="14" y="14" width="6" height="6" rx="1"></rect></svg>Каталог</a>
+    <a href="Search.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #00A86B; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>Поиск</a>
+    <a href="Mine.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #9CA4AB; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 8.7c0 5-8.8 10.3-8.8 10.3S3.2 13.7 3.2 8.7A4.6 4.6 0 0 1 12 6.2a4.6 4.6 0 0 1 8.8 2.5Z"></path></svg>Моё</a>
+    <a href="Mine.dc.html" style="display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10px; color: #9CA4AB; text-decoration: none;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"></path></svg>Загрузки</a>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      results: [
+        { img: '/_blob/ed0d7ae0861b336c7b014e4b8dbbdb62', title: 'Человек-паук: Новый день', meta: '2026 · фантастика, боевик', rating: '8.0', kind: 'Фильм' },
+        { img: '/_blob/5760b0e8ba94d1e23e0fe3c3d7866422', title: 'Человек-бензопила', meta: '2022 · аниме, ужасы · 1 сезон', rating: '8.5', kind: 'Сериал' },
+        { img: '/_blob/1964491f5e83f024ca19c90269524cfc', title: 'Человек-паук: Нет пути домой', meta: '2021 · фантастика, боевик', rating: '7.9', kind: 'Фильм' },
+        { img: '/_blob/a994474e673655aef005a159e4c7d682', title: 'Слово пацана. Кровь на асфальте', meta: '2023 · драма, криминал · 1 сезон', rating: '8.0', kind: 'Сериал' },
+        { img: '/_blob/9c08a3f234257a3d79631cbf320f7c96', title: 'Синяя тюрьма: Блю Лок', meta: '2022 · аниме, спорт · 2 сезона', rating: '8.6', kind: 'Сериал' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

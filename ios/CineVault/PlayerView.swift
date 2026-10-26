@@ -364,6 +364,8 @@ private extension PlaybackQuality {
 struct PlayerView: View {
     @StateObject private var model: PlaybackModel
     @State private var isFullscreen = false
+    @State private var isFullscreenFromRotation = false
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var playerScreenID = UUID()
     @EnvironmentObject private var chrome: AppChrome
     let episode: Episode
@@ -417,8 +419,14 @@ struct PlayerView: View {
                 model.stop()
             }
         }
-        .fullScreenCover(isPresented: $isFullscreen) {
-            FullscreenPlayerView(model: model, isPresented: $isFullscreen)
+        .onChange(of: verticalSizeClass) { _, sizeClass in
+            // Turning the phone sideways opens the video full screen, as other video apps do.
+            guard sizeClass == .compact, !isFullscreen else { return }
+            isFullscreenFromRotation = true
+            isFullscreen = true
+        }
+        .fullScreenCover(isPresented: $isFullscreen, onDismiss: { isFullscreenFromRotation = false }) {
+            FullscreenPlayerView(model: model, isPresented: $isFullscreen, closesWhenUpright: isFullscreenFromRotation)
         }
     }
 }
@@ -519,13 +527,16 @@ private struct PlayerSurface: View {
 private struct FullscreenPlayerView: View {
     @ObservedObject var model: PlaybackModel
     @Binding var isPresented: Bool
+    /// Opened by turning the phone sideways, so turning it upright closes it again.
+    let closesWhenUpright: Bool
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var controlsVisible = false
     @State private var hideControlsID = UUID()
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 0)
+        ZStack(alignment: .top) {
             PlayerSurface(model: model)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .simultaneousGesture(
                     TapGesture().onEnded {
                         revealControls()
@@ -535,6 +546,7 @@ private struct FullscreenPlayerView: View {
                 HStack(spacing: 12) {
                     Button {
                         isPresented = false
+                        OrientationPolicy.returnUpright()
                     } label: {
                         Label("Закрыть", systemImage: "xmark")
                     }
@@ -550,9 +562,8 @@ private struct FullscreenPlayerView: View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 12)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.ignoresSafeArea())
@@ -560,6 +571,9 @@ private struct FullscreenPlayerView: View {
         .persistentSystemOverlays(.hidden)
         .presentationBackground(.black)
         .animation(.easeOut(duration: 0.2), value: controlsVisible)
+        .onChange(of: verticalSizeClass) { _, sizeClass in
+            if closesWhenUpright, sizeClass == .regular { isPresented = false }
+        }
         .task(id: hideControlsID) {
             guard controlsVisible else { return }
             try? await Task.sleep(nanoseconds: 3_000_000_000)

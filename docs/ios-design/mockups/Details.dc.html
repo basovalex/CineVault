@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Карточка фильма</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#00A86B}a:hover{color:#00C07A}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; background: #0D0C0F; color: #FFFFFF; font-family: Rubik, -apple-system, sans-serif;">
+
+  <div style="position: absolute; left: 0; top: 0; width: 390px; height: 330px;">
+    <img src="/_blob/f4ae4381dccd0a9751054f0642ed2868" alt="Кадр из фильма «Горничная»" style="width: 390px; height: 330px; object-fit: cover; display: block;">
+    <div style="position: absolute; inset: 0; background: linear-gradient(180deg, rgba(13,12,15,.5) 0%, rgba(13,12,15,0) 30%, rgba(13,12,15,.6) 70%, #0D0C0F 100%);"></div>
+  </div>
+
+  <div style="position: absolute; left: 16px; right: 16px; top: 54px; display: flex; justify-content: space-between;">
+    <a href="Main.dc.html" aria-label="Назад" style="width: 44px; height: 44px; border-radius: 22px; background: rgba(13,12,15,.55); color: #FFFFFF; display: grid; place-items: center;">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5-7 7 7 7"></path></svg>
+    </a>
+    <div style="display: flex; gap: 10px;">
+      <button aria-label="В избранное" style="width: 44px; height: 44px; border-radius: 22px; border: 0; background: rgba(13,12,15,.55); color: #FFFFFF; display: grid; place-items: center;">
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 8.7c0 5-8.8 10.3-8.8 10.3S3.2 13.7 3.2 8.7A4.6 4.6 0 0 1 12 6.2a4.6 4.6 0 0 1 8.8 2.5Z"></path></svg>
+      </button>
+      <button aria-label="Поделиться" style="width: 44px; height: 44px; border-radius: 22px; border: 0; background: rgba(13,12,15,.55); color: #FFFFFF; display: grid; place-items: center;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4m-4 4 4-4 4 4M5 13v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6"></path></svg>
+      </button>
+    </div>
+  </div>
+
+  <div style="position: absolute; left: 20px; right: 20px; top: 250px; display: flex; flex-direction: column; gap: 12px;">
+    <img src="/_blob/449f6ee3d28719c4641da7c84c65dd11" alt="Горничная" style="width: 210px; height: 64px; object-fit: contain; object-position: left center;">
+    <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #C9CED4; flex-wrap: wrap;">
+      <span style="color: #FFCD1A; font-weight: 600;">★ 7.6</span>
+      <span>IMDb 6.7</span>
+      <span>2025</span>
+      <span>2 ч 11 мин</span>
+      <span style="padding: 2px 7px; border-radius: 6px; border: 1px solid rgba(255,255,255,.2);">18+</span>
+    </div>
+
+    <div style="display: flex; gap: 10px;">
+      <button style="flex-grow: 1; height: 50px; border: 0; border-radius: 14px; background: #00875A; color: #FFFFFF; font: 600 16px Rubik, sans-serif; display: flex; align-items: center; justify-content: center; gap: 8px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="#FFFFFF" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5z"></path></svg>Смотреть
+      </button>
+      <button style="flex-grow: 1; height: 50px; border-radius: 14px; border: 1px solid rgba(255,255,255,.18); background: transparent; color: #FFFFFF; font: 500 16px Rubik, sans-serif; display: flex; align-items: center; justify-content: center; gap: 8px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"></path></svg>Скачать
+      </button>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;">
+      <button style="height: 56px; box-sizing: border-box; padding: 0 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,.08); background: #17161B; color: #FFFFFF; text-align: left; display: flex; align-items: center; justify-content: space-between;">
+        <span style="display: flex; flex-direction: column; gap: 3px;"><span style="font-size: 11px; color: #9CA4AB;">Плеер</span><span style="font: 500 14px Rubik, sans-serif;">CineVault</span></span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9CA4AB" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>
+      </button>
+      <button style="height: 56px; box-sizing: border-box; padding: 0 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,.08); background: #17161B; color: #FFFFFF; text-align: left; display: flex; align-items: center; justify-content: space-between;">
+        <span style="display: flex; flex-direction: column; gap: 3px;"><span style="font-size: 11px; color: #9CA4AB;">Озвучка</span><span style="font: 500 14px Rubik, sans-serif;">Дубляж</span></span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9CA4AB" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>
+      </button>
+    </div>
+
+    <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #C9CED4;">Милли устраивается прислугой с проживанием к состоятельной семье Винчестер, живущей в загородном особняке. Девушка только что вышла по УДО…<span style="color: #FFFFFF; font-weight: 600;">Ещё</span></p>
+
+    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+      <span style="padding: 5px 10px; border-radius: 8px; background: #28262D; font-size: 12px;">триллер</span>
+      <span style="padding: 5px 10px; border-radius: 8px; background: #28262D; font-size: 12px;">драма</span>
+      <span style="padding: 5px 10px; border-radius: 8px; background: #28262D; font-size: 12px;">детектив</span>
+    </div>
+
+    <div role="tablist" aria-label="Разделы карточки" style="display: flex; gap: 22px; border-bottom: 1px solid rgba(255,255,255,.08); margin-top: 4px;">
+      <button role="tab" aria-selected="true" style="height: 40px; border: 0; border-bottom: 2px solid #00A86B; background: transparent; color: #FFFFFF; font: 600 15px Rubik, sans-serif; padding: 0;">Похожие</button>
+      <button role="tab" aria-selected="false" style="height: 40px; border: 0; background: transparent; color: #9CA4AB; font: 500 15px Rubik, sans-serif; padding: 0;">Актёры</button>
+      <button role="tab" aria-selected="false" style="height: 40px; border: 0; background: transparent; color: #9CA4AB; font: 500 15px Rubik, sans-serif; padding: 0;">О фильме</button>
+    </div>
+
+    <div style="display: flex; gap: 10px;">
+      <img src="/_blob/508181facc5e3ab58f4cf50e51c56ca4" alt="Оппенгеймер" style="width: 108px; height: 162px; border-radius: 10px; object-fit: cover;">
+      <img src="/_blob/12f81ea5727b5f60c56e60b304187d1d" alt="Бэтмен" style="width: 108px; height: 162px; border-radius: 10px; object-fit: cover;">
+      <img src="/_blob/bc0b665bad63c19c9300355e33ee162b" alt="Майкл" style="width: 108px; height: 162px; border-radius: 10px; object-fit: cover;">
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

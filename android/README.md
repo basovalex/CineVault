@@ -10,7 +10,9 @@
 ./gradlew assembleDebug
 ```
 
-APK появится в `app/build/outputs/apk/debug/app-debug.apk`. `local.properties` содержит путь к SDK и не попадает в Git.
+APK появится в `app/build/outputs/apk/debug/app-debug.apk`. Для передачи и обычного использования собирай release: `./gradlew assembleRelease` → `app/build/outputs/apk/release/app-release.apk`. Он сжат R8, подписан debug-ключом (ставится поверх debug-сборки) и в 3–4 раза быстрее стартует.
+
+На эмуляторе: если каталог не грузится с `UnknownHostException`, запусти его с `-dns-server 1.1.1.1,8.8.8.8`. Нативный плеер на эмуляторе сам предпочитает программный декодер — виртуальный `goldfish` даёт зелёные полосы. Лог запросов встроенных плееров включается так: `adb shell setprop log.tag.PlayerWeb DEBUG`. `local.properties` содержит путь к SDK и не попадает в Git.
 
 Gradle читает Basic Auth из `../ios/Secrets.xcconfig`, если файл есть на этой машине. Значения встраиваются в APK, поэтому debug APK следует оставлять для личного использования и передавать только доверенным людям. Исходные значения в репозиторий не копируются.
 
@@ -26,6 +28,8 @@ Gradle читает Basic Auth из `../ios/Secrets.xcconfig`, если файл
 ## Android TV
 
 В APK есть отдельная Android TV-активность (`TvActivity`) с широкоформатной главной и каталогом, пультовой навигацией, карточками, онлайн-плеером CineVault и Alloha. Она запускается через TV launcher; мобильная версия остаётся обычной точкой входа. Загрузка видео на ТВ не предлагается: просмотр только через интернет.
+
+На ТВ у всех источников одни контролы приложения (`TvPlayerChrome`): CineVault, Alloha, Collaps, Veoveo и Turbo. Это ползунок (влево/вправо по 10 с, при удержании быстрее; OK — перейти), −10/пауза/+10, «Серии», «Озвучка», «Субтитры» и «Качество», пропуск заставки (OK, пока она идёт) и «Продолжить» с секунды. Поток Alloha ТВ-версия играет не в WebView, а в Media3 на аппаратном декодере. Страница Alloha остаётся пультом (озвучки, серии, качества), но сама молчит. Если Media3 поток не принял, его снова играет страница. Проверка декодера: `adb logcat -s CineVaultPlayer` (`video decoder … hardware=true`); на эмуляторе аппаратный путь включается через `adb shell setprop log.tag.CineVaultHw DEBUG`.
 
 Для проверки создай в Device Manager виртуальное устройство профиля Android TV, запусти его и установи тот же `app-debug.apk`. Затем открой CineVault на главном экране эмулятора ТВ.
 

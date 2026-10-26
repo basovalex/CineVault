@@ -26,11 +26,22 @@ android {
         applicationId = "com.cinevault.android"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 8
+        versionName = "0.3.2"
         buildConfigField("String", "SERVER_URL", "\"https://cinevault-aleksandr.duckdns.org\"")
         buildConfigField("String", "BASIC_USERNAME", readXcconfigValue("CINEVAULT_BASIC_USERNAME").asBuildConfigString())
         buildConfigField("String", "BASIC_PASSWORD", readXcconfigValue("CINEVAULT_BASIC_PASSWORD").asBuildConfigString())
+    }
+
+    buildTypes {
+        release {
+            // The APK that gets shared: shrunk, optimised and signed with the debug key so that it
+            // installs over the debug build and over itself. Debug builds are several times slower.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
 
     buildFeatures {

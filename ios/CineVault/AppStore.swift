@@ -139,6 +139,11 @@ final class AppStore: ObservableObject {
     @Published var basicUsername: String
     @Published var basicPassword: String
     @Published private(set) var catalogRequestIDs: Set<String> = []
+    @Published private(set) var favorites: [FavoriteTitle] = []
+    /// Progress shared with the website, keyed like the site's `state.progress`.
+    @Published private(set) var catalogProgress: [String: CatalogProgressEntry] = [:]
+    /// Full cards for titles in the shared history, newest first.
+    @Published private(set) var watchedTitles: [CatalogTitle] = []
 
     let api: CineVaultAPI
     let downloads = DownloadManager.shared
@@ -147,9 +152,13 @@ final class AppStore: ObservableObject {
     private var catalogSelection = ""
     private var homeCandidates: [CatalogTitle] = []
     private var homeFeedLoaded = false
+    private var homeLoadTask: Task<Void, Never>?
     private let cacheFileName = "library-cache.json"
     private let progressFileName = "device-progress.json"
     private let catalogRequestsFileName = "catalog-requests.json"
+    private let favoritesFileName = "favorites.json"
+    private let catalogProgressFileName = "catalog-progress.json"
+    private var titleCache: [String: CatalogTitle] = [:]
     private var localProgress: [String: PlaybackProgress] = [:]
 
     init() {
@@ -192,6 +201,8 @@ final class AppStore: ObservableObject {
         }
         loadLocalProgress()
         loadCatalogRequests()
+        loadFavorites()
+        loadCatalogProgressFromDisk()
         loadCachedLibrary()
         prefetchPosters()
     }
@@ -227,59 +238,85 @@ final class AppStore: ObservableObject {
     }
 
     func loadHomeDiscovery(force: Bool = false) async {
-        guard !homeLoading, force || !homeFeedLoaded else { return }
+        // A view's task is cancelled when the view goes away or a pull-to-refresh ends;
+        // the shelves load in a task of their own, so a half-done load is never thrown away.
+        if let running = homeLoadTask {
+            await running.value
+            return
+        }
+        guard force || !homeFeedLoaded else { return }
+        let task = Task { await performHomeDiscovery() }
+        homeLoadTask = task
+        await task.value
+        homeLoadTask = nil
+    }
+
+    private func performHomeDiscovery() async {
         homeLoading = true
         homeError = nil
         defer { homeLoading = false }
-        do {
-            async let popular = api.fetchCatalogPage(page: 1, sort: "popular", collection: "popular")
-            async let recent = api.fetchCatalogPage(page: 1, sort: "new", collection: "new")
-            async let evening = api.fetchCatalogPage(page: 1, sort: "rating", collection: "evening")
-            async let anime = api.fetchCatalogPage(page: 1, sort: "rating", collection: "anime")
-            async let tense = api.fetchCatalogPage(page: 1, sort: "rating", collection: "tense")
-            async let together = api.fetchCatalogPage(page: 1, sort: "rating", collection: "together")
-            let pages = try await (popular, recent, evening, anime, tense, together)
-            let entries = [pages.0, pages.1, pages.2, pages.3, pages.4, pages.5]
-                .flatMap(\.items)
-                .map(\.catalogTitle)
-            var unique: [String: CatalogTitle] = [:]
-            entries.forEach { unique[$0.id] = $0 }
-            homeCandidates = Array(unique.values)
+        // Each collection loads on its own: one that fails only leaves its shelf out.
+        async let popular = homePage(sort: "popular", collection: "popular")
+        async let recent = homePage(sort: "new", collection: "new")
+        async let evening = homePage(sort: "rating", collection: "evening")
+        async let anime = homePage(sort: "rating", collection: "anime")
+        async let tense = homePage(sort: "rating", collection: "tense")
+        async let together = homePage(sort: "rating", collection: "together")
+        let results = await [popular, recent, evening, anime, tense, together]
+        let pages = results.map { try? $0.get() }
+        guard pages.contains(where: { $0 != nil }) else {
+            if case .failure(let error)? = results.first { homeError = error.localizedDescription }
+            return
+        }
+        func titles(_ index: Int) -> [CatalogTitle] {
+            pages[index]?.items.map(\.catalogTitle) ?? []
+        }
+        let entries = pages.indices.flatMap(titles)
+        var unique: [String: CatalogTitle] = [:]
+        entries.forEach { unique[$0.id] = $0 }
+        homeCandidates = Array(unique.values)
 
-            var tasteGenres: [String: Int] = [:]
-            var seenTitleIDs = Set<String>()
-            let watchedTitleIDs = history.compactMap(\.titleID).filter { seenTitleIDs.insert($0).inserted }.prefix(3)
-            for titleID in watchedTitleIDs {
-                if let watched = try? await api.fetchCatalogTitle(id: titleID) {
-                    for genre in watched.tags.map({ $0.localizedLowercase }) {
-                        tasteGenres[genre, default: 0] += 1
-                    }
+        var tasteGenres: [String: Int] = [:]
+        var seenTitleIDs = Set<String>()
+        // Taste comes from what was watched on this device only.
+        let watchedOnDevice = latestProgressByTitle.map(\.titleId) + history.compactMap(\.titleID)
+        let watchedTitleIDs = watchedOnDevice.filter { seenTitleIDs.insert($0).inserted }.prefix(3)
+        for titleID in watchedTitleIDs {
+            if let watched = try? await api.fetchCatalogTitle(id: titleID) {
+                for genre in watched.tags.map({ $0.localizedLowercase }) {
+                    tasteGenres[genre, default: 0] += 1
                 }
             }
-            let popularTitles = pages.0.items.map(\.catalogTitle)
-            let recentTitles = pages.1.items.map(\.catalogTitle)
-            let personal = rankedPersonalTitles(
-                homeCandidates, tasteGenres: tasteGenres,
-                watchedTitleIDs: Set(history.compactMap(\.titleID))
-            )
-            let moodItems = homeCandidates
-                .filter { title in title.tags.contains(where: { moodGenres.contains($0.localizedLowercase) }) }
-                .sorted(by: discoveryOrder)
-            homeShelves = [
-                CatalogShelf(id: "personal", title: "Мопс советует", subtitle: tasteGenres.isEmpty ? "Первые рекомендации — со временем подстроятся под просмотры" : "Похоже на то, что вы уже смотрели", items: personal),
-                CatalogShelf(id: "popular", title: "Популярное", subtitle: "Сначала карточки с большим числом оценок Kinopoisk", items: popularTitles),
-                CatalogShelf(id: "recent", title: "Новое и обсуждаемое", subtitle: "Свежие карточки, о которых уже голосуют", items: recentTitles),
-                CatalogShelf(id: "mood", title: moodShelfTitle, subtitle: moodShelfDescription, items: moodItems),
-                CatalogShelf(id: "evening", title: "На один вечер", subtitle: "Фильмы, которые удобно включить сегодня", items: pages.2.items.map(\.catalogTitle)),
-                CatalogShelf(id: "anime", title: "Аниме", subtitle: "Анимационные фильмы и сериалы", items: pages.3.items.map(\.catalogTitle)),
-                CatalogShelf(id: "together", title: "Для двоих", subtitle: "Романтика и истории для совместного вечера", items: pages.5.items.map(\.catalogTitle)),
-                CatalogShelf(id: "tense", title: "Держит в напряжении", subtitle: "Триллеры, детективы и криминальные истории", items: pages.4.items.map(\.catalogTitle)),
-            ].filter { !$0.items.isEmpty }
-            homePopularAvailable = !popularTitles.isEmpty
-            homeFeedLoaded = true
-            prefetchPosters()
+        }
+        let popularTitles = titles(0)
+        let recentTitles = titles(1)
+        let personal = rankedPersonalTitles(
+            homeCandidates, tasteGenres: tasteGenres,
+            watchedTitleIDs: Set(watchedOnDevice)
+        )
+        let moodItems = homeCandidates
+            .filter { title in title.tags.contains(where: { moodGenres.contains($0.localizedLowercase) }) }
+            .sorted(by: discoveryOrder)
+        homeShelves = [
+            CatalogShelf(id: "personal", title: "Советуем вам", subtitle: tasteGenres.isEmpty ? "Первые рекомендации — со временем подстроятся под просмотры" : "Похоже на то, что вы уже смотрели", items: personal),
+            CatalogShelf(id: "popular", title: "Популярное", subtitle: "Сначала карточки с большим числом оценок Kinopoisk", items: popularTitles),
+            CatalogShelf(id: "recent", title: "Новое и обсуждаемое", subtitle: "Свежие карточки, о которых уже голосуют", items: recentTitles),
+            CatalogShelf(id: "mood", title: moodShelfTitle, subtitle: moodShelfDescription, items: moodItems),
+            CatalogShelf(id: "evening", title: "На один вечер", subtitle: "Фильмы, которые удобно включить сегодня", items: titles(2)),
+            CatalogShelf(id: "anime", title: "Аниме", subtitle: "Анимационные фильмы и сериалы", items: titles(3)),
+            CatalogShelf(id: "together", title: "Для двоих", subtitle: "Романтика и истории для совместного вечера", items: titles(5)),
+            CatalogShelf(id: "tense", title: "Держит в напряжении", subtitle: "Триллеры, детективы и криминальные истории", items: titles(4)),
+        ].filter { !$0.items.isEmpty }
+        homePopularAvailable = !popularTitles.isEmpty
+        homeFeedLoaded = true
+        prefetchPosters()
+    }
+
+    private func homePage(sort: String, collection: String) async -> Result<RemoteCatalogPage, Error> {
+        do {
+            return .success(try await api.fetchCatalogPage(page: 1, sort: sort, collection: collection))
         } catch {
-            homeError = error.localizedDescription
+            return .failure(error)
         }
     }
 
@@ -380,7 +417,13 @@ final class AppStore: ObservableObject {
                 page: page, search: search, kind: kind, genre: genre, sort: sort, collection: collection
             )
             guard requestVersion == catalogRequestVersion, !Task.isCancelled else { return }
-            catalog = response.items.map(\.catalogTitle)
+            let items = response.items.map(\.catalogTitle)
+            if page > 1 {
+                let known = Set(catalog.map(\.id))
+                catalog += items.filter { !known.contains($0.id) }
+            } else {
+                catalog = items
+            }
             catalogPage = response.page
             catalogPages = response.pages
             catalogTotal = response.total
@@ -410,6 +453,7 @@ final class AppStore: ObservableObject {
             saveCachedLibrary(LibraryResponse(items: episodes, history: history))
             prefetchPosters()
             statusMessage = episodes.isEmpty ? "Сервер подключён · личная медиатека пока пуста" : "Подключено серий: \(episodes.count)"
+            await loadCatalogProgress()
         } catch {
             if episodes.isEmpty {
                 statusMessage = error.localizedDescription
@@ -425,6 +469,85 @@ final class AppStore: ObservableObject {
             guard !Task.isCancelled else { return }
             await refresh()
         }
+    }
+
+    // MARK: Favourites (on this iPhone, like the site keeps them in its browser)
+
+    func isFavorite(_ id: String) -> Bool {
+        favorites.contains { $0.id == id }
+    }
+
+    func toggleFavorite(_ title: CatalogTitle) {
+        if isFavorite(title.id) {
+            favorites.removeAll { $0.id == title.id }
+        } else {
+            favorites.insert(FavoriteTitle(title), at: 0)
+        }
+        saveFavorites()
+    }
+
+    // MARK: Watch history (on this iPhone; the site keeps its own per browser)
+
+    func loadCatalogProgress() async {
+        await resolveWatchedTitles()
+    }
+
+    /// The newest progress entry per title, newest first.
+    var latestProgressByTitle: [CatalogProgressEntry] {
+        var newest: [String: CatalogProgressEntry] = [:]
+        for entry in catalogProgress.values where entry.updatedAt > (newest[entry.titleId]?.updatedAt ?? 0) {
+            newest[entry.titleId] = entry
+        }
+        return newest.values.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    func progress(forTitle id: String) -> CatalogProgressEntry? {
+        latestProgressByTitle.first { $0.titleId == id }
+    }
+
+    /// Marks a title as opened in an embedded player, as the site does: those
+    /// players keep the position themselves, so only the moment is recorded.
+    func recordEmbedOpened(_ title: CatalogTitle, providerID: String, translationName: String? = nil) {
+        var entry = CatalogProgressEntry(titleId: title.id, updatedAt: Int(Date().timeIntervalSince1970 * 1000))
+        entry.providerId = providerID
+        entry.player = "embed:\(providerID)"
+        entry.translationName = translationName
+        entry.position = 0
+        entry.duration = 0
+        entry.completed = false
+        storeProgress(entry, contentID: "\(title.id)-embed", title: title)
+    }
+
+    func recordPlayback(_ title: CatalogTitle, position: Double, duration: Double) {
+        guard duration > 0 else { return }
+        var entry = CatalogProgressEntry(titleId: title.id, updatedAt: Int(Date().timeIntervalSince1970 * 1000))
+        entry.player = "cinevault"
+        entry.position = position
+        entry.duration = duration
+        entry.completed = position / duration > 0.95
+        storeProgress(entry, contentID: title.id, title: title)
+    }
+
+    private func storeProgress(_ entry: CatalogProgressEntry, contentID: String, title: CatalogTitle) {
+        catalogProgress[contentID] = entry
+        titleCache[title.id] = title
+        watchedTitles.removeAll { $0.id == title.id }
+        watchedTitles.insert(title, at: 0)
+        saveCatalogProgress()
+    }
+
+    private func resolveWatchedTitles() async {
+        let ids = latestProgressByTitle.prefix(30).map(\.titleId)
+        var resolved: [CatalogTitle] = []
+        for id in ids {
+            if let cached = titleCache[id] {
+                resolved.append(cached)
+            } else if let title = try? await api.fetchCatalogTitle(id: id) {
+                titleCache[id] = title
+                resolved.append(title)
+            }
+        }
+        watchedTitles = resolved
     }
 
     func download(_ episode: Episode) {
@@ -551,6 +674,40 @@ final class AppStore: ObservableObject {
     private func saveCatalogRequests() {
         guard let url = storageURL(catalogRequestsFileName),
               let data = try? JSONEncoder().encode(catalogRequestIDs) else {
+            return
+        }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    private func loadFavorites() {
+        guard let url = storageURL(favoritesFileName),
+              let data = try? Data(contentsOf: url),
+              let stored = try? JSONDecoder().decode([FavoriteTitle].self, from: data) else {
+            return
+        }
+        favorites = stored
+    }
+
+    private func loadCatalogProgressFromDisk() {
+        guard let url = storageURL(catalogProgressFileName),
+              let data = try? Data(contentsOf: url),
+              let stored = try? JSONDecoder().decode([String: CatalogProgressEntry].self, from: data) else {
+            return
+        }
+        catalogProgress = stored
+    }
+
+    private func saveCatalogProgress() {
+        guard let url = storageURL(catalogProgressFileName),
+              let data = try? JSONEncoder().encode(catalogProgress) else {
+            return
+        }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    private func saveFavorites() {
+        guard let url = storageURL(favoritesFileName),
+              let data = try? JSONEncoder().encode(favorites) else {
             return
         }
         try? data.write(to: url, options: .atomic)

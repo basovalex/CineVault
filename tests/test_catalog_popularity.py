@@ -213,6 +213,74 @@ class HiddenCardRefreshTest(unittest.TestCase):
                 server.CATALOG_STATE_DIR = None
 
 
+class CatalogSearchTest(unittest.TestCase):
+    """A text query answers with titles, not with every card that mentions the letters."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        (self.root / "state").mkdir()
+        self.catalog = self.root / "catalog_imports.json"
+        self.catalog.write_text("[]", encoding="utf-8")
+        cards = [
+            {"id": "ice3", "kinopoiskId": 13, "title": "Лёд 3", "originalTitle": "Лёд 3", "kind": "movie", "year": 2025, "voteCount": 90000, "rating": 6.0},
+            {"id": "ice2", "kinopoiskId": 12, "title": "Лёд 2", "originalTitle": "Лёд 2", "kind": "movie", "year": 2020, "voteCount": 100000, "rating": 6.5},
+            {"id": "ice1", "kinopoiskId": 11, "title": "Лёд", "originalTitle": "Лёд", "kind": "movie", "year": 2018, "voteCount": 200000, "rating": 7.0},
+            {"id": "gold", "kinopoiskId": 14, "title": "Золотой лёд", "kind": "movie", "year": 2002, "voteCount": 50000, "rating": 7.0},
+            {"id": "age", "kinopoiskId": 15, "title": "Ледниковый период", "originalTitle": "Ice Age", "kind": "movie", "year": 2002, "voteCount": 900000, "rating": 7.6},
+            {"id": "last", "kinopoiskId": 16, "title": "Последний богатырь", "kind": "movie", "year": 2017, "voteCount": 500000, "rating": 7.0,
+             "description": "Последний наследник, лед тронулся.", "genres": ["последний"], "actors": ["Иван Иванов"]},
+            {"id": "actor", "kinopoiskId": 17, "title": "Другая история", "kind": "movie", "year": 2010, "voteCount": 1000, "rating": 6.0, "actors": ["Мария Ледова"]},
+            {"id": "matrix", "kinopoiskId": 18, "title": "Матрица", "originalTitle": "The Matrix", "kind": "movie", "year": 1999, "voteCount": 800000, "rating": 8.5},
+        ]
+        (self.root / "catalog_metadata.json").write_text(json.dumps(cards), encoding="utf-8")
+        server._catalog_cache.update({"path": None, "mtime_ns": None, "items": []})
+        from tools.catalog_index import CatalogIndex, build_index
+        self.index_path = self.root / "state" / "catalog_index.sqlite3"
+        build_index(self.catalog, self.index_path)
+        self.index = CatalogIndex(self.catalog, self.index_path)
+
+    def tearDown(self):
+        server.CATALOG_INDEX = None
+        self.temp.cleanup()
+
+    def ids(self, query, **extra):
+        params = {"search": [query], **{key: [value] for key, value in extra.items()}}
+        return [item["id"] for item in self.index.page(params, None)["items"]]
+
+    def test_a_word_finds_titles_not_descriptions_and_ё_is_е(self):
+        expected = ["ice1", "ice2", "ice3", "gold", "age"]
+        self.assertEqual(self.ids("Лед"), expected)
+        self.assertEqual(self.ids("Лёд"), expected)
+
+    def test_a_number_picks_the_sequel(self):
+        self.assertEqual(self.ids("лед 2"), ["ice2"])
+        self.assertEqual(self.ids("лёд 3"), ["ice3"])
+
+    def test_start_of_a_word_still_finds_the_title(self):
+        self.assertEqual(self.ids("матри"), ["matrix"])
+
+    def test_original_title_is_searched_for_latin_queries(self):
+        self.assertEqual(self.ids("ice age"), ["age"])
+        self.assertEqual(self.ids("matrix"), ["matrix"])
+
+    def test_nothing_is_returned_when_no_title_fits(self):
+        self.assertEqual(self.ids("xyzzy"), [])
+        self.assertEqual(self.ids("тронулся"), [])  # only a description says it
+
+    def test_a_person_is_found_only_when_no_title_does(self):
+        self.assertEqual(self.ids("ледова"), ["actor"])
+        self.assertEqual(self.ids("Иван Иванов"), ["last"])
+
+    def test_inside_a_word_is_a_last_resort(self):
+        self.assertEqual(self.ids("риц"), ["matrix"])
+
+    def test_paging_and_total_follow_the_ranking(self):
+        page = self.index.page({"search": ["лед"], "limit": ["2"], "page": ["2"]}, None)
+        self.assertEqual((page["total"], page["pages"]), (5, 3))
+        self.assertEqual([item["id"] for item in page["items"]], ["ice3", "gold"])
+
+
 class CatalogIndexTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -239,7 +307,7 @@ class CatalogIndexTest(unittest.TestCase):
 
     def test_page_filters_sorts_and_hides_dead_cards(self):
         visibility = (frozenset({2}), frozenset({4}))
-        page = self.index.page({"genre": ["драма"]}, visibility)
+        page = self.index.page({"genre": ["драма"], "sort": ["rating"]}, visibility)
         self.assertEqual([item["id"] for item in page["items"]], ["a", "kinopoisk-3"])  # verified first
         self.assertFalse(page["items"][1]["playbackVerified"])
         everything = self.index.page({}, visibility)
@@ -252,6 +320,22 @@ class CatalogIndexTest(unittest.TestCase):
         series_facets = self.index.facets(visibility, "series")
         self.assertEqual((series_facets["total"], series_facets["genres"]), (1, {"комедия": 1}))
         self.assertEqual(self.index.facets(visibility, "movie")["genres"]["драма"], 2)
+
+    def test_default_catalog_prioritizes_audience_not_raw_rating(self):
+        page = self.index.page({}, (frozenset({1}), frozenset()))
+        self.assertEqual(page["items"][0]["id"], "kinopoisk-3")
+
+    def test_discovery_includes_popular_now_and_widely_rated_titles(self):
+        rows = self.index.discovery(3, (frozenset(), frozenset()))
+        self.assertEqual(rows[0]["id"], "kinopoisk-3")
+        self.assertEqual(len({item["id"] for item in rows}), 3)
+
+    def test_rating_does_not_borrow_imdb_votes(self):
+        from tools.catalog_index import confidence_rating
+        tiny = {"ratingKinopoisk": 9.9, "voteCount": 5, "imdbVoteCount": 2000000}
+        hit = {"ratingKinopoisk": 8.5, "voteCount": 500000}
+        self.assertLess(confidence_rating(tiny), confidence_rating(hit))
+        self.assertEqual(confidence_rating(tiny), server.catalog_confidence_rating(tiny))
 
     def test_item_lookup_and_upsert_after_refresh(self):
         from tools.catalog_index import upsert_entry

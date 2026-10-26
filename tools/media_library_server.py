@@ -839,6 +839,34 @@ class KinopoiskOnDemandUpdater:
             return payload
 
 
+# What the site and the app ask for first. Loading the 100 MB catalog happens on
+# the first catalog request anyway; asking once, shortly after start, moves that
+# work to a moment when no viewer is waiting. One request at a time with pauses,
+# so the warm-up never competes with real visitors for the server's CPU or memory.
+CATALOG_WARMUP_PATHS = (
+    "/api/catalog/index?limit=500",
+    "/api/catalog?collection=trending&sort=popular&limit=50",
+    "/api/catalog/facets",
+    "/api/catalog?page=1&limit=50&sort=popular&collection=popular",
+    "/api/catalog?page=1&limit=50&sort=new&collection=new",
+)
+CATALOG_WARMUP_DELAY_SECONDS = 15
+CATALOG_WARMUP_PAUSE_SECONDS = 3
+
+
+def warm_catalog(port: int) -> None:
+    time.sleep(CATALOG_WARMUP_DELAY_SECONDS)
+    started = time.monotonic()
+    for path in CATALOG_WARMUP_PATHS:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=180) as response:
+                response.read()
+        except (OSError, urllib.error.URLError):
+            pass  # A failed warm-up only means the first visitor waits, as before.
+        time.sleep(CATALOG_WARMUP_PAUSE_SECONDS)
+    print(f"Catalog warm-up: done in {time.monotonic() - started:.0f}s", flush=True)
+
+
 def slugify(value: str) -> str:
     normalized = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ]+", "-", value.strip().lower()).strip("-")
     return normalized[:80] or "title"
@@ -1278,7 +1306,10 @@ def imported_catalog_index(catalog_path: Path = CATALOG_IMPORTS_PATH, limit: int
             item_year = 0
         return item_rating, item_year
 
-    selected = sorted(items, key=score, reverse=True)[:max(1, min(1000, int(limit or 500)))]
+    count = max(1, min(1000, int(limit or 500)))
+    popular = sorted((item for item in items if item.get("popularRank")), key=lambda item: int(item["popularRank"]))[:(count + 1) // 2]
+    audience = sorted(items, key=lambda item: (int(item.get("voteCount") or 0), score(item)), reverse=True)
+    selected = list({str(item["id"]): item for item in popular + audience}.values())[:count]
     return [{key: item[key] for key in CATALOG_INDEX_FIELDS if key in item} for item in selected]
 
 
@@ -1301,12 +1332,12 @@ def catalog_confidence_rating(item: Dict[str, Any]) -> float:
     """Shrink tiny-sample ratings toward a neutral prior for discovery order."""
     try:
         rating_value = float(item.get("ratingKinopoisk") or item.get("rating") or item.get("imdbRating") or 0)
-        votes = max(0, int(item.get("voteCount") or item.get("imdbVoteCount") or 0))
+        votes = max(0, int(item.get("voteCount") or 0))
     except (TypeError, ValueError):
         return 0.0
     if rating_value <= 0:
         return 0.0
-    return (rating_value * votes + 6.8 * 500) / (votes + 500)
+    return (rating_value * votes + 6.8 * 25000) / (votes + 25000)
 
 
 def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
@@ -1321,12 +1352,15 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
         for value in raw_value.split(",")
         if value.strip()
     }
-    query = str(params.get("search", [""])[0]).strip().casefold()
+    from tools.catalog_index import person_matches, search_words, title_tier
+
+    search_tokens = search_words(params.get("search", [""])[0])
+    query = " ".join(search_tokens)
     genre = str(params.get("genre", [""])[0]).strip().casefold()
     kind = str(params.get("type", params.get("kind", [""]))[0]).strip().casefold()
     collection = str(params.get("collection", [""])[0]).strip().casefold()
     collection = {"romance": "together", "thrill": "tense"}.get(collection, collection)
-    sort = str(params.get("sort", ["rating"])[0]).strip().casefold()
+    sort = str(params.get("sort", ["popular"])[0]).strip().casefold()
     if collection in {"popular", "trending"} and sort == "rating":
         sort = "popular"
     if kind in {"movies", "film", "films"}:
@@ -1354,8 +1388,6 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
         if requested_ids and str(item.get("id", "")) not in requested_ids:
             return False
         if kind and str(item.get("kind", "")).casefold() != kind:
-            return False
-        if query and query not in text(item):
             return False
         if genre and genre not in genres(item):
             return False
@@ -1390,6 +1422,20 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
         return True
 
     filtered = [item for item in items if matches(item)]
+    if search_tokens:
+        # Same rules as the SQLite index: titles first, a person's name only when no title fits.
+        scored = []
+        for position, item in enumerate(filtered):
+            tiers = [tier for tier in (title_tier(search_tokens, item.get("title")), title_tier(search_tokens, item.get("originalTitle"))) if tier is not None]
+            if tiers:
+                scored.append((min(tiers), position, item))
+        if scored and min(entry[0] for entry in scored) <= 4:
+            scored = [entry for entry in scored if entry[0] <= 4]
+        if not scored:
+            scored = [(6, position, item) for position, item in enumerate(filtered)
+                      if person_matches(search_tokens, item.get("actors")) or person_matches(search_tokens, item.get("directors"))]
+        scored.sort(key=lambda entry: (entry[0], entry[1]))
+        filtered = [entry[2] for entry in scored]
     def unverified(item: Dict[str, Any]) -> bool:
         return item.get("playbackVerified") is False
     def rating(item: Dict[str, Any]) -> float:
@@ -1404,8 +1450,10 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
             return int(item.get("popularRank") or 0) or 10 ** 9
         except (TypeError, ValueError):
             return 10 ** 9
-    if sort in {"popular", "trending"}:
-        filtered.sort(key=lambda item: (bool(query) or not unverified(item), -popular_rank(item), votes(item), rating(item), year(item)), reverse=True)
+    if search_tokens:
+        pass  # already in order of how well each title answers the query
+    elif sort in {"popular", "trending"}:
+        filtered.sort(key=lambda item: (-popular_rank(item), votes(item), rating(item), bool(query) or not unverified(item), year(item)), reverse=True)
     elif sort == "votes":
         filtered.sort(key=lambda item: (bool(query) or not unverified(item), votes(item), rating(item), year(item)), reverse=True)
     elif sort == "new":
@@ -2897,9 +2945,18 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
         # Do not let a browser keep an old SPA bundle after a deployment: an
         # already-open tab could otherwise retain obsolete playback behaviour
         # when navigating from Favorites into a title card.
-        request_path = urllib.parse.urlsplit(self.path).path
-        if request_path in {"/index.html", "/app.js", "/styles.css", "/sw.js"}:
+        # The page and the service worker are always fetched fresh; they name the
+        # bundle with a ?v= version, and a versioned bundle never changes, so the
+        # browser may keep it instead of downloading half a megabyte each visit.
+        request_url = urllib.parse.urlsplit(self.path)
+        request_path = request_url.path
+        versioned = "v=" in request_url.query
+        if request_path in {"/app.js", "/styles.css"} and versioned:
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        elif request_path in {"/index.html", "/app.js", "/styles.css", "/sw.js"}:
             self.send_header("Cache-Control", "no-store, max-age=0")
+        elif request_path.startswith("/assets/") and self.command in {"GET", "HEAD"}:
+            self.send_header("Cache-Control", "public, max-age=604800")
         super().end_headers()
 
     def log_request(self, code="-", size="-") -> None:
@@ -3676,6 +3733,7 @@ def main() -> None:
     else:
         print("Kinopoisk playback refresh: disabled.", flush=True)
     print("Browser MP4 export: disabled; online playback remains available.", flush=True)
+    threading.Thread(target=warm_catalog, args=(args.port,), name="catalog-warmup", daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
