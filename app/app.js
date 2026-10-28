@@ -2382,6 +2382,8 @@
   let progressiveCatalogObserver = null;
   let assistantPaginationObserver = null;
   let assistantPaginationDismissed = false;
+  // The genre row stays one scrolling line until the viewer asks for all of it.
+  let genreRailExpanded = false;
   let progressiveCatalogItems = [];
   let progressiveCatalogNext = 0;
   let selectedSeason = 1;
@@ -2559,6 +2561,7 @@
       updateDocumentRoute({ type: "view", view: "catalog" });
       return;
     }
+    $("#assistant-rail")?.classList.toggle("is-route-hidden", route.type === "title");
     if (route.type === "title") {
       const item = getTitle(route.id);
       if (!item) {
@@ -2621,6 +2624,34 @@
     renderRoute(route, { preserveCatalogFilters });
   }
 
+  // The companion sits as a small round button; the bubble opens on a tap and
+  // only once by itself, on the very first visit.
+  const ASSISTANT_INTRO_KEY = "cinevault-assistant-intro";
+  let assistantTouched = false;
+  function setAssistantExpanded(expanded) {
+    const rail = $("#assistant-rail");
+    if (!rail) return;
+    rail.classList.toggle("is-collapsed", !expanded);
+    if (expanded) rail.classList.remove("is-pagination-collapsed");
+    const collapse = $("#assistant-collapse");
+    collapse?.setAttribute("aria-expanded", String(expanded));
+    $("#assistant-pet")?.setAttribute("aria-expanded", String(expanded));
+  }
+  function introduceAssistant() {
+    try {
+      if (window.localStorage.getItem(ASSISTANT_INTRO_KEY)) return;
+    } catch {
+      return;
+    }
+    setAssistantExpanded(true);
+    // The first visit is reloaded once when the service worker takes over, so
+    // the intro counts as seen only after it has stayed on screen for a while.
+    window.setTimeout(() => {
+      try { window.localStorage.setItem(ASSISTANT_INTRO_KEY, "1"); } catch {}
+    }, 4000);
+    window.setTimeout(() => { if (!assistantTouched) setAssistantExpanded(false); }, 9000);
+  }
+
   let assistantCopyAt = 0;
   function setAssistantCopy(text) {
     assistantCopyAt = Date.now();
@@ -2638,14 +2669,54 @@
     saveState();
   }
 
-  function openTitleRoute(id, { recommendation = false } = {}) {
+  // The poster the viewer clicked flies into the poster of the detail page
+  // (View Transitions API). Without support or with reduced motion the page
+  // simply switches as before.
+  function withPosterTransition(trigger, update) {
+    const source = trigger?.matches(".top-ten-card, .poster-card, .landscape-card, .feature-pick")
+      ? trigger.querySelector(".poster-art, .top-ten-poster, .landscape-art, img")
+      : null;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (!source || typeof document.startViewTransition !== "function" || reduceMotion) {
+      update();
+      return;
+    }
+    // A title with a backdrop hides its poster, so the poster grows into the
+    // backdrop instead.
+    const detailArt = () => [$(".detail-poster"), $(".detail-backdrop")].find((element) => element?.getClientRects().length);
+    source.style.viewTransitionName = "cv-poster";
+    const transition = document.startViewTransition(async () => {
+      source.style.viewTransitionName = "";
+      update();
+      // renderRoute scrolls on the next frame; the new snapshot must already
+      // show the top of the detail page.
+      window.scrollTo(0, 0);
+      // Give the backdrop a moment to arrive so the poster does not fly into
+      // an empty frame.
+      const backdrop = $(".detail-shell")?.style.getPropertyValue("--detail-backdrop").match(/url\('(.+)'\)/)?.[1];
+      if (backdrop) {
+        const image = new Image();
+        image.src = backdrop;
+        await Promise.race([image.decode().catch(() => {}), new Promise((resolve) => window.setTimeout(resolve, 400))]);
+      }
+      // Named only now: the detail page may have been rebuilt while waiting.
+      const target = detailArt();
+      if (target) target.style.viewTransitionName = "cv-poster";
+    });
+    transition.finished.finally(() => {
+      const target = detailArt();
+      if (target) target.style.viewTransitionName = "";
+    });
+  }
+
+  function openTitleRoute(id, { recommendation = false, trigger: clicked = null } = {}) {
     const item = getTitle(id);
     if (!item) return;
     rememberTasteInteraction(item, recommendation ? "recommendation_opened" : "opened");
     hideSearchSuggestions();
     const returnView = ROUTE_PATHS[state.view] ? state.view : "catalog";
     updateCurrentHistoryScroll();
-    const trigger = [...document.querySelectorAll("[data-open-title]")]
+    const trigger = clicked || [...document.querySelectorAll("[data-open-title]")]
       .find((element) => element.dataset.openTitle === item.id);
     const triggerOffset = trigger?.getBoundingClientRect().top;
     window.history.replaceState(
@@ -2663,7 +2734,7 @@
       "",
       routeForTitle(item.id),
     );
-    renderRoute(route);
+    withPosterTransition(clicked, () => renderRoute(route));
     if (recommendation) setAssistantCopy(`Вот «${item.title}». ${recommendationReason(item)}`);
   }
 
@@ -2689,7 +2760,7 @@
     const detailLink = element.closest("[data-open-title]");
     if (detailLink && app.contains(detailLink) && shouldHandleLink(event, detailLink)) {
       event.preventDefault();
-      openTitleRoute(detailLink.dataset.openTitle);
+      openTitleRoute(detailLink.dataset.openTitle, { trigger: detailLink });
       return;
     }
     const backLink = element.closest("[data-back-from-detail]");
@@ -4852,7 +4923,10 @@
     if (!grid || progressiveCatalogNext >= progressiveCatalogItems.length) return;
     const next = Math.min(progressiveCatalogNext + 12, progressiveCatalogItems.length);
     const markup = progressiveCatalogItems.slice(progressiveCatalogNext, next).map((item) => poster(item)).join("");
-    grid.insertAdjacentHTML("beforeend", markup);
+    // Batches go before the full-width sentinel so rows stay unbroken.
+    const sentinel = $("#catalog-lazy-sentinel");
+    if (sentinel) sentinel.insertAdjacentHTML("beforebegin", markup);
+    else grid.insertAdjacentHTML("beforeend", markup);
     progressiveCatalogNext = next;
     hydrateLazyPosters();
     if (progressiveCatalogNext >= progressiveCatalogItems.length) {
@@ -5673,10 +5747,10 @@
     const paginationMarkup = items.length && pagination.totalPages > 1
       ? `<nav class="catalog-pagination" aria-label="Листать каталог">${previousPageButton}${nextPageButton}</nav>`
       : "";
-    const genreFilterMarkup = `<div class="genre-rail-wrap"><div class="genre-list genre-rail" role="group" aria-label="Фильтр по жанру">${genreButtons}</div></div>`;
+    const genreFilterMarkup = `<div class="genre-rail-wrap${genreRailExpanded ? " is-expanded" : ""}"><div class="genre-list genre-rail" role="group" aria-label="Фильтр по жанру">${genreButtons}</div><button class="genre-rail-toggle" data-genre-toggle type="button" aria-expanded="${genreRailExpanded}">${genreRailExpanded ? "Свернуть" : "Все жанры"}</button></div>`;
     const catalogMarkup = items.length ? `<div class="poster-grid" id="catalog-results" tabindex="-1">${pageItems.slice(0, 16).map((item) => poster(item)).join("")}${pageItems.length > 16 ? `<div id="catalog-lazy-sentinel" class="catalog-lazy-sentinel" aria-hidden="true"></div>` : ""}</div>${paginationMarkup}` : `<div class="empty-state"><div class="empty-pet">${petVisual()}</div><h2>${savedView ? savedViewEmpty.title : "Ничего не подошло"}</h2><p>${savedView ? savedViewEmpty.copy : emptyCopy}</p>${savedView ? `<a class="primary-button" href="${routeForView("catalog")}" data-view="catalog">${savedViewEmpty.action}</a>` : '<button class="primary-button" data-catalog-reset type="button">Сбросить фильтры</button>'}</div>`;
-    const savedViewMarkup = `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div>${catalogMarkup}`;
-    page.innerHTML = savedView ? savedViewMarkup : `<div class="page-heading"><div><div class="eyebrow">CineVault</div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls catalog-studio" aria-label="Подобрать фильм"><div class="studio-top"><div class="studio-tabs" role="group" aria-label="Подборки каталога">${collectionButtons}</div><div class="studio-actions">${catalogSortMenuMarkup()}<button class="text-button studio-random" data-catalog-random type="button"${items.length ? "" : " disabled"} title="Открыть случайный фильм из выдачи">Случайный</button></div></div>${genreFilterMarkup}<div class="catalog-result-row">${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}${remoteCatalogLoading ? `<span class="catalog-loading-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span> Обновляю карточки…</span>` : ""}${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${catalogMarkup}`;
+    const savedViewMarkup = `<div class="page-heading"><div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div>${catalogMarkup}`;
+    page.innerHTML = savedView ? savedViewMarkup : `<div class="page-heading"><div><h1>${title}</h1><p class="muted">${subtitle}</p></div></div><section class="catalog-controls catalog-studio" aria-label="Подобрать фильм"><div class="studio-top"><div class="studio-tabs" role="group" aria-label="Подборки каталога">${collectionButtons}</div><div class="studio-actions">${catalogSortMenuMarkup()}<button class="text-button studio-random" data-catalog-random type="button"${items.length ? "" : " disabled"} title="Открыть случайный фильм из выдачи">Случайный</button></div></div>${genreFilterMarkup}<div class="catalog-result-row">${activeFilters ? `<span>${escapeHtml(activeFilters)}</span>` : ""}${remoteCatalogLoading ? `<span class="catalog-loading-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span> Обновляю карточки…</span>` : ""}${hasFilters ? `<button class="text-button" data-catalog-reset type="button">Сбросить фильтры</button>` : ""}</div></section>${catalogMarkup}`;
     const liveStatus = $("#catalog-live-status");
     if (liveStatus) window.requestAnimationFrame(() => { liveStatus.textContent = "Каталог обновлён."; });
     bindPageActions();
@@ -7061,6 +7135,12 @@
     }));
     $$('[data-catalog-reset]').forEach((button) => button.addEventListener("click", resetCatalogFilters));
     const genreRail = $(".genre-rail");
+    $("[data-genre-toggle]")?.addEventListener("click", (event) => {
+      genreRailExpanded = !genreRailExpanded;
+      $(".genre-rail-wrap")?.classList.toggle("is-expanded", genreRailExpanded);
+      event.currentTarget.setAttribute("aria-expanded", String(genreRailExpanded));
+      event.currentTarget.textContent = genreRailExpanded ? "Свернуть" : "Все жанры";
+    });
     $$('[data-genre-scroll]').forEach((button) => button.addEventListener("click", () => genreRail?.scrollBy({ left: Number(button.dataset.genreScroll) * genreRail.clientWidth * .8, behavior: "smooth" })));
     const activeGenre = genreRail?.querySelector(".genre-pill.is-active:not([data-catalog-genre=''])");
     if (activeGenre) genreRail.scrollLeft = Math.max(0, activeGenre.offsetLeft - (genreRail.clientWidth - activeGenre.offsetWidth) / 2);
@@ -7160,13 +7240,23 @@
     if (video && !isTextControl) event.preventDefault();
   });
 
-  $("#assistant-collapse")?.addEventListener("click", (event) => { const collapsed = $("#assistant-rail").classList.toggle("is-collapsed"); event.currentTarget.setAttribute("aria-expanded", String(!collapsed)); event.currentTarget.setAttribute("aria-label", collapsed ? "Развернуть помощника" : "Свернуть помощника"); });
-  $("#assistant-pet")?.addEventListener("click", () => { assistantPaginationDismissed = true; $("#assistant-rail").classList.remove("is-collapsed", "is-pagination-collapsed"); setPetState("happy"); setAssistantCopy("Я выберу вариант по твоему вкусу, настроению и истории просмотра."); });
-  $("#assistant-recommend")?.addEventListener("click", () => { setAssistantCopy("Секунду, ищу что-нибудь подходящее…"); const pick = nextRecommendation(); if (!pick) { setAssistantCopy("Пока не нашёл подходящих вариантов."); return; } setPetState("happy"); setAssistantCopy(`${currentPet().pick} «${pick.title}».`); openTitleRoute(pick.id, { recommendation: true }); });
+  $("#assistant-collapse")?.addEventListener("click", () => { assistantTouched = true; setAssistantExpanded(false); });
+  $("#assistant-pet")?.addEventListener("click", () => {
+    assistantTouched = true;
+    assistantPaginationDismissed = true;
+    const rail = $("#assistant-rail");
+    const open = rail.classList.contains("is-collapsed") || rail.classList.contains("is-pagination-collapsed");
+    setAssistantExpanded(open);
+    if (!open) return;
+    setPetState("happy");
+    setAssistantCopy("Я выберу вариант по твоему вкусу, настроению и истории просмотра.");
+  });
+  $("#assistant-recommend")?.addEventListener("click", () => { assistantTouched = true; setAssistantCopy("Секунду, ищу что-нибудь подходящее…"); const pick = nextRecommendation(); if (!pick) { setAssistantCopy("Пока не нашёл подходящих вариантов."); return; } setPetState("happy"); setAssistantCopy(`${currentPet().pick} «${pick.title}».`); openTitleRoute(pick.id, { recommendation: true }); });
 
   // Card images fade in once loaded; until then a shimmer placeholder shows.
   document.addEventListener("load", (event) => { if (event.target instanceof HTMLImageElement) event.target.classList.add("is-loaded"); }, true);
   startPetStates();
+  introduceAssistant();
   // Solid top bar once the page scrolls past the hero's top edge.
   const syncScrolledHeader = () => app.classList.toggle("is-scrolled", window.scrollY > 24);
   window.addEventListener("scroll", syncScrolledHeader, { passive: true });

@@ -1293,3 +1293,35 @@ select option { background-color: var(--surface); color: var(--text); }
 .rail-wrap:hover .rail-arrow, .rail-arrow:focus-visible { opacity: 1; }
 .rail-arrow[hidden] { display: none; }
 .rail-arrow:hover { background: var(--surface-3); }
+
+/* Companion: a small round button by default, the bubble opens on a tap.
+   On title pages it steps aside entirely so it never covers the actions. */
+.assistant-rail.is-collapsed { width: 72px; }
+.assistant-rail.is-collapsed .assistant-pet { width: 66px; height: 66px; border: 1px solid color-mix(in srgb, var(--steel) 48%, var(--line)); border-radius: 50%; background: color-mix(in srgb, var(--surface-2) 88%, transparent); }
+.assistant-rail.is-collapsed .pet-state { display: none; }
+.assistant-rail.is-route-hidden { display: none; }
+@media (max-width: 620px) {
+  .assistant-rail.is-collapsed { right: 12px; width: 60px; }
+  .assistant-rail.is-collapsed .assistant-pet { width: 54px; height: 54px; }
+}
+
+/* Denser catalog: as many posters as fit, the long copy stays on the detail page. */
+@media (min-width: 621px) {
+  .poster-grid { grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 22px 16px; }
+  .poster-grid .poster-card-description, .poster-grid .poster-card-tags { display: none; }
+}
+
+/* Genres: one scrolling line, «Все жанры» unfolds the rest. */
+.genre-rail-wrap { display: flex; align-items: flex-start; gap: 10px; }
+.genre-rail-wrap .genre-rail { flex: 1; }
+.genre-rail-toggle { flex: 0 0 auto; padding: 7px 4px; border: 0; background: transparent; color: var(--muted); font-size: 13px; white-space: nowrap; cursor: pointer; }
+.genre-rail-toggle:hover { color: var(--text); }
+@media (min-width: 621px) {
+  .app-shell .genre-rail-wrap:not(.is-expanded) .genre-rail { flex-wrap: nowrap; overflow-x: auto; mask-image: linear-gradient(90deg, #000 92%, transparent); }
+}
+@media (max-width: 620px) { .genre-rail-toggle { display: none; } }
+
+/* Poster → detail page morph (withPosterTransition in app.js). */
+::view-transition-group(cv-poster) { animation-duration: .45s; animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
+::view-transition-old(cv-poster), ::view-transition-new(cv-poster) { height: 100%; object-fit: cover; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .25s; }
