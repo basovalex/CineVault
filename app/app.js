@@ -7360,7 +7360,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     rememberPlayerContext();
     const progressKey = alternativeProgressKey(item);
     const savedProgress = resumeRecord ? {position:resumeRecord.completed ? 0 : resumeRecord.position, duration:resumeRecord.duration, seasonNumber:resumeRecord.season, episodeNumber:resumeRecord.episode, translationId:String(resumeRecord.edition || "").replace(/^alloha:/, "")} : state.progress[progressKey] || null;
-    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal" role="dialog" aria-modal="true" aria-labelledby="alternative-player-title"><div class="modal-head"><div><h2 id="alternative-player-title">${escapeHtml(item.title)}</h2></div><div class="player-head-actions"><button id="alternative-together" class="icon-button" type="button" disabled aria-label="Смотреть вместе" title="Смотреть вместе">${playerIcon("together")}</button><button class="icon-button" id="alternative-player-close" type="button" aria-label="Закрыть">${uiIcon("close")}</button></div></div><div class="player-toolbar"><div class="player-selects"><label class="player-select"><span>Озвучка</span><select id="alternative-player-voice" disabled aria-label="Озвучка"></select></label></div></div><div class="provider-frame external-embed-frame"><iframe id="alternative-player-frame" title="${escapeHtml(item.title)}" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" hidden></iframe></div><section id="alternative-room" class="together-panel" aria-label="Совместный просмотр" hidden></section><p id="alternative-player-status" class="notice" role="status" aria-live="polite">Ищу доступные озвучки…</p></section></div>`;
+    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal provider-modal player-modal" role="dialog" aria-modal="true" aria-labelledby="alternative-player-title"><div class="modal-head"><div><h2 id="alternative-player-title">${escapeHtml(item.title)}</h2></div><div class="player-head-actions"><button id="alternative-together" class="icon-button" type="button" disabled aria-label="Смотреть вместе" title="Смотреть вместе">${playerIcon("together")}</button><button class="icon-button" id="alternative-player-close" type="button" aria-label="Закрыть">${uiIcon("close")}</button></div></div><div class="player-toolbar"><div class="player-selects"><label class="player-select" data-episode-pick hidden><span>Сезон</span><select id="alternative-player-season" aria-label="Сезон"></select></label><label class="player-select" data-episode-pick hidden><span>Серия</span><select id="alternative-player-episode" aria-label="Серия"></select></label><label class="player-select"><span>Озвучка</span><select id="alternative-player-voice" disabled aria-label="Озвучка"></select></label></div></div><div class="provider-frame external-embed-frame"><iframe id="alternative-player-frame" title="${escapeHtml(item.title)}" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" hidden></iframe></div><section id="alternative-room" class="together-panel" aria-label="Совместный просмотр" hidden></section><p id="alternative-player-status" class="notice" role="status" aria-live="polite">Ищу доступные озвучки…</p></section></div>`;
     let frame = $("#alternative-player-frame");
     const frameWatch = createFrameWatch(frame.parentElement, { item, season, episode, retry: () => openAlternativePlayer(item, { resume: true, season, episode }) });
     const togetherButton = $("#alternative-together");
@@ -7405,6 +7405,38 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       });
     };
     const voiceSelect = $("#alternative-player-voice");
+    // Season and episode are chosen in our own lists; the source hides its own (see showOption).
+    const seasonSelect = $("#alternative-player-season");
+    const episodeSelect = $("#alternative-player-episode");
+    const pickableSeasons = () => (item.kind === "series" && !roomId ? titleSeasonList(item).filter((entry) => entry.episodes?.length) : []);
+    const syncEpisodePickers = () => {
+      const seasons = pickableSeasons();
+      $$("[data-episode-pick]").forEach((label) => { label.hidden = !seasons.length; });
+      if (!seasons.length || !seasonSelect || !episodeSelect) return;
+      const current = seasons.find((entry) => entry.number === Number(seasonNumber)) || seasons[0];
+      seasonSelect.innerHTML = seasons.map((entry) => `<option value="${entry.number}">Сезон ${entry.number}</option>`).join("");
+      seasonSelect.value = String(current.number);
+      episodeSelect.innerHTML = current.episodes.map((number) => {
+        const name = episodeTitle(item, current.number, number);
+        return `<option value="${number}">${escapeHtml(name === `Серия ${number}` ? name : `${number}. ${name}`)}</option>`;
+      }).join("");
+      episodeSelect.value = String(current.episodes.includes(Number(episodeNumber)) ? episodeNumber : current.episodes[0]);
+    };
+    const openEpisode = (nextSeason, nextEpisode) => {
+      if (started) saveProgress(false);
+      seasonNumber = nextSeason;
+      episodeNumber = nextEpisode;
+      started = false;
+      position = 0;
+      resumeTarget = 0;
+      accountPlayback = null;
+      showOption(Number(voiceSelect.value));
+    };
+    seasonSelect?.addEventListener("change", () => {
+      const chosen = pickableSeasons().find((entry) => entry.number === Number(seasonSelect.value));
+      if (chosen) openEpisode(chosen.number, chosen.episodes[0]);
+    });
+    episodeSelect?.addEventListener("change", () => openEpisode(Number(seasonSelect.value), Number(episodeSelect.value)));
     const refreshButton = { disabled: false };
     const status = $("#alternative-player-status");
     // Routine progress text stays out of the way; only problems are shown.
@@ -7477,6 +7509,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
           if (nextSeason !== seasonNumber || nextEpisode !== episodeNumber) {
             accountPlayback = null; seasonNumber = nextSeason; episodeNumber = nextEpisode;
             if (activeOption) prepareAccount();
+            syncEpisodePickers();
           }
           if (started) togetherButton.disabled = false;
         }
@@ -7540,6 +7573,12 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
         if (roomContent?.season) url.searchParams.set("season", String(roomContent.season));
         if (roomContent?.episode) url.searchParams.set("episode", String(roomContent.episode));
         resumeTarget = 0;
+      }
+      if (!roomId) {
+        const seasons = pickableSeasons();
+        if (seasons.length && !(seasonNumber && episodeNumber)) { seasonNumber = seasons[0].number; episodeNumber = seasons[0].episodes[0]; }
+        url.searchParams.set("hidden", seasons.length ? "season,episode,translation" : "translation");
+        syncEpisodePickers();
       }
       if (!roomId && seasonNumber && episodeNumber) {
         url.searchParams.set("season", String(seasonNumber)); url.searchParams.set("episode", String(episodeNumber));

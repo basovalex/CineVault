@@ -620,7 +620,8 @@ select option { background-color: var(--surface); color: var(--text); }
 .app-shell .modal-backdrop:has(> .player-modal:not(.trailer-modal)):not(.player-fullscreen-active) { display: block; padding: 0; overflow-y: auto; background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .app-shell .modal-backdrop > .player-modal:not(.trailer-modal):not(:fullscreen) { width: 100%; max-width: none; min-height: 100%; max-height: none; margin: 0; overflow: visible; border: 0; border-radius: 0; padding: 10px clamp(14px, 3vw, 40px) 24px; background: transparent; box-shadow: none; }
 .app-shell .modal-backdrop > .player-modal:not(.trailer-modal):not(:fullscreen) .provider-frame { width: min(100%, calc((100dvh - 250px) * 16 / 9)); height: auto; min-height: 240px; aspect-ratio: 16 / 9; margin-inline: auto; }
-.app-shell .modal-backdrop > .player-modal:has(#alternative-player-frame):not(:fullscreen) .provider-frame { width: min(100%, calc((100dvh - 96px) * 16 / 9)); }
+/* The whole player fits the window: header and our lists above take ~140px, a little air below. */
+.app-shell .modal-backdrop > .player-modal:has(#alternative-player-frame):not(:fullscreen) .provider-frame { width: min(100%, calc((100dvh - 168px) * 16 / 9)); }
 
 /* Only the title, the exit and "watch together" stay above the video, on one line. */
 .player-modal:not(.trailer-modal):not(:fullscreen) .modal-head { position: relative; display: flex; justify-content: space-between; align-items: center; gap: var(--sp-4); min-height: 56px; margin-bottom: var(--sp-3); }
@@ -631,8 +632,13 @@ select option { background-color: var(--surface); color: var(--text); }
 .player-title-logo { display: block; max-width: min(360px, 56vw); max-height: 52px; object-fit: contain; }
 .player-head-actions { display: flex; align-items: center; gap: 8px; }
 .player-head-actions #alternative-together svg { width: 20px; height: 20px; stroke: currentColor; }
-/* Our voice list stays visible: when the saved voice has no such episode, the source hides its own lists. */
+/* Our season, episode and voice lists replace the source's own; one row, labels kept for screen readers. */
 .player-modal:has(#alternative-player-frame) .player-toolbar { margin: 0 0 var(--sp-3); }
+.player-modal:has(#alternative-player-frame) .player-selects { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.player-modal:has(#alternative-player-frame) .player-select { min-width: 0; }
+.player-modal:has(#alternative-player-frame) .player-select > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.player-modal:has(#alternative-player-frame) #alternative-player-episode { max-width: min(320px, 60vw); }
+.player-select[hidden] { display: none; }
 #alternative-player-status[hidden] { display: none; }
 
 .adfilter-guide ol { display: grid; gap: 12px; margin: 8px 0 14px; padding-left: 22px; }
