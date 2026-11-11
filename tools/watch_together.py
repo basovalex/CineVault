@@ -13,6 +13,12 @@ import time
 HEARTBEAT_TIMEOUT = 90
 ROOM_TTL = 24 * 60 * 60
 MAX_PARTICIPANTS = 16
+# Iframe mode: a viewer whose video has not kept up for LAG_GRACE pauses everyone;
+# after LAG_GIVE_UP the room goes on without them, so one stuck tab cannot hold it.
+LAG_GRACE = 4
+LAG_GIVE_UP = 45
+LIVE_REPORT = 15
+COUNTDOWN = 3
 
 
 def number(value, maximum=864000):
@@ -59,9 +65,12 @@ def reconcile(state, now):
     waiting = [p for p in private["participants"].values()
                if p["required"] and (now - p["seen"] >= HEARTBEAT_TIMEOUT
                   or not p["ready"] or p["generation"] != state["generation"])]
-    # Iframe не сообщает буфер. Не превращаем устаревшую телеметрию в общую паузу.
+    # Iframe не сообщает буфер: ждём только того, кто заметно отстаёт уже несколько секунд.
     if state.get("sync_mode") == "iframe":
-        waiting = []
+        waiting = [p for p in private["participants"].values()
+                   if p["required"] and now - p["seen"] < LIVE_REPORT and p.get("lag_since") is not None
+                   and LAG_GRACE <= now - p["lag_since"] < LAG_GIVE_UP]
+    state["waiting_for"] = [p["name"] for p in waiting]
     should_play = bool(state["desired_playing"] and host_online and not waiting and not state["ended"])
     if should_play != state["playing"]:
         freeze_at = now
@@ -94,7 +103,8 @@ def snapshot(state, now=None):
     public["participants"] = [
         {"id": key, "name": p["name"], "host": p["host"], "ready": p["ready"],
          "required": p["required"], "online": now - p["seen"] < HEARTBEAT_TIMEOUT,
-         "generation": p["generation"], "reason": p["reason"], "position": p.get("position"), "reported_at": p["seen"], "position_at": p.get("position_at", p["seen"]), "corrections": p.get("corrections", 0)}
+         "generation": p["generation"], "reason": p["reason"], "position": p.get("position"), "reported_at": p["seen"], "position_at": p.get("position_at", p["seen"]), "corrections": p.get("corrections", 0),
+         "armed": bool(p.get("armed"))}
         for key, p in private["participants"].items()
     ]
     return public
@@ -113,6 +123,14 @@ def update(state, payload, now=None):
     instance = str(payload.get("instance", ""))[:100]
     is_host = secrets.compare_digest(str(payload.get("host_token", "")), private["host_token"])
     p = private["participants"].get(session)
+    credentials = {}
+    # The remote was handed to this viewer: their next request proves who they are and takes the secret.
+    pending = private.get("pending_host")
+    if pending and pending["session"] == session and p and secrets.compare_digest(str(payload.get("participant_token", "")), p["token"]):
+        private.pop("pending_host")
+        is_host = True
+        private["host_instance"] = instance
+        credentials["host_token"] = private["host_token"]
     account = payload.get("_account") or {}
     if state.get("protocol") == 3:
         if not account.get("id"):
@@ -126,7 +144,6 @@ def update(state, payload, now=None):
         expected = private.get("expected_users")
         if action == "join" and expected and account["id"] not in expected:
             raise PermissionError("Приглашение предназначено участникам выбранного просмотра")
-    credentials = {}
     if action == "join":
         if is_host and payload.get("sync_mode") == "iframe":
             state["sync_mode"] = "iframe"
@@ -171,6 +188,16 @@ def update(state, payload, now=None):
                 p["ready"] = payload.get("ready") is True
                 p["generation"] = generation
                 p["reason"] = str(payload.get("reason", ""))[:160]
+                if "armed" in payload:
+                    p["armed"] = payload.get("armed") is True
+                # Behind only counts while the room plays; a pause gives everyone time to catch up.
+                if "sampled" in payload:
+                    p["sampled"] = payload.get("sampled") is True
+                # A player that never reported its video cannot be told apart from a slow one: never wait for it.
+                if p["ready"] or not state["desired_playing"] or not p.get("sampled", True):
+                    p["lag_since"] = None
+                elif p.get("lag_since") is None:
+                    p["lag_since"] = now
                 if "position" in payload:
                     p["position"] = number(payload["position"])
                     p["position_at"] = now - number(payload.get("telemetry_age", 0), 3600)
@@ -198,14 +225,19 @@ def update(state, payload, now=None):
             if command_seq <= private["command_seq"]:
                 return credentials
             command = payload.get("command")
-            if command not in {"play", "pause", "seek", "content", "exclude", "end", "wait"}:
+            if command not in {"play", "pause", "seek", "content", "exclude", "end", "wait", "handover"}:
                 raise ValueError("Неизвестная команда")
             state["position"] = position(state, now)
             state["anchor_at"] = now
+            start_at = None
             if command in {"play", "pause"}:
                 state["desired_playing"] = command == "play"
                 if state.get("sync_mode") == "iframe" and "position" in payload:
                     state["position"] = number(payload["position"])
+                # Start for everyone at one moment, after a short countdown.
+                if command == "play" and payload.get("countdown") is True:
+                    start_at = now + COUNTDOWN
+                    state["playing"] = False
             elif command in {"seek", "content"}:
                 new_position = number(payload.get("position", 0))
                 if command == "content":
@@ -228,8 +260,28 @@ def update(state, payload, now=None):
                 state["ended"] = True
             elif command == "wait":
                 state["waiting_since"] = now
+            elif command == "handover":
+                target_session = str(payload.get("participant", ""))
+                other = private["participants"].get(target_session)
+                if not other or other["host"] or now - other["seen"] >= HEARTBEAT_TIMEOUT:
+                    raise ValueError("Участник не найден или не на связи")
+                p["host"] = False
+                other["host"] = True
+                other["required"] = True
+                private["host_token"] = secrets.token_urlsafe(32)
+                private["host_session"] = target_session
+                private["host_instance"] = ""
+                private["host_seen"] = now
+                private["pending_host"] = {"session": target_session}
+                if state.get("protocol") == 3 and other.get("account_id"):
+                    private["owner_user_id"] = other["account_id"]
             private["command_seq"] = command_seq
             state["seq"] += 1
+            if start_at is not None:
+                reconcile(state, now)
+                if state["playing"]:
+                    state["anchor_at"] = start_at
+                state["starts_at"] = start_at
         else:
             raise ValueError("Неизвестное действие")
     if p:

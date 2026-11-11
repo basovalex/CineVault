@@ -75,3 +75,22 @@ test('состояние комнаты поступает через поток
  room.connectEvents();opened.onmessage({data:JSON.stringify({state:{seq:5}})});
  assert.equal(opened.url,'/api/watch/rooms/abc/events');assert.equal(received.state.seq,5);
 });
+test('сбившийся зритель сам возвращается к общему просмотру через пару секунд',()=>{
+  const {room,sent,flush}=client();room.isHost=false;room.bootstrap=false;room.onMessage({event:'pause',time:100});
+  assert.equal(room.following,false);assert.equal(sent.length,0);
+  flush();assert.equal(room.following,true);assert.deepEqual(sent.map(x=>x.api),['play']);
+});
+test('отсчёт держит зрителя на месте старта и запускает в назначенный момент',()=>{
+  const {room,sent,advance,flush}=client();room.isHost=false;room.session='g';
+  room.apply({state:{...room.state,seq:2,generation:2,position:30,anchor_at:1003,server_time:1000,playing:true,participants:[{id:'g',host:false}]}});
+  assert.deepEqual(sent.map(x=>x.api),['seek','pause']);assert.equal(sent[0].value,30);
+  room.synchronize();assert.equal(sent.length,2);
+  advance(3000);flush();assert.deepEqual(sent.slice(2).map(x=>x.api),['seek','play']);assert.equal(sent[2].value,30);
+});
+test('ведущий тоже ждёт отсчёта и останавливается, пока комната ждёт отстающего',()=>{
+  const {room,sent,commands,advance,flush}=client();
+  room.apply({state:{...room.state,seq:2,anchor_at:1003,server_time:1000,position:30}});
+  assert.deepEqual(sent.map(x=>x.api),['seek','pause']);advance(3000);flush();assert.equal(sent.at(-1).api,'play');
+  room.apply({state:{...room.state,seq:3,anchor_at:900,server_time:1010,playing:false,waiting_for:['Дима']}});
+  assert.equal(sent.at(-1).api,'pause');room.onMessage({event:'pause',time:40});flush();assert.equal(commands.length,0);
+});

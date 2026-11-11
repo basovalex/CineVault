@@ -182,3 +182,61 @@ class IframeModeTests(unittest.TestCase):
         p=next(p for p in rooms.snapshot(self.s, self.now)['participants'] if p['id']=='guest')
         self.assertEqual(p['reported_at'], self.now)
         self.assertEqual(p['position_at'], self.now-20)
+
+    def test_lagging_viewer_pauses_everyone_then_is_let_go(self):
+        self.command('play')
+        self.ready('host'); self.ready('guest')
+        self.assertTrue(self.s['playing'])
+        self.ready('guest', False)
+        self.now += 2
+        self.ready('host'); self.ready('guest', False)
+        self.assertTrue(self.s['playing'])
+        self.now += 3
+        self.ready('host'); self.ready('guest', False)
+        self.assertFalse(self.s['playing'])
+        self.assertTrue(self.s['desired_playing'])
+        self.assertEqual(rooms.snapshot(self.s, self.now)['waiting_for'], ['Зритель 2'])
+        self.ready('guest')
+        self.assertTrue(self.s['playing'])
+        self.ready('guest', False)
+        self.now += 50
+        self.ready('host'); self.ready('guest', False)
+        self.assertTrue(self.s['playing'])
+
+    def test_paused_room_does_not_count_anyone_as_behind(self):
+        self.command('pause')
+        self.ready('guest', False)
+        self.now += 10
+        self.ready('host'); self.ready('guest', False)
+        self.assertEqual(rooms.snapshot(self.s, self.now)['waiting_for'], [])
+
+    def test_countdown_starts_everyone_at_one_moment(self):
+        self.command('play', position=30, countdown=True)
+        self.assertTrue(self.s['desired_playing'])
+        self.assertEqual(self.s['anchor_at'], self.now + rooms.COUNTDOWN)
+        self.assertEqual(rooms.position(self.s, self.now + 1), 30)
+        self.assertEqual(rooms.position(self.s, self.now + rooms.COUNTDOWN + 2), 32)
+
+    def test_handover_moves_the_remote(self):
+        old_secret = self.host
+        self.command('handover', participant='guest')
+        snapshot = rooms.snapshot(self.s, self.now)
+        self.assertEqual([p['id'] for p in snapshot['participants'] if p['host']], ['guest'])
+        with self.assertRaises(PermissionError):
+            self.command('pause')
+        result = self.update('guest', action='report', ready=True, generation=self.s['generation'], instance='')
+        self.assertIn('host_token', result)
+        self.assertNotEqual(result['host_token'], old_secret)
+        self.host = result['host_token']
+        self.assertNotIn('host_token', self.update('guest', action='report', ready=True, generation=self.s['generation'], host_token=self.host))
+        self.update('guest', action='command', command='pause', command_seq=50, host_token=self.host)
+        self.assertFalse(self.s['desired_playing'])
+        self.assertNotIn('pending_host', json.dumps(snapshot))
+
+    def test_player_without_any_video_events_is_never_waited_for(self):
+        self.command('play')
+        self.update('guest', action='report', ready=False, sampled=False, generation=self.s['generation'])
+        self.now += 10
+        self.ready('host')
+        self.update('guest', action='report', ready=False, sampled=False, generation=self.s['generation'])
+        self.assertTrue(self.s['playing'])
