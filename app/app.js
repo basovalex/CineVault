@@ -2472,7 +2472,7 @@
   let searchSuggestionTimer = 0;
   let searchSuggestionRequest = null;
   const posterOverrides = Object.freeze({
-    "kinopoisk-5304403": "https://old.mvapspdmpg.com/movies/files/posters/147213.jpeg",
+    "kinopoisk-5304403": "/data/posters/kinopoisk-5304403.jpg",
   });
   function applyPosterOverrides() {
     catalog = catalog.map((item) => posterOverrides[item.id] ? { ...item, posterImage: posterOverrides[item.id] } : item);
