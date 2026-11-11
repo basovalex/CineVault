@@ -7568,7 +7568,9 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       seasonSelect.value = String(current.number);
       episodeSelect.innerHTML = current.episodes.map((number) => {
         const name = episodeTitle(item, current.number, number);
-        return `<option value="${number}">${escapeHtml(name === `Серия ${number}` ? name : `${number}. ${name}`)}</option>`;
+        // A name that is only the number ("Серия 1", "1 серия") reads as "1 серия"; a real name keeps its number.
+        const bare = new RegExp(`^\\s*(серия\\s*${number}|${number}\\s*серия)\\s*$`, "i").test(name);
+        return `<option value="${number}">${escapeHtml(bare ? `${number} серия` : `${number}. ${name}`)}</option>`;
       }).join("");
       episodeSelect.value = String(current.episodes.includes(Number(episodeNumber)) ? episodeNumber : current.episodes[0]);
     };

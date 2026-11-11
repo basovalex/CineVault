@@ -109,5 +109,21 @@ class StreamedBuildTests(unittest.TestCase):
         self.assertIsNone(posters["m1"])
 
 
+    def test_placeholder_frame_counts_as_none(self):
+        from tools.catalog_index import BACKDROPS_FILENAME, PLACEHOLDER_FRAMES_FILENAME
+        catalog = json.loads(self.catalog.read_text(encoding="utf-8"))
+        catalog[0]["backdropImage"] = "https://avatars/placeholder/1344x756"
+        catalog[1]["backdropImage"] = "https://avatars/placeholder-b/1344x756"
+        self.catalog.write_text(json.dumps(catalog, ensure_ascii=False), encoding="utf-8")
+        (self.dir / PLACEHOLDER_FRAMES_FILENAME).write_text(json.dumps(["https://avatars/placeholder/1344x756", "https://avatars/placeholder-b/1344x756"]), encoding="utf-8")
+        (self.dir / BACKDROPS_FILENAME).write_text(json.dumps({"a": "https://image.tmdb.org/t/p/w1280/a.jpg"}), encoding="utf-8")
+        index = self.dir / "index.sqlite3"
+        build_index(self.catalog, index)
+        db = sqlite3.connect(str(index))
+        frames = {row[0]: json.loads(row[1]).get("backdropImage") for row in db.execute("SELECT id, payload_json FROM card_payloads")}
+        db.close()
+        self.assertEqual(frames["a"], "https://image.tmdb.org/t/p/w1280/a.jpg")
+        self.assertFalse(frames["b"])
+
 if __name__ == "__main__":
     unittest.main()

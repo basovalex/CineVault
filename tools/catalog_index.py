@@ -36,6 +36,8 @@ ALLOHA_FILENAME = "catalog_alloha.jsonl"
 BACKDROPS_FILENAME = "catalog_backdrops.json"
 # Posters chosen by hand: {card id: image URL}; unlike found frames they replace the card's own.
 POSTERS_FILENAME = "catalog_posters.json"
+# Kinopoisk sometimes serves its grey "K" placeholder as a title's frame: these URLs count as no frame.
+PLACEHOLDER_FRAMES_FILENAME = "catalog_placeholder_frames.json"
 SCHEMA_VERSION = 6
 FRESH_MIN_VOTES = 200
 # The world audience first: IMDb votes per year of the title's life. Kinopoisk votes count
@@ -181,7 +183,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 
 def source_mtimes(catalog_path: Path) -> Dict[str, int]:
     result = {}
-    for name in ("catalog_imports.json", "catalog_metadata.json", "catalog_popular.json", ALLOHA_FILENAME, BACKDROPS_FILENAME, POSTERS_FILENAME):
+    for name in ("catalog_imports.json", "catalog_metadata.json", "catalog_popular.json", ALLOHA_FILENAME, BACKDROPS_FILENAME, POSTERS_FILENAME, PLACEHOLDER_FRAMES_FILENAME):
         try:
             result[name] = (catalog_path.parent / name).stat().st_mtime_ns
         except OSError:
@@ -285,6 +287,7 @@ def _build_index(server: Any, catalog_path: Path, out_path: Path, mtimes: Dict[s
     ranking = server.load_catalog_popularity(popular_path if popular_path.is_file() else None)
     backdrops = load_backdrops(catalog_path)
     posters = load_backdrops(catalog_path, POSTERS_FILENAME)
+    placeholders = load_placeholder_frames(catalog_path)
     staging_path = out_path.with_suffix(".staging")
     temporary = out_path.with_suffix(".building")
     staging_path.unlink(missing_ok=True)
@@ -310,7 +313,7 @@ def _build_index(server: Any, catalog_path: Path, out_path: Path, mtimes: Dict[s
         for (payload_json,) in stage.execute("SELECT payload FROM items ORDER BY seq"):
             item = json.loads(payload_json)
             server.apply_catalog_popularity([item], ranking)
-            fill_backdrop(item, backdrops, posters)
+            fill_backdrop(item, backdrops, posters, placeholders)
             identifier = str(item.get("id") or "")
             if not identifier or identifier in seen:
                 continue
@@ -323,7 +326,7 @@ def _build_index(server: Any, catalog_path: Path, out_path: Path, mtimes: Dict[s
             if len(rows) >= BATCH_SIZE:
                 flush()
         flush()
-        count += merge_alloha(db, catalog_path.with_name(ALLOHA_FILENAME), server.CATALOG_INDEX_FIELDS, backdrops, posters)
+        count += merge_alloha(db, catalog_path.with_name(ALLOHA_FILENAME), server.CATALOG_INDEX_FIELDS, backdrops, posters, placeholders)
         db.executemany("INSERT INTO card_genres VALUES (?, ?)", stage.execute("SELECT card_id, genre FROM genres ORDER BY rowid"))
         db.executemany("INSERT INTO meta VALUES (?, ?)", [("schema", str(SCHEMA_VERSION)), ("mtimes", json.dumps(mtimes)), ("built_at", str(time.time()))])
         db.commit()
@@ -413,15 +416,25 @@ def load_backdrops(catalog_path: Path, filename: str = BACKDROPS_FILENAME) -> Di
     return {str(key): str(value) for key, value in payload.items() if str(value).startswith("https://")} if isinstance(payload, dict) else {}
 
 
-def fill_backdrop(item: Dict[str, Any], backdrops: Dict[str, str], posters: Optional[Dict[str, str]] = None) -> None:
+def load_placeholder_frames(catalog_path: Path) -> set:
+    try:
+        payload = json.loads(catalog_path.with_name(PLACEHOLDER_FRAMES_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {str(url) for url in payload} if isinstance(payload, list) else set()
+
+
+def fill_backdrop(item: Dict[str, Any], backdrops: Dict[str, str], posters: Optional[Dict[str, str]] = None, placeholders: Optional[set] = None) -> None:
     """A card keeps its own frame; one without gets the frame found for it, if any. A chosen poster always wins."""
+    if placeholders and item.get("backdropImage") in placeholders:
+        item["backdropImage"] = ""
     if posters and posters.get(str(item.get("id") or "")):
         item["posterImage"] = posters[str(item["id"])]
     if not item.get("backdropImage") and backdrops.get(str(item.get("id") or "")):
         item["backdropImage"] = backdrops[str(item["id"])]
 
 
-def merge_alloha(db: sqlite3.Connection, path: Path, index_fields: Iterable[str], backdrops: Optional[Dict[str, str]] = None, posters: Optional[Dict[str, str]] = None) -> int:
+def merge_alloha(db: sqlite3.Connection, path: Path, index_fields: Iterable[str], backdrops: Optional[Dict[str, str]] = None, posters: Optional[Dict[str, str]] = None, placeholders: Optional[set] = None) -> int:
     """Stream the Alloha library: flag known cards, add the rest."""
     if not path.is_file():
         return 0
@@ -450,7 +463,7 @@ def merge_alloha(db: sqlite3.Connection, path: Path, index_fields: Iterable[str]
                     db.execute("UPDATE card_payloads SET payload_json = ? WHERE id = ?", (json.dumps(payload, ensure_ascii=False), identifier))
                 db.execute("UPDATE cards SET alloha = 1 WHERE id = ?", (identifier,))
                 continue
-            fill_backdrop(card, backdrops or {}, posters)
+            fill_backdrop(card, backdrops or {}, posters, placeholders)
             row, payload = _row(card, "alloha", index_fields, alloha=1)
             db.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", row)
             db.execute("INSERT OR IGNORE INTO card_payloads VALUES (?, ?)", payload)
