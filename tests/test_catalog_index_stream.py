@@ -97,5 +97,17 @@ class StreamedBuildTests(unittest.TestCase):
         self.assertIsNone(frames["b"])
 
 
+    def test_chosen_poster_replaces_the_cards_own(self):
+        from tools.catalog_index import POSTERS_FILENAME
+        (self.dir / POSTERS_FILENAME).write_text(json.dumps({"a": "https://site/data/posters/a.webp", "m1": "/relative.webp"}), encoding="utf-8")
+        index = self.dir / "index.sqlite3"
+        build_index(self.catalog, index)
+        db = sqlite3.connect(str(index))
+        posters = {row[0]: json.loads(row[1]).get("posterImage") for row in db.execute("SELECT id, summary_json FROM cards")}
+        db.close()
+        self.assertEqual(posters["a"], "https://site/data/posters/a.webp")
+        self.assertIsNone(posters["m1"])
+
+
 if __name__ == "__main__":
     unittest.main()
