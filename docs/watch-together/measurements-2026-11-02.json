@@ -1,0 +1,712 @@
+{
+  "note": "Локальный диагностический прогон во время разработки, включая паузу, перемотку и перезагрузку клиента. Позиции экстраполированы из отчётов, не покадровое измерение. После перезагрузки присутствует выброс устаревшей телеметрии. Счётчики коррекций в этом прогоне ещё не собирались.",
+  "samples": [
+    {
+      "elapsed": 0.0,
+      "playing": true,
+      "generation": 1,
+      "delta": 0.366,
+      "ready": 2
+    },
+    {
+      "elapsed": 6.0,
+      "playing": true,
+      "generation": 1,
+      "delta": 0.362,
+      "ready": 2
+    },
+    {
+      "elapsed": 12.0,
+      "playing": true,
+      "generation": 1,
+      "delta": 0.364,
+      "ready": 2
+    },
+    {
+      "elapsed": 18.0,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 0
+    },
+    {
+      "elapsed": 24.0,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 0
+    },
+    {
+      "elapsed": 30.0,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 0
+    },
+    {
+      "elapsed": 36.0,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 0
+    },
+    {
+      "elapsed": 42.1,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 0
+    },
+    {
+      "elapsed": 48.1,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 0
+    },
+    {
+      "elapsed": 54.1,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.371,
+      "ready": 2
+    },
+    {
+      "elapsed": 60.1,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.366,
+      "ready": 2
+    },
+    {
+      "elapsed": 66.1,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.367,
+      "ready": 2
+    },
+    {
+      "elapsed": 72.1,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.391,
+      "ready": 2
+    },
+    {
+      "elapsed": 78.1,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.426,
+      "ready": 2
+    },
+    {
+      "elapsed": 84.1,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.095,
+      "ready": 2
+    },
+    {
+      "elapsed": 90.1,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.422,
+      "ready": 2
+    },
+    {
+      "elapsed": 96.1,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.161,
+      "ready": 2
+    },
+    {
+      "elapsed": 102.1,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.39,
+      "ready": 2
+    },
+    {
+      "elapsed": 108.1,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.383,
+      "ready": 2
+    },
+    {
+      "elapsed": 114.1,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.368,
+      "ready": 2
+    },
+    {
+      "elapsed": 120.1,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.102,
+      "ready": 2
+    },
+    {
+      "elapsed": 126.1,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.3,
+      "ready": 2
+    },
+    {
+      "elapsed": 132.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.397,
+      "ready": 2
+    },
+    {
+      "elapsed": 138.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.369,
+      "ready": 2
+    },
+    {
+      "elapsed": 144.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.352,
+      "ready": 2
+    },
+    {
+      "elapsed": 150.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.475,
+      "ready": 2
+    },
+    {
+      "elapsed": 156.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.286,
+      "ready": 2
+    },
+    {
+      "elapsed": 162.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.375,
+      "ready": 2
+    },
+    {
+      "elapsed": 168.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.341,
+      "ready": 2
+    },
+    {
+      "elapsed": 174.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.39,
+      "ready": 2
+    },
+    {
+      "elapsed": 180.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.102,
+      "ready": 2
+    },
+    {
+      "elapsed": 186.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.37,
+      "ready": 2
+    },
+    {
+      "elapsed": 192.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.366,
+      "ready": 2
+    },
+    {
+      "elapsed": 198.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.372,
+      "ready": 2
+    },
+    {
+      "elapsed": 204.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.369,
+      "ready": 2
+    },
+    {
+      "elapsed": 210.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.105,
+      "ready": 2
+    },
+    {
+      "elapsed": 216.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.367,
+      "ready": 2
+    },
+    {
+      "elapsed": 222.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.101,
+      "ready": 2
+    },
+    {
+      "elapsed": 228.2,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.371,
+      "ready": 2
+    },
+    {
+      "elapsed": 234.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.369,
+      "ready": 2
+    },
+    {
+      "elapsed": 240.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.367,
+      "ready": 2
+    },
+    {
+      "elapsed": 246.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.369,
+      "ready": 2
+    },
+    {
+      "elapsed": 252.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.103,
+      "ready": 2
+    },
+    {
+      "elapsed": 258.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.369,
+      "ready": 2
+    },
+    {
+      "elapsed": 264.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.369,
+      "ready": 2
+    },
+    {
+      "elapsed": 270.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.368,
+      "ready": 2
+    },
+    {
+      "elapsed": 276.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.368,
+      "ready": 2
+    },
+    {
+      "elapsed": 282.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.104,
+      "ready": 2
+    },
+    {
+      "elapsed": 288.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.367,
+      "ready": 2
+    },
+    {
+      "elapsed": 294.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.368,
+      "ready": 2
+    },
+    {
+      "elapsed": 300.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.367,
+      "ready": 2
+    },
+    {
+      "elapsed": 306.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.368,
+      "ready": 2
+    },
+    {
+      "elapsed": 312.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.101,
+      "ready": 2
+    },
+    {
+      "elapsed": 318.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.368,
+      "ready": 2
+    },
+    {
+      "elapsed": 324.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.103,
+      "ready": 2
+    },
+    {
+      "elapsed": 330.3,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.369,
+      "ready": 2
+    },
+    {
+      "elapsed": 336.4,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.368,
+      "ready": 2
+    },
+    {
+      "elapsed": 342.4,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.368,
+      "ready": 2
+    },
+    {
+      "elapsed": 348.4,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.368,
+      "ready": 2
+    },
+    {
+      "elapsed": 354.4,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.101,
+      "ready": 2
+    },
+    {
+      "elapsed": 360.4,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.414,
+      "ready": 2
+    },
+    {
+      "elapsed": 366.4,
+      "playing": true,
+      "generation": 2,
+      "delta": 0.523,
+      "ready": 2
+    },
+    {
+      "elapsed": 372.4,
+      "playing": true,
+      "generation": 2,
+      "delta": 12.14,
+      "ready": 2
+    },
+    {
+      "elapsed": 378.4,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 384.4,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 390.4,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 396.4,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 402.4,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 408.4,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 414.4,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 420.4,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 426.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 432.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 438.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 444.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 450.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 456.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 462.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 468.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 474.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 480.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 486.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 492.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 498.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 504.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 510.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 516.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 522.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 528.5,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 534.6,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 540.6,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 546.6,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 552.6,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 558.6,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 564.6,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 570.6,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 576.6,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 582.6,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 588.6,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 594.6,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    },
+    {
+      "elapsed": 600.7,
+      "playing": false,
+      "generation": 2,
+      "delta": null,
+      "ready": 1
+    }
+  ]
+}

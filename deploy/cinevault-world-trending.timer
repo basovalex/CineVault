@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh the CineVault world trending list daily
+
+[Timer]
+OnCalendar=*-*-* 07:30:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

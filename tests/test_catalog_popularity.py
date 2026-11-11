@@ -2,6 +2,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -71,6 +72,13 @@ class CatalogPopularityTest(unittest.TestCase):
             sync_kinopoisk_dev("token", self.catalog, self.metadata, self.state, 0, 1, 10, 0, mode="daily")
         ids = [item["kinopoiskId"] for item in json.loads(self.metadata.read_text(encoding="utf-8"))]
         self.assertEqual(ids, [9])
+
+    def test_daily_sync_reports_incomplete_provider_window(self):
+        with patch("tools.sync_kinopoisk_dev_catalog.fetch_page", return_value={"docs": [provider_row(10, votes=0)], "pages": 3}):
+            result = sync_kinopoisk_dev("token", self.catalog, self.metadata, self.state, 0, 1, 10, 0, mode="daily")
+        self.assertTrue(result["truncated"])
+        self.assertTrue(json.loads(self.state.read_text(encoding="utf-8"))["daily_truncated"])
+        self.assertEqual(json.loads(self.metadata.read_text(encoding="utf-8"))[0]["voteCount"], 0)
 
     def test_popular_sync_ranks_by_votes_and_skips_deleted(self):
         self.catalog.write_text(json.dumps([{"id": "kinopoisk-1", "kinopoiskId": 1, "title": "Готовый", "videoSources": [{"url": "x"}]}]), encoding="utf-8")
@@ -293,7 +301,7 @@ class CatalogIndexTest(unittest.TestCase):
         (self.root / "catalog_metadata.json").write_text(json.dumps([
             {"id": "kinopoisk-2", "kinopoiskId": 2, "title": "Бета", "kind": "series", "year": 2024, "genres": ["комедия"], "voteCount": 9000, "rating": 7.0},
             {"id": "kinopoisk-3", "kinopoiskId": 3, "title": "Гамма", "kind": "movie", "year": 2020, "genres": ["драма"], "voteCount": 100000, "rating": 9.0},
-            {"id": "kinopoisk-4", "kinopoiskId": 4, "title": "Дельта", "kind": "movie", "year": 2019, "genres": ["ужасы"], "voteCount": 10, "rating": 5.0},
+            {"id": "kinopoisk-4", "kinopoiskId": 4, "tmdbId": 346, "title": "Дельта", "kind": "movie", "year": 2019, "genres": ["ужасы"], "voteCount": 10, "rating": 5.0},
         ]), encoding="utf-8")
         server._catalog_cache.update({"path": None, "mtime_ns": None, "items": []})
         from tools.catalog_index import CatalogIndex, build_index
@@ -325,10 +333,77 @@ class CatalogIndexTest(unittest.TestCase):
         page = self.index.page({}, (frozenset({1}), frozenset()))
         self.assertEqual(page["items"][0]["id"], "kinopoisk-3")
 
+    def test_lookup_by_tmdb_ids_respects_visibility_and_ignores_invalid_ids(self):
+        from tools.catalog_index import upsert_entry
+        upsert_entry(self.index_path, {"id": "tmdb-card", "title": "Мировой фильм", "kind": "movie", "kinopoiskId": 100, "tmdbId": 345})
+        params = {"tmdb_ids": ["345,999"]}
+        self.assertEqual([item["id"] for item in self.index.page(params, None)["items"]], ["tmdb-card"])
+        self.assertEqual(self.index.page({"tmdb_ids": ["invalid"]}, None)["items"], [])
+        self.assertEqual(self.index.page({"tmdb_ids": ["346"]}, (frozenset(), frozenset({4})))["items"], [])
+
+    def test_audience_ranking_includes_imdb_interest_not_just_kinopoisk(self):
+        from tools.catalog_index import upsert_entry
+        upsert_entry(self.index_path, {"id": "world-hit", "title": "Мировой хит", "kind": "movie", "posterImage": "poster", "imdbVoteCount": 2000000, "voteCount": 0})
+        upsert_entry(self.index_path, {"id": "local-hit", "title": "Местный хит", "kind": "movie", "posterImage": "poster", "voteCount": 300000})
+        page = self.index.page({"collection": ["audience"], "sort": ["audience"]}, None)
+        self.assertEqual([item["id"] for item in page["items"]][:2], ["world-hit", "local-hit"])
+
+    def test_recent_collection_includes_unrated_titles_but_not_future_years(self):
+        from tools.catalog_index import upsert_entry
+        year = datetime.now().year
+        for identifier, release_year in (("unrated", year), ("future", year + 1), ("older", year - 2), ("future_date", year)):
+            entry = {"id": identifier, "title": identifier, "kind": "movie", "year": release_year, "posterImage": "poster.jpg", "voteCount": 0}
+            if identifier == "future_date":
+                entry["premiere"] = (datetime.now().date() + timedelta(days=2)).isoformat()
+            upsert_entry(self.index_path, entry)
+        page = self.index.page({"collection": ["new"], "sort": ["new"]}, None)
+        identifiers = [item["id"] for item in page["items"]]
+        self.assertIn("unrated", identifiers)
+        self.assertNotIn("future", identifiers)
+        self.assertNotIn("older", identifiers)
+        self.assertNotIn("future_date", identifiers)
+
     def test_discovery_includes_popular_now_and_widely_rated_titles(self):
         rows = self.index.discovery(3, (frozenset(), frozenset()))
         self.assertEqual(rows[0]["id"], "kinopoisk-3")
         self.assertEqual(len({item["id"] for item in rows}), 3)
+
+    def test_upcoming_keeps_future_hidden_streams_and_orders_dates(self):
+        from tools.catalog_index import upsert_entry
+        today = datetime.now().date()
+        cases = [("future-near", 101, 5), ("future-far", 102, 30), ("released", 103, -5)]
+        for identifier, kp, offset in cases:
+            premiere = (today + timedelta(days=offset)).isoformat()
+            upsert_entry(self.index_path, {"id": identifier, "kinopoiskId": kp, "title": identifier, "kind": "movie", "year": int(premiere[:4]), "premiere": premiere})
+        page = self.index.page({"collection": ["upcoming"]}, (frozenset(), frozenset({101, 102, 103})))
+        self.assertEqual([item["id"] for item in page["items"]], ["future-near", "future-far"])
+        self.assertEqual(self.index.item("101", (frozenset(), frozenset({101})))["id"], "future-near")
+        self.assertEqual(self.index.page({"collection": ["upcoming"], "type": ["series"]}, None)["total"], 0)
+
+    def test_interest_now_favours_votes_per_year_and_holds_back_weak_titles(self):
+        from tools.catalog_index import upsert_entry
+        year = datetime.now().year
+        for card in (
+            {"id": "classic", "year": year - 29, "voteCount": 3_000_000, "ratingKinopoisk": 9.1},
+            {"id": "fresh-hit", "year": year, "voteCount": 500_000, "ratingKinopoisk": 8.0},
+            {"id": "fresh-flop", "year": year, "voteCount": 300_000, "ratingKinopoisk": 5.2},
+        ):
+            upsert_entry(self.index_path, {**card, "title": card["id"], "kind": "movie", "posterImage": "poster"})
+        ids = lambda params: [item["id"] for item in self.index.page(params, None)["items"] if item["id"] in {"classic", "fresh-hit", "fresh-flop"}]
+        self.assertEqual(ids({"sort": ["now"]}), ["fresh-hit", "fresh-flop", "classic"])
+        self.assertEqual(ids({"sort": ["audience"]}), ["classic", "fresh-hit", "fresh-flop"])
+        # «Любимые зрителями» keeps the all-time order even when the catalogue asks for "now".
+        self.assertEqual(ids({"collection": ["audience"], "sort": ["now"]}), ["classic", "fresh-hit", "fresh-flop"])
+
+    def test_upcoming_prioritizes_anticipation_not_rating(self):
+        from tools.catalog_index import upsert_entry
+        for identifier, days, votes in (("less-awaited", 1, 5), ("more-awaited", 30, 50000)):
+            premiere = (datetime.now().date() + timedelta(days=days)).isoformat()
+            upsert_entry(self.index_path, {"id": identifier, "title": identifier, "kind": "movie", "premiere": premiere, "awaitVotes": votes})
+        page = self.index.page({"collection": ["upcoming"]}, None)
+        self.assertEqual([item["id"] for item in page["items"]], ["more-awaited", "less-awaited"])
+        soon = self.index.page({"collection": ["upcoming"], "sort": ["soon"]}, None)
+        self.assertEqual([item["id"] for item in soon["items"]], ["less-awaited", "more-awaited"])
 
     def test_rating_does_not_borrow_imdb_votes(self):
         from tools.catalog_index import confidence_rating

@@ -1,0 +1,11 @@
+[Unit]
+Description=CineVault world trending list from TMDB
+After=docker.service xray.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/cinevault
+EnvironmentFile=/srv/cinevault/.env
+Environment=CINEVAULT_TMDB_PROXY=
+ExecStart=/usr/bin/python3 tools/sync_world_trending.py

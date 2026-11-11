@@ -305,4 +305,4 @@ curl -s http://127.0.0.1:8081/api/health
 
 Текущий сервер — MVP для личного доступа: viewer-токен добавлен, но полноценной системы аккаунтов, ACL, TLS и device pairing пока нет. Перед публикацией нужны reverse proxy с HTTPS, отдельные пользовательские сессии, ACL на каждый title/episode/progress/room запрос, quota/rate limit, отдельный worker process и backup policy. Не удаляй исходники при очистке HLS-кэша: HLS можно пересоздать из source.
 
-Сгенерированный ассет мопса хранится в `app/assets/pug-mascot.png`. Целевая архитектура и пошаговое продолжение описаны в [docs/CineVault-Personal-Media-Library.md](docs/CineVault-Personal-Media-Library.md).
+Целевая архитектура и пошаговое продолжение описаны в [docs/CineVault-Personal-Media-Library.md](docs/CineVault-Personal-Media-Library.md).

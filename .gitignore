@@ -41,3 +41,4 @@ android/.kotlin/
 .icloud-recovered/
 app/data/catalog_popular.json
 app/data/catalog_alloha.jsonl
+app/data/world_trending.json

@@ -21,9 +21,9 @@ import sqlite3
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -32,6 +32,15 @@ if str(ROOT) not in sys.path:
 INDEX_FILENAME = "catalog_index.sqlite3"
 ALLOHA_FILENAME = "catalog_alloha.jsonl"
 SCHEMA_VERSION = 6
+FRESH_MIN_VOTES = 200
+NOW_INTEREST_SQL = (
+    "(c.votes + CAST(COALESCE(json_extract(c.summary_json, '$.imdbVoteCount'), 0) AS INTEGER)) * 1.0"
+    " / MAX(1, CAST(strftime('%Y', 'now') AS INTEGER) - c.year + 1)"
+    " * CASE WHEN COALESCE(CAST(json_extract(c.summary_json, '$.ratingKinopoisk') AS REAL),"
+    " CAST(json_extract(c.summary_json, '$.rating') AS REAL), 0) BETWEEN 0.1 AND 5.99 THEN 0.4 ELSE 1 END"
+)
+FRESH_MIN_RATING = 5.0
+RESULT_CACHE_SIZE = 80
 EDITORIAL_TAGS = {"уютно", "для нас", "на вечер", "напряжённо", "атмосферно", "классика"}
 EVENING_GENRES = ("уютно", "на вечер", "комедия", "драма", "мелодрама", "приключения", "семейный")
 TENSE_GENRES = ("триллер", "детектив", "ужасы", "криминал")
@@ -171,51 +180,217 @@ def source_mtimes(catalog_path: Path) -> Dict[str, int]:
     return result
 
 
+METADATA_MERGE_KEYS = (
+    "year", "description", "genres", "tags", "posterImage", "backdropImage", "logoImage", "actors", "directors",
+    "producers", "countries", "ageRating", "tagline", "premiere", "premiereRegion", "premiereSource", "premiereCheckedAt", "runtime",
+    "voteCount", "imdbVoteCount", "awaitVotes",
+)
+BATCH_SIZE = 2000
+
+
+def iter_json_array(path: Path, chunk_size: int = 1 << 20):
+    """Yields the elements of a top-level JSON array one at a time.
+
+    The catalog files are hundreds of megabytes; decoding them whole costs
+    gigabytes of Python objects. Anything but an array yields nothing, the way
+    the server treats such a file as empty.
+    """
+    decoder = json.JSONDecoder()
+    with Path(path).open(encoding="utf-8") as handle:
+        buffer, position, eof = "", 0, False
+
+        def fill() -> None:
+            nonlocal buffer, position, eof
+            chunk = handle.read(chunk_size)
+            eof = not chunk
+            buffer = buffer[position:] + chunk
+            position = 0
+
+        def next_char() -> str:
+            nonlocal position
+            while True:
+                while position < len(buffer) and buffer[position] in " \t\r\n":
+                    position += 1
+                if position < len(buffer):
+                    return buffer[position]
+                if eof:
+                    return ""
+                fill()
+
+        if next_char() != "[":
+            return
+        position += 1
+        while True:
+            char = next_char()
+            if char == "":
+                raise json.JSONDecodeError("Unterminated array", buffer, position)
+            if char == "]":
+                return
+            if char == ",":
+                position += 1
+                continue
+            while True:
+                try:
+                    value, end = decoder.raw_decode(buffer, position)
+                except json.JSONDecodeError:
+                    if eof:
+                        raise
+                    fill()
+                    continue
+                if end == len(buffer) and not eof:
+                    fill()
+                    continue
+                break
+            position = end
+            yield value
+
+
 def build_index(catalog_path: Path, out_path: Path) -> int:
-    """Merge the JSON catalog into a fresh SQLite file; returns the card count."""
+    """Merge the JSON catalog into a fresh SQLite file; returns the card count.
+
+    Gives the same cards as ``imported_catalog_entries`` with visibility off,
+    but reads the files one card at a time through a scratch SQLite file, so a
+    small server can rebuild while it keeps serving.
+    """
     import tools.media_library_server as server
 
     server.CATALOG_STATE_DIR = None  # visibility is applied at query time
+    catalog_path = Path(catalog_path)
     for attempt in range(5):
         mtimes = source_mtimes(catalog_path)
         try:
-            items = server.imported_catalog_entries(catalog_path)
-            break
+            return _build_index(server, catalog_path, Path(out_path), mtimes)
         except RuntimeError:
             # A writer may be replacing a file right now; read it again.
             if attempt == 4:
                 raise
             time.sleep(3)
-    legacy_ids = set()
-    try:
-        legacy_ids = {str(item.get("id") or "") for item in json.loads(catalog_path.read_text(encoding="utf-8")) if isinstance(item, dict)}
-    except (OSError, json.JSONDecodeError):
-        pass
+    raise RuntimeError("unreachable")
+
+
+def _build_index(server: Any, catalog_path: Path, out_path: Path, mtimes: Dict[str, int]) -> int:
+    metadata_path = catalog_path.with_name("catalog_metadata.json")
+    popular_path = catalog_path.with_name(server.CATALOG_POPULAR_FILENAME)
+    if not catalog_path.is_file():
+        raise RuntimeError("Каталог CineVault временно недоступен")
+    ranking = server.load_catalog_popularity(popular_path if popular_path.is_file() else None)
+    staging_path = out_path.with_suffix(".staging")
     temporary = out_path.with_suffix(".building")
+    staging_path.unlink(missing_ok=True)
     temporary.unlink(missing_ok=True)
-    db = sqlite3.connect(str(temporary))
-    db.executescript(SCHEMA)
-    rows, payloads, genres = [], [], []
-    seen = set()
-    for item in items:
-        identifier = str(item.get("id") or "")
-        if not identifier or identifier in seen:
+    stage = sqlite3.connect(str(staging_path))
+    try:
+        stage.executescript("PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF; CREATE TABLE items (seq INTEGER PRIMARY KEY, payload TEXT NOT NULL); CREATE TABLE genres (card_id TEXT NOT NULL, genre TEXT NOT NULL);")
+        try:
+            legacy_ids = _stage_items(stage, catalog_path, metadata_path)
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise RuntimeError("Каталог CineVault временно недоступен") from exc
+        db = sqlite3.connect(str(temporary))
+        db.executescript(SCHEMA)
+        rows, payloads, seen, count = [], [], set(), 0
+
+        def flush() -> None:
+            db.executemany("INSERT INTO cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+            db.executemany("INSERT INTO card_payloads VALUES (?, ?)", payloads)
+            db.executemany("INSERT INTO card_search (id, text) VALUES (?, ?)", ((row[0], row[12]) for row in rows))
+            rows.clear()
+            payloads.clear()
+
+        for (payload_json,) in stage.execute("SELECT payload FROM items ORDER BY seq"):
+            item = json.loads(payload_json)
+            server.apply_catalog_popularity([item], ranking)
+            identifier = str(item.get("id") or "")
+            if not identifier or identifier in seen:
+                continue
+            seen.add(identifier)
+            row, payload = _row(item, "imports" if identifier in legacy_ids else "metadata", server.CATALOG_INDEX_FIELDS)
+            rows.append(row)
+            payloads.append(payload)
+            stage.executemany("INSERT INTO genres VALUES (?, ?)", [(identifier, genre) for genre in item_genres(item)])
+            count += 1
+            if len(rows) >= BATCH_SIZE:
+                flush()
+        flush()
+        count += merge_alloha(db, catalog_path.with_name(ALLOHA_FILENAME), server.CATALOG_INDEX_FIELDS)
+        db.executemany("INSERT INTO card_genres VALUES (?, ?)", stage.execute("SELECT card_id, genre FROM genres ORDER BY rowid"))
+        db.executemany("INSERT INTO meta VALUES (?, ?)", [("schema", str(SCHEMA_VERSION)), ("mtimes", json.dumps(mtimes)), ("built_at", str(time.time()))])
+        db.commit()
+        db.close()
+        os.replace(temporary, out_path)
+        return count
+    finally:
+        stage.close()
+        staging_path.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
+
+
+def _stage_items(stage: sqlite3.Connection, catalog_path: Path, metadata_path: Path) -> set:
+    """Writes imported cards, then metadata-only cards, to the scratch table in catalog order.
+
+    Metadata fills gaps in imported cards the way ``imported_catalog_entries``
+    does; returns the ids of imported cards.
+    """
+    by_id: Dict[str, int] = {}
+    by_kinopoisk_id: Dict[str, int] = {}
+    known_ids: set = set()
+    known_kinopoisk_ids: set = set()
+    batch: list = []
+    seq = 0
+
+    def flush() -> None:
+        stage.executemany("INSERT INTO items VALUES (?, ?)", batch)
+        batch.clear()
+
+    for item in iter_json_array(catalog_path):
+        if not isinstance(item, dict):
             continue
-        seen.add(identifier)
-        row, payload = _row(item, "imports" if identifier in legacy_ids else "metadata", server.CATALOG_INDEX_FIELDS)
-        rows.append(row)
-        payloads.append(payload)
-        genres.extend((identifier, genre) for genre in item_genres(item))
-    db.executemany("INSERT INTO cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
-    db.executemany("INSERT INTO card_payloads VALUES (?, ?)", payloads)
-    db.executemany("INSERT INTO card_search (id, text) VALUES (?, ?)", ((row[0], row[12]) for row in rows))
-    count = len(rows) + merge_alloha(db, catalog_path.with_name(ALLOHA_FILENAME), server.CATALOG_INDEX_FIELDS)
-    db.executemany("INSERT INTO card_genres VALUES (?, ?)", genres)
-    db.executemany("INSERT INTO meta VALUES (?, ?)", [("schema", str(SCHEMA_VERSION)), ("mtimes", json.dumps(mtimes)), ("built_at", str(time.time()))])
-    db.commit()
-    db.close()
-    os.replace(temporary, out_path)
-    return count
+        seq += 1
+        identifier = str(item.get("id") or "")
+        known_ids.add(identifier)
+        by_id[identifier] = seq
+        if item.get("kinopoiskId"):
+            kinopoisk_id = str(item.get("kinopoiskId") or "")
+            known_kinopoisk_ids.add(kinopoisk_id)
+            by_kinopoisk_id[kinopoisk_id] = seq
+        batch.append((seq, json.dumps(item, ensure_ascii=False)))
+        if len(batch) >= BATCH_SIZE:
+            flush()
+    flush()
+    legacy_ids = set(known_ids)
+    if not metadata_path.is_file():
+        return legacy_ids
+    for item in iter_json_array(metadata_path):
+        if not isinstance(item, dict):
+            continue
+        identifier = str(item.get("id") or "")
+        kinopoisk_id = str(item.get("kinopoiskId") or "")
+        if not identifier or not kinopoisk_id:
+            continue
+        target = by_id.get(identifier) or by_kinopoisk_id.get(kinopoisk_id)
+        if target is not None:
+            flush()
+            (payload_json,) = stage.execute("SELECT payload FROM items WHERE seq = ?", (target,)).fetchone()
+            imported = json.loads(payload_json)
+            changed = False
+            for key in METADATA_MERGE_KEYS:
+                missing = imported.get(key) in (None, "", [], 0)
+                short_description = key == "description" and len(str(imported.get(key) or "")) < 60 and len(str(item.get(key) or "")) >= 60
+                if (missing or short_description) and item.get(key) not in (None, "", [], 0):
+                    imported[key] = item[key]
+                    changed = True
+            if changed:
+                stage.execute("UPDATE items SET payload = ? WHERE seq = ?", (json.dumps(imported, ensure_ascii=False), target))
+            continue
+        if identifier in known_ids or kinopoisk_id in known_kinopoisk_ids:
+            continue
+        seq += 1
+        batch.append((seq, json.dumps(item, ensure_ascii=False)))
+        known_ids.add(identifier)
+        known_kinopoisk_ids.add(kinopoisk_id)
+        if len(batch) >= BATCH_SIZE:
+            flush()
+    flush()
+    return legacy_ids
 
 
 def merge_alloha(db: sqlite3.Connection, path: Path, index_fields: Iterable[str]) -> int:
@@ -330,6 +505,8 @@ class CatalogIndex:
         self._checked_at = 0.0
         self._building: Optional[Any] = None
         self._built_at = time.monotonic()
+        self._results: Dict[str, str] = {}
+        self._result_lock = threading.Lock()
         self._sets_key = None
         self._has_visibility = False
 
@@ -346,6 +523,18 @@ class CatalogIndex:
         if meta.get("schema") != str(SCHEMA_VERSION):
             return True
         return json.loads(meta.get("mtimes") or "{}") != source_mtimes(self.catalog_path)
+
+    def usable(self) -> bool:
+        """True when an index of this schema exists, even an outdated one."""
+        if not self.index_path.is_file():
+            return False
+        try:
+            db = sqlite3.connect("file:{}?mode=ro".format(self.index_path), uri=True)
+            row = db.execute("SELECT value FROM meta WHERE key = 'schema'").fetchone()
+            db.close()
+        except sqlite3.Error:
+            return False
+        return bool(row) and row[0] == str(SCHEMA_VERSION)
 
     def build_in_child(self, wait: bool = False) -> None:
         import subprocess
@@ -406,6 +595,7 @@ class CatalogIndex:
     # -- queries ---------------------------------------------------------
     VISIBLE = "(c.source = 'imports' OR c.alloha = 1 OR c.kinopoisk_id IS NULL OR c.kinopoisk_id NOT IN (SELECT kp FROM hidden_ids))"
     VERIFIED = "(c.source = 'imports' OR c.alloha = 1 OR c.kinopoisk_id IN (SELECT kp FROM verified_ids))"
+    UPCOMING = "((date(json_extract(c.summary_json, '$.premiere')) IS NOT NULL AND date(json_extract(c.summary_json, '$.premiere')) > date('now', '+5 hours')) OR (length(json_extract(c.summary_json, '$.premiere')) = 7 AND json_extract(c.summary_json, '$.premiere') GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]' AND CAST(substr(json_extract(c.summary_json, '$.premiere'), 6, 2) AS INTEGER) BETWEEN 1 AND 12 AND json_extract(c.summary_json, '$.premiere') > strftime('%Y-%m', 'now', '+5 hours')) OR ((json_extract(c.summary_json, '$.premiere') IS NULL OR json_extract(c.summary_json, '$.premiere') = '' OR (length(json_extract(c.summary_json, '$.premiere')) = 4 AND json_extract(c.summary_json, '$.premiere') GLOB '[0-9][0-9][0-9][0-9]')) AND COALESCE(NULLIF(CAST(json_extract(c.summary_json, '$.premiere') AS INTEGER), 0), c.year) > CAST(strftime('%Y', 'now', '+5 hours') AS INTEGER)))"
 
     def _summary(self, row: sqlite3.Row) -> Dict[str, Any]:
         summary = json.loads(row["summary_json"])
@@ -413,8 +603,33 @@ class CatalogIndex:
             summary["playbackVerified"] = bool(row["verified"])
         return summary
 
+    def _cached(self, label: str, request: Any, visibility: Optional[tuple], compute: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
+        """Results only change with the daily index rebuild, or when the date rolls over."""
+        sizes = tuple(len(part) for part in visibility) if visibility else ()
+        try:
+            built = self.index_path.stat().st_mtime_ns
+        except OSError:
+            return compute()
+        key = json.dumps([label, request, sizes, built, date.today().isoformat()], sort_keys=True, default=str)
+        with self._result_lock:
+            hit = self._results.pop(key, None)
+            if hit is not None:
+                self._results[key] = hit
+        if hit is not None:
+            return json.loads(hit)
+        result = compute()
+        with self._result_lock:
+            self._results[key] = json.dumps(result, ensure_ascii=False)
+            while len(self._results) > RESULT_CACHE_SIZE:
+                self._results.pop(next(iter(self._results)))
+        return result
+
     def page(self, params: Dict[str, list[str]], visibility: Optional[tuple]) -> Dict[str, Any]:
+        return self._cached("page", params, visibility, lambda: self._page(params, visibility))
+
+    def _page(self, params: Dict[str, list[str]], visibility: Optional[tuple]) -> Dict[str, Any]:
         requested_ids = [value.strip() for raw in params.get("ids", []) for value in raw.split(",") if value.strip()]
+        tmdb_ids = list(dict.fromkeys(int(value) for raw in params.get("tmdb_ids", []) for value in raw.split(",") if value.isdigit() and 0 < int(value) < 2147483648))[:50]
         tokens = search_words(params.get("search", [""])[0])
         genre = str(params.get("genre", [""])[0]).strip().casefold()
         kind = str(params.get("type", params.get("kind", [""]))[0]).strip().casefold()
@@ -423,11 +638,32 @@ class CatalogIndex:
         sort = str(params.get("sort", ["popular"])[0]).strip().casefold()
         if collection in {"popular", "trending"} and sort == "rating":
             sort = "popular"
+        if collection == "popular":
+            collection = "audience"
+            if sort == "popular":
+                sort = "audience"
+        # «Любимые зрителями» keeps its all-time order whatever the catalogue sort is.
+        if collection == "audience" and sort == "now":
+            sort = "audience"
         kind = {"movies": "movie", "film": "movie", "films": "movie", "serial": "series", "serials": "series", "tv": "series"}.get(kind, kind)
-        where, args = [self.VISIBLE], []
+        today = datetime.now(timezone(timedelta(hours=5))).date()
+        # Future premieres must remain discoverable even when a past player
+        # audit found no stream: that is expected for an unreleased title.
+        premiere = "json_extract(c.summary_json, '$.premiere')"
+        upcoming = self.UPCOMING
+        # Explicit lookups are used for saved favourites; a stream audit must
+        # not make a previously saved title disappear from that list.
+        # Future premieres belong only to the dedicated upcoming feed. Regular
+        # catalogue pages should contain titles that have already been released.
+        where, args = (["1"] if requested_ids or collection == "upcoming" else [self.VISIBLE]), []
         if requested_ids:
             where.append("c.id IN ({})".format(",".join("?" * len(requested_ids))))
             args += requested_ids
+        if tmdb_ids:
+            where.append("CAST(json_extract(c.summary_json, '$.tmdbId') AS INTEGER) IN ({})".format(",".join("?" * len(tmdb_ids))))
+            args += tmdb_ids
+        elif "tmdb_ids" in params:
+            where.append("0")
         if kind:
             where.append("lower(c.kind) = ?")
             args.append(kind)
@@ -448,15 +684,22 @@ class CatalogIndex:
             args.extend(names)
             return "EXISTS (SELECT 1 FROM card_genres g WHERE g.card_id = c.id AND g.genre IN ({}))".format(",".join("?" * len(names)))
 
-        this_year = datetime.now().year
+        this_year = today.year
         if collection == "popular":
             where.append("(c.popular_rank IS NOT NULL OR c.votes > 0)")
+        elif collection == "audience":
+            where.append("c.has_poster = 1 AND (c.votes > 0 OR CAST(COALESCE(json_extract(c.summary_json, '$.imdbVoteCount'), 0) AS INTEGER) > 0)")
         elif collection == "trending":
             where.append("c.popular_rank IS NOT NULL")
         elif collection == "new":
-            where.append("c.year BETWEEN ? AND ? AND c.votes >= CASE WHEN c.popular_rank IS NOT NULL THEN 100 ELSE 1000 END "
-                         "AND c.has_poster = 1 AND c.description_length >= 60 AND c.confidence >= 6.5")
-            args += [this_year - 1, this_year]
+            # A known future premiere is not a released film. Missing dates stay
+            # eligible, but cannot be described as a verified premiere.
+            where.append("c.year BETWEEN ? AND ? AND c.has_poster = 1 AND "
+                         "(date(json_extract(c.summary_json, '$.premiere')) IS NULL OR "
+                         "date(json_extract(c.summary_json, '$.premiere')) <= ?)")
+            args += [this_year - 1, this_year, today.isoformat()]
+        elif collection == "upcoming":
+            where.append(upcoming)
         elif collection in {"evening", "mood"}:
             where.append(any_genre(EVENING_GENRES))
         elif collection == "anime":
@@ -466,18 +709,38 @@ class CatalogIndex:
         elif collection == "together":
             where.append(any_genre(TOGETHER_GENRES))
 
+        if sort == "fresh":
+            # Newest first, but a title nobody has rated yet is not a recommendation.
+            total_votes = "(c.votes + CAST(COALESCE(json_extract(c.summary_json, '$.imdbVoteCount'), 0) AS INTEGER))"
+            rating = "COALESCE(CAST(json_extract(c.summary_json, '$.rating') AS REAL), 0)"
+            where.append(f"c.has_poster = 1 AND {total_votes} >= ? AND ({rating} = 0 OR {rating} >= ?) "
+                         f"AND (date({premiere}) <= ? OR (date({premiere}) IS NULL AND c.year <= ?))")
+            args += [FRESH_MIN_VOTES, FRESH_MIN_RATING, today.isoformat(), this_year]
         verified_first = "" if tokens else "verified DESC, "
         rank = "COALESCE(c.popular_rank, 1000000000)"
         order = {
             "popular": f"{rank} ASC, c.votes DESC, c.confidence DESC, {verified_first}c.year DESC",
             "trending": f"{rank} ASC, c.votes DESC, c.confidence DESC, {verified_first}c.year DESC",
             "votes": f"{verified_first}c.votes DESC, c.confidence DESC, c.year DESC",
-            "new": f"{verified_first}c.year DESC, {rank} ASC, c.votes DESC, c.confidence DESC",
+            "audience": "(c.votes + CAST(COALESCE(json_extract(c.summary_json, '$.imdbVoteCount'), 0) AS INTEGER)) DESC, c.id ASC",
+            # What people watch now: ratings gathered per year of the title's life, so a film
+            # that got half a million votes this year outranks a classic with three million
+            # over thirty years. A weak title (rating under 6) is held back.
+            "now": f"({NOW_INTEREST_SQL}) DESC, c.confidence DESC, c.id ASC",
+            "new": f"c.year DESC, date(json_extract(c.summary_json, '$.premiere')) DESC, {rank} ASC, c.votes DESC, c.id ASC",
+            # A title without a known date is placed by its year.
+            "fresh": f"COALESCE(date({premiere}), printf('%04d-07-01', c.year)) DESC, c.votes DESC, c.id ASC",
             "year": f"{verified_first}c.year DESC, c.confidence DESC",
             "year_desc": f"{verified_first}c.year DESC, c.confidence DESC",
             "title": "c.title_sort ASC",
             "alphabetical": "c.title_sort ASC",
         }.get(sort, f"{verified_first}c.confidence DESC, c.year DESC")
+        if collection == "upcoming":
+            awaiting = "CAST(COALESCE(json_extract(c.summary_json, '$.awaitVotes'), 0) AS INTEGER) DESC"
+            by_date = f"CASE WHEN date({premiere}) IS NOT NULL THEN 0 ELSE 1 END, date({premiere}) ASC"
+            # «Ближайшие» puts the nearest known date first; otherwise the most awaited lead.
+            first, then = (by_date, awaiting) if sort == "soon" else (awaiting, by_date)
+            order = f"{first}, {then}, c.year ASC, c.title_sort ASC, c.id ASC"
         try:
             page = max(1, int(params.get("page", ["1"])[0]))
         except (TypeError, ValueError):
@@ -556,6 +819,9 @@ class CatalogIndex:
         return [identifier for identifier in ids if identifier in matched]
 
     def facets(self, visibility: Optional[tuple], kind: str = "") -> Dict[str, Any]:
+        return self._cached("facets", kind, visibility, lambda: self._facets(visibility, kind))
+
+    def _facets(self, visibility: Optional[tuple], kind: str = "") -> Dict[str, Any]:
         where = self.VISIBLE + (" AND c.kind = ?" if kind else "")
         args = [kind] if kind else []
         with self._lock:
@@ -590,7 +856,7 @@ class CatalogIndex:
         with self._lock:
             db = self._connection()
             self._load_sets(db, visibility)
-            visible = "1" if include_hidden else self.VISIBLE
+            visible = "1" if include_hidden else f"({self.VISIBLE} OR {self.UPCOMING} OR date(json_extract(c.summary_json, '$.premiere')) IS NOT NULL)"
             row = db.execute(
                 f"SELECT c.source, p.payload_json, {self.VERIFIED} AS verified FROM cards c JOIN card_payloads p ON p.id = c.id WHERE (c.id = ? OR (? > 0 AND c.kinopoisk_id = ?)) AND {visible} "
                 "ORDER BY c.source = 'imports' DESC LIMIT 1",

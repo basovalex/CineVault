@@ -1,10 +1,15 @@
 {
   "manifest_version": 3,
   "name": "CineVault · без рекламы в плеерах",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Убирает рекламу в плеерах CineVault: пустой список рекламы Alloha и блокировка известных рекламных сетей во всех плеерах. Видео не трогает.",
   "minimum_chrome_version": "111",
   "content_scripts": [
+    {
+      "matches": ["https://cinevault-aleksandr.duckdns.org/*"],
+      "js": ["detect.js"],
+      "run_at": "document_start"
+    },
     {
       "matches": [
         "https://*.stravers.live/*"

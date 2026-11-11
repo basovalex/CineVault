@@ -61,6 +61,23 @@ def rating(value: Any) -> Any:
     return number if number > 0 else None
 
 
+def is_upcoming_row(row: Dict[str, Any], today: Optional[date] = None) -> bool:
+    today = today or date.today()
+    premiere = row.get("premiere") if isinstance(row.get("premiere"), dict) else {}
+    raw = str(premiere.get("russia") or premiere.get("world") or "")[:10]
+    if raw:
+        try:
+            if len(raw) == 4 and raw.isdigit():
+                return int(raw) > today.year
+            if len(raw) == 7:
+                year, month = map(int, raw.split("-"))
+                return 1 <= month <= 12 and (year, month) > (today.year, today.month)
+            return date.fromisoformat(raw) > today
+        except (ValueError, TypeError):
+            return False
+    return positive_int(row.get("year")) > today.year
+
+
 def catalog_entry(row: Dict[str, Any]) -> Dict[str, Any]:
     kp_id = positive_int(row.get("id"))
     title = str(row.get("name") or "").strip()
@@ -94,12 +111,16 @@ def catalog_entry(row: Dict[str, Any]) -> Dict[str, Any]:
         "imdbRating": rating(ratings.get("imdb")),
         "voteCount": positive_int(votes.get("kp")),
         "imdbVoteCount": positive_int(votes.get("imdb")),
+        "awaitVotes": positive_int(votes.get("await")),
         "actors": people_by_role("actor", 12),
         "directors": people_by_role("director", 6),
         "producers": people_by_role("producer", 6),
         "ageRating": positive_int(row.get("ageRating")) or None,
         "tagline": str(row.get("slogan") or "").strip(),
         "premiere": str(premiere.get("russia") or premiere.get("world") or "")[:10],
+        "premiereRegion": "Россия" if premiere.get("russia") else "мир" if premiere.get("world") else "",
+        "premiereSource": "Kinopoisk.dev" if premiere.get("russia") or premiere.get("world") else "",
+        "premiereCheckedAt": date.today().isoformat() if premiere.get("russia") or premiere.get("world") else "",
         "runtime": positive_int(row.get("seriesLength") if kind == "series" else row.get("movieLength")) or None,
         "posterImage": str(image.get("url") or image.get("previewUrl") or "").strip(),
         "backdropImage": str(backdrop.get("url") or backdrop.get("previewUrl") or "").strip(),
@@ -120,11 +141,12 @@ def catalog_entry(row: Dict[str, Any]) -> Dict[str, Any]:
 def fetch_page(session: requests.Session, token: str, page: int, limit: int,
                updated_since: Optional[date] = None, kind: str = "all",
                year: Any = None, min_votes: int = 0,
-               sort_votes: bool = False, list_slug: str = "", max_votes: int = 0) -> Dict[str, Any]:
+               sort_votes: bool = False, list_slug: str = "", max_votes: int = 0,
+               sort_await: bool = False) -> Dict[str, Any]:
     params: list[tuple[str, Any]] = [
         ("page", page), ("limit", limit),
-        ("sortField", "votes.kp" if sort_votes else "updatedAt" if updated_since else "id"),
-        ("sortType", "-1" if sort_votes or updated_since else "1"),
+        ("sortField", "votes.await" if sort_await else "votes.kp" if sort_votes else "updatedAt" if updated_since else "id"),
+        ("sortType", "-1" if sort_await or sort_votes or updated_since else "1"),
     ]
     params.extend(("selectFields", field) for field in SELECT_FIELDS)
     if updated_since:
@@ -248,19 +270,31 @@ def sync(token: str, catalog_path: Path, metadata_path: Path, state_path: Path,
     for kp_id in hidden & cards.keys():
         cards.pop(kp_id)
     state = read_json(state_path, {})
-    if mode not in {"backfill", "daily"} or kind not in {"all", "movie", "series"}:
+    if mode not in {"backfill", "daily", "upcoming"} or kind not in {"all", "movie", "series"}:
         raise ValueError("Неизвестный режим синхронизации")
     checkpoint_key = "next_page" if kind == "all" else "next_page_{}".format(kind)
-    page = 1 if mode == "daily" else start_page or positive_int(state.get(checkpoint_key) if isinstance(state, dict) else 0) or 1
+    if mode == "daily":
+        page = 1
+    elif mode == "upcoming":
+        resume = state.get("upcoming_next_page") if isinstance(state, dict) and state.get("upcoming_year") == date.today().year else 1
+        page = min(10, start_page or positive_int(resume) or 1)
+    else:
+        page = start_page or positive_int(state.get(checkpoint_key) if isinstance(state, dict) else 0) or 1
     updated_since = date.today() - timedelta(days=lookback_days) if mode == "daily" else None
-    totals = {"pages": 0, "seen": 0, "created": 0, "updated": 0, "skipped": 0, "next_page": page}
+    totals = {"pages": 0, "seen": 0, "created": 0, "updated": 0, "skipped": 0, "next_page": page, "truncated": False}
     with requests.Session() as session:
         for _ in range(pages):
             payload = fetch_page(session, token, page, limit, updated_since=updated_since,
-                                 kind=kind, min_votes=min_votes)
+                                 kind=kind, min_votes=min_votes,
+                                 **({"year": "{}-{}".format(date.today().year, date.today().year + 2), "sort_await": True} if mode == "upcoming" else {}))
             rows = payload["docs"]
             if not rows:
+                totals["truncated"] = False
                 break
+            provider_pages = positive_int(payload.get("pages"))
+            totals["truncated"] = bool(provider_pages and page < provider_pages)
+            if mode == "upcoming":
+                rows = [row for row in rows if isinstance(row, dict) and is_upcoming_row(row)]
             result = merge_page(rows, cards, legacy_ids, require_complete=require_complete)
             if not dry_run:
                 save_json_atomic(metadata_path, list(cards.values()))
@@ -270,9 +304,17 @@ def sync(token: str, catalog_path: Path, metadata_path: Path, state_path: Path,
                     next_state[checkpoint_key] = page + 1
                     completion_key = "backfill_complete" if kind == "all" else "backfill_{}_complete".format(kind)
                     next_state[completion_key] = page >= positive_int(payload.get("pages")) > 0
-                else:
+                elif mode == "daily":
                     next_state["last_daily_sync"] = date.today().isoformat()
                     next_state["daily_lookback_days"] = lookback_days
+                else:
+                    next_state["last_upcoming_sync"] = date.today().isoformat()
+                    next_state["upcoming_truncated"] = totals["truncated"]
+                    next_state["upcoming_year"] = date.today().year
+                    # The configured provider plan rejects page 11, even if it
+                    # advertises more pages. Wrap rather than retry it forever.
+                    next_state["upcoming_next_page"] = page + 1 if totals["truncated"] and page < 10 else 1
+                    next_state["upcoming_last_page_counts"] = result
                 save_json_atomic(state_path, next_state)
                 state = next_state
             for key in ("seen", "created", "updated", "skipped"):
@@ -280,10 +322,19 @@ def sync(token: str, catalog_path: Path, metadata_path: Path, state_path: Path,
             totals["pages"] += 1
             page += 1
             totals["next_page"] = page
+            if mode == "upcoming" and page > 10:
+                break
             if page > positive_int(payload.get("pages")) > 0:
                 break
             if delay_seconds:
                 time.sleep(delay_seconds)
+    if mode == "daily" and not dry_run and totals["pages"]:
+        next_state = dict(state) if isinstance(state, dict) else {}
+        next_state["daily_truncated"] = totals["truncated"]
+        next_state["daily_pages_processed"] = totals["pages"]
+        if not totals["truncated"]:
+            next_state["last_complete_daily_sync"] = date.today().isoformat()
+        save_json_atomic(state_path, next_state)
     return totals
 
 
@@ -439,7 +490,7 @@ def sync_slices(token: str, catalog_path: Path, metadata_path: Path, state_path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Добавить или обновить карточки Kinopoisk.dev без видеопотоков")
-    parser.add_argument("--mode", choices=("backfill", "daily", "popular", "slices"), default="backfill",
+    parser.add_argument("--mode", choices=("backfill", "daily", "popular", "slices", "upcoming"), default="backfill",
                         help="backfill постепенно обходит всю базу; daily обновляет последние изменения; "
                              "popular обновляет подборки «Популярные фильмы» и «Популярные сериалы»")
     parser.add_argument("--kind", choices=("all", "movie", "series"), default="all",
@@ -498,6 +549,8 @@ def main() -> int:
     print("{}: режим {}, тип {}, страниц {{pages}}, просмотрено {{seen}}, добавлено {{created}}, обновлено {{updated}}, пропущено {{skipped}}, следующая страница {{next_page}}".format(
         "Проверено" if args.dry_run else "Сохранено", args.mode, args.kind).format(
         **result))
+    if args.mode in {"daily", "upcoming"} and result["truncated"]:
+        print("Внимание: достигнут лимит страниц; окно обновлений обработано не полностью.", file=sys.stderr)
     return 0
 
 

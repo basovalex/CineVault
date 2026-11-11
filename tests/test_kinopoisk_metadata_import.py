@@ -138,6 +138,28 @@ class KinopoiskMetadataImportTests(unittest.TestCase):
         self.assertEqual(saved_state["next_page_series"], 2)
         self.assertEqual(fetch.call_args.kwargs["kind"], "series")
 
+    def test_upcoming_import_filters_dates_and_keeps_existing_data(self):
+        from datetime import date, timedelta
+        today = date.today()
+        row = {"id": 888, "name": "Будущий фильм", "type": "movie", "year": today.year,
+               "premiere": {"world": (today + timedelta(days=20)).isoformat()}}
+        past = {"id": 889, "name": "Вышел", "type": "movie", "year": today.year,
+                "premiere": {"world": (today - timedelta(days=1)).isoformat()}}
+        invalid = {"id": 890, "name": "Неизвестно", "type": "movie", "year": today.year,
+                   "premiere": {"world": "TBA"}}
+        state = self.root / "checkpoint.json"
+        with patch("tools.sync_kinopoisk_dev_catalog.fetch_page", return_value={"docs": [row, past, invalid], "pages": 1}) as fetch:
+            result = sync_kinopoisk_dev("fake-token", self.catalog, self.metadata, state,
+                                        start_page=0, pages=1, limit=50, delay_seconds=0, mode="upcoming")
+        self.assertEqual(result["created"], 1)
+        saved = json.loads(self.metadata.read_text())
+        future = next(item for item in saved if item.get("kinopoiskId") == 888)
+        self.assertEqual(future["premiereRegion"], "мир")
+        self.assertEqual(future["premiereSource"], "Kinopoisk.dev")
+        self.assertEqual(fetch.call_args.kwargs["year"], f"{today.year}-{today.year + 2}")
+        self.assertTrue(fetch.call_args.kwargs["sort_await"])
+        self.assertIn("last_upcoming_sync", json.loads(state.read_text()))
+
     def test_provider_token_can_be_loaded_from_ignored_local_env_file(self):
         (self.root / ".env").write_text("CINEVAULT_KINOPOISK_DEV_TOKEN=test-only\n", encoding="utf-8")
         with patch.dict("tools.sync_kinopoisk_dev_catalog.os.environ", {}, clear=True), \

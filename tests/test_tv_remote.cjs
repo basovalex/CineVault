@@ -6,9 +6,9 @@ test('TV commands reach playback, seek, episode, quality and intro controls',()=
  const button=name=>({tagName:'BUTTON',children:[],disabled:false,classList:{contains(){return false}},getBoundingClientRect(){return {width:200,height:50}},click(){actions.push(name)},innerText:name==='skip'?'Пропустить заставку':''});
  const player={media:video,quality:720,hls:{currentLevel:1},togglePlay(){actions.push('toggle')}};
  const nodes={next:button('next'),prev:button('prev'),skip:button('skip'),quality:button('quality'),episode:button('episode')};
- const document={getElementsByTagName(){return [video,{...video,videoWidth:3840,videoHeight:2160,currentTime:5}]},getElementById(){return {}},querySelector(selector){if(selector.includes('data-allplay=next'))return nodes.next;if(selector.includes('data-allplay=prev'))return nodes.prev;if(selector.includes('data-allplay=quality'))return nodes.quality;if(selector.includes('data-select^=episode'))return nodes.episode;return null},querySelectorAll(selector){return selector.startsWith('button,')?[{...nodes.skip,tagName:'DIV',children:[nodes.skip],click(){actions.push('wrong wrapper')}},nodes.skip]:[]}};
+ const document={addEventListener(){},getElementsByTagName(){return [video,{...video,videoWidth:3840,videoHeight:2160,currentTime:5}]},getElementById(){return {}},querySelector(selector){if(selector.includes('data-allplay=next'))return nodes.next;if(selector.includes('data-allplay=prev'))return nodes.prev;if(selector.includes('data-allplay=quality'))return nodes.quality;if(selector.includes('data-select^=episode'))return nodes.episode;return null},querySelectorAll(selector){return selector.startsWith('button,')?[{...nodes.skip,tagName:'DIV',children:[nodes.skip],click(){actions.push('wrong wrapper')}},nodes.skip]:[]}};
  const channel={postMessage(){}};
- const context={document,window:{player,cvRemote:channel},setInterval(fn){timers.push(fn)},setTimeout(fn){fn()}};
+ const context={document,location:{href:'https://player.example/embed',hostname:'player.example'},window:{player,cvRemote:channel},setInterval(fn){timers.push(fn)},setTimeout(fn){fn()}};
  vm.createContext(context);vm.runInContext(source,context);
  const send=data=>channel.onmessage({data});
  send('toggle');send('seek:10');assert.equal(video.currentTime,70);

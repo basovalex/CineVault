@@ -11,6 +11,8 @@ import hmac
 import ipaddress
 import json
 import mimetypes
+
+mimetypes.add_type("font/woff2", ".woff2")
 import os
 import queue
 import re
@@ -35,7 +37,7 @@ try:
 except ImportError:  # pragma: no cover - deployment may use system certificates
     certifi = None
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
@@ -43,6 +45,8 @@ from urllib.parse import unquote, urlparse
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools import watch_together, accounts_http
+from tools.accounts import Accounts, AccountError
 from tools.catalog_tombstones import AUDIT_FILENAME, add_tombstone, alloha_available_ids, read_audit_ids, record_alloha_result, unplayable_ids  # noqa: E402
 
 
@@ -62,8 +66,8 @@ CATALOG_HIDDEN_REFRESH_SECONDS = 300
 CATALOG_INDEX: Any = None
 CATALOG_INDEX_FIELDS = (
     "id", "kind", "title", "originalTitle", "year", "description", "tags", "genres",
-    "rating", "ratingKinopoisk", "imdbRating", "voteCount", "imdbVoteCount",
-    "actors", "directors", "producers", "countries", "ageRating", "premiere",
+    "rating", "ratingKinopoisk", "imdbRating", "voteCount", "imdbVoteCount", "awaitVotes",
+    "actors", "directors", "producers", "countries", "ageRating", "premiere", "premiereRegion", "premiereSource", "premiereCheckedAt",
     "seasons", "runtime", "kinopoiskId", "tmdbId",
     "catalogId", "poster", "posterImage", "providerUrl", "providerName", "providerNote", "tagline",
     "episodeDataFile", "episodeDataProvider", "episodePosterPolicy",
@@ -73,7 +77,7 @@ CATALOG_INDEX_FIELDS = (
 _catalog_cache_lock = threading.Lock()
 _catalog_cache: Dict[str, Any] = {"mtime_ns": None, "items": []}
 _catalog_hidden_cache: Dict[str, Any] = {"loaded_at": 0.0, "dir": None, "value": None}
-SITEMAP_VIEW_PATHS = ("/", "/catalog/", "/movies/", "/series/")
+SITEMAP_VIEW_PATHS = ("/", "/catalog/", "/upcoming/", "/movies/", "/series/")
 SITEMAP_SEED_TITLE_IDS = {
     "sintel-open",
     "big-buck-bunny-open",
@@ -105,7 +109,7 @@ SITEMAP_TITLE_ID_BY_KINOPOISK_ID = {
     412344: "the-mentalist",
 }
 APP_ROUTE_RE = re.compile(
-    r"^/(?:title/[^/]+/?|catalog/?|movies/?|series/?|library/?|favorites/?|evening/?|history/?|settings/?)$"
+    r"^/(?:title/[^/]+/?|catalog/?|upcoming/?|movies/?|series/?|library/?|favorites/?|evening/?|history/?|settings/?)$"
 )
 DEFAULT_KINOPOISK_UPDATE_DELAY_SECONDS = 2
 DEFAULT_KINOPOISK_UPDATE_TIMEOUT_SECONDS = 5 * 60
@@ -344,6 +348,69 @@ def fetch_player_options(kinopoisk_id: Any, use_cache: bool = True) -> Dict[str,
             _player_options_cache.clear()
         _player_options_cache[resolved_id] = (time.monotonic(), result)
     return result
+
+
+ALLOHA_EPISODES_CACHE_SECONDS = 6 * 60 * 60
+ALLOHA_PAGE_MAX_BYTES = 4 * 1024 * 1024
+ALLOHA_FILE_LIST = re.compile(r"const fileList = JSON\.parse\('(.*?)'\);", re.S)
+_alloha_episodes_cache: Dict[int, tuple] = {}
+
+
+def alloha_episode_list(page: str) -> list[Dict[str, Any]]:
+    """Seasons and real episode numbers from the list the Alloha page plays from."""
+    match = ALLOHA_FILE_LIST.search(page)
+    if not match:
+        return []
+    try:
+        payload = json.loads(match.group(1).replace("\\'", "'"))
+    except ValueError:
+        return []
+    everything = payload.get("all") if isinstance(payload, dict) and payload.get("type") == "serial" else None
+    if not isinstance(everything, dict):
+        return []
+    seasons = []
+    for season, episodes in everything.items():
+        if not str(season).isdigit() or int(season) < 1 or not isinstance(episodes, dict):
+            continue
+        numbers = sorted(int(episode) for episode in episodes if str(episode).isdigit() and int(episode) > 0)
+        if numbers:
+            seasons.append({"number": int(season), "episodes": numbers})
+    return sorted(seasons, key=lambda season: season["number"])
+
+
+def fetch_alloha_episodes(kinopoisk_id: int, referer: str = "") -> list[Dict[str, Any]]:
+    with _player_options_lock:
+        cached = _alloha_episodes_cache.get(kinopoisk_id)
+    if cached and time.monotonic() - cached[0] < ALLOHA_EPISODES_CACHE_SECONDS:
+        return cached[1]
+    alloha = next((provider for provider in fetch_player_options(kinopoisk_id).get("providers") or [] if provider.get("id") == "alloha"), None)
+    translations = (alloha or {}).get("translations") or []
+    if not translations:
+        return []
+    try:
+        with requests.get(
+            translations[0]["embedUrl"],
+            headers={"Accept": "text/html", "Referer": referer, "User-Agent": "Mozilla/5.0 CineVault/1.0"},
+            timeout=12,
+            stream=True,
+        ) as response:
+            if response.status_code == 429:
+                return cached[1] if cached else []
+            response.raise_for_status()
+            raw = response.raw.read(ALLOHA_PAGE_MAX_BYTES + 1, decode_content=True)
+    except requests.RequestException as exc:
+        if cached:
+            return cached[1]
+        raise RuntimeError("Не удалось получить список серий Alloha") from exc
+    if len(raw) > ALLOHA_PAGE_MAX_BYTES:
+        raise RuntimeError("Страница Alloha слишком большая")
+    seasons = alloha_episode_list(raw.decode("utf-8", "ignore"))
+    if seasons:
+        with _player_options_lock:
+            if len(_alloha_episodes_cache) > 2000:
+                _alloha_episodes_cache.clear()
+            _alloha_episodes_cache[kinopoisk_id] = (time.monotonic(), seasons)
+    return seasons
 DEFAULT_KINOPOISK_IMPORT_TIMEOUT_SECONDS = 30 * 60
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024 * 1024
 MAX_SOURCE_JSON_BYTES = 10 * 1024 * 1024
@@ -1211,8 +1278,8 @@ def imported_catalog_entries(catalog_path: Path = CATALOG_IMPORTS_PATH) -> list[
             imported = imported_by_id.get(identifier) or imported_by_kinopoisk_id.get(kinopoisk_id)
             if imported is not None:
                 for key in ("year", "description", "genres", "tags", "posterImage", "backdropImage", "logoImage", "actors", "directors",
-                            "producers", "countries", "ageRating", "tagline", "premiere", "runtime",
-                            "voteCount", "imdbVoteCount"):
+                            "producers", "countries", "ageRating", "tagline", "premiere", "premiereRegion", "premiereSource", "premiereCheckedAt", "runtime",
+                            "voteCount", "imdbVoteCount", "awaitVotes"):
                     missing = imported.get(key) in (None, "", [], 0)
                     short_description = key == "description" and len(str(imported.get(key) or "")) < 60 and len(str(item.get(key) or "")) >= 60
                     if (missing or short_description) and item.get(key) not in (None, "", [], 0):
@@ -1360,7 +1427,8 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
     kind = str(params.get("type", params.get("kind", [""]))[0]).strip().casefold()
     collection = str(params.get("collection", [""])[0]).strip().casefold()
     collection = {"romance": "together", "thrill": "tense"}.get(collection, collection)
-    sort = str(params.get("sort", ["popular"])[0]).strip().casefold()
+    # The same default as the SQLite index: "trending" follows the popularity rank.
+    sort = str(params.get("sort", ["popular" if collection == "trending" else "audience"])[0]).strip().casefold()
     if collection in {"popular", "trending"} and sort == "rating":
         sort = "popular"
     if kind in {"movies", "film", "films"}:
@@ -1387,28 +1455,40 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
     def matches(item: Dict[str, Any]) -> bool:
         if requested_ids and str(item.get("id", "")) not in requested_ids:
             return False
+        if not requested_ids and collection != "upcoming":
+            premiere = str(item.get("premiere") or "")[:10]
+            today = datetime.now(timezone(timedelta(hours=5))).date().isoformat()
+            try:
+                future_year = int(item.get("year") or 0) > datetime.now().year
+            except (TypeError, ValueError):
+                future_year = False
+            if (premiere and premiere > today) or future_year:
+                return False
         if kind and str(item.get("kind", "")).casefold() != kind:
             return False
         if genre and genre not in genres(item):
             return False
         if collection == "popular" and not item.get("popularRank") and votes(item) <= 0:
             return False
+        if collection == "audience":
+            try:
+                combined_votes = votes(item) + max(0, int(item.get("imdbVoteCount") or 0))
+            except (TypeError, ValueError):
+                combined_votes = votes(item)
+            if combined_votes <= 0:
+                return False
         if collection == "trending" and not item.get("popularRank"):
             return False
         if collection == "new":
             try:
                 item_year = int(item.get("year") or 0)
-                vote_count = int(item.get("voteCount") or 0)
             except (TypeError, ValueError):
                 return False
-            # Kinopoisk's own "popular now" lists vouch for a fresh title before
-            # it has collected many votes.
-            min_votes = 100 if item.get("popularRank") else 1000
-            if item_year < datetime.now().year - 1 or item_year > datetime.now().year or vote_count < min_votes:
+            premiere = str(item.get("premiere") or "")[:10]
+            today = datetime.now(timezone.utc).astimezone().date().isoformat()
+            if item_year < datetime.now().year - 1 or item_year > datetime.now().year or (premiere and premiere > today):
                 return False
-            if not item.get("posterImage") or len(str(item.get("description") or "")) < 60:
-                return False
-            if catalog_confidence_rating(item) < 6.5:
+            if not item.get("posterImage"):
                 return False
         if collection in {"evening", "mood"}:
             if not (genres(item) & {"уютно", "на вечер", "комедия", "драма", "мелодрама", "приключения", "семейный"}):
@@ -1452,6 +1532,13 @@ def catalog_page(params: Dict[str, list[str]]) -> Dict[str, Any]:
             return 10 ** 9
     if search_tokens:
         pass  # already in order of how well each title answers the query
+    elif sort == "audience":
+        def total_votes(item: Dict[str, Any]) -> int:
+            try:
+                return votes(item) + max(0, int(item.get("imdbVoteCount") or 0))
+            except (TypeError, ValueError):
+                return votes(item)
+        filtered.sort(key=lambda item: (bool(query) or not unverified(item), total_votes(item), rating(item), year(item)), reverse=True)
     elif sort in {"popular", "trending"}:
         filtered.sort(key=lambda item: (-popular_rank(item), votes(item), rating(item), bool(query) or not unverified(item), year(item)), reverse=True)
     elif sort == "votes":
@@ -1529,6 +1616,7 @@ class MediaLibrary:
         self._db = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._init_db()
+        self.accounts = Accounts(self._db, self._lock)
 
     def close(self) -> None:
         self._executor.shutdown(wait=True)
@@ -2869,7 +2957,11 @@ class MediaLibrary:
             raise FileNotFoundError("MP4 сейчас недоступен на сервере")
         return candidate, filename
 
-    def create_room(self, episode_id: str = "", payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def create_room(self, episode_id: str = "", payload: Optional[Dict[str, Any]] = None, actor=None) -> Dict[str, Any]:
+        with self._lock:
+            return self._create_room(episode_id, payload, actor)
+
+    def _create_room(self, episode_id: str = "", payload: Optional[Dict[str, Any]] = None, actor=None) -> Dict[str, Any]:
         payload = payload or {}
         episode_id = str(payload.get("episode_id", episode_id) or "").strip()
         target_key = str(payload.get("target_key", "") or "").strip()
@@ -2902,19 +2994,63 @@ class MediaLibrary:
             "seq": 0,
             "updated_at": now_iso(),
         }
-        self._execute("INSERT INTO watch_rooms(id, share_code, episode_id, target_key, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)", (room_id, share_code, episode_id, target_key, json.dumps(state), state["updated_at"]))
-        return {"room_id": room_id, "share_code": share_code, "state": state}
+        host_token = None
+        if payload.get("protocol") in (2, 3):
+            if payload.get("provider") not in {"alloha", "cinevault"} or not title_id:
+                raise ValueError("Для комнаты нужен поддерживаемый плеер и title_id")
+            self._execute("DELETE FROM watch_rooms WHERE json_extract(state_json, '$.protocol') IN (2, 3) AND json_extract(state_json, '$.created_at') < ?", (time.time() - watch_together.ROOM_TTL,))
+            count = self._db.execute("SELECT count(*) FROM watch_rooms WHERE json_extract(state_json, '$.protocol') IN (2, 3)").fetchone()[0]
+            if count >= 256:
+                raise ValueError("Слишком много комнат. Попробуйте позже")
+            if payload.get("protocol") == 3 and not actor:
+                raise AccountError("Войдите в свой аккаунт", 401)
+            state, host_token = watch_together.create({**payload, "title_id": title_id, "_actor_id": actor["id"] if actor else None})
+            if payload.get("protocol") == 3 and payload.get("context_id"):
+                context = self.accounts.require_context(actor["id"], str(payload["context_id"]))
+                if context["kind"] != "shared":
+                    raise AccountError("Для комнаты выберите совместный контекст")
+                state["_private"]["expected_users"] = [r[0] for r in self._db.execute("SELECT user_id FROM watch_context_members WHERE context_id=?", (context["id"],))]
+                state["_private"]["context_users"] = state["_private"]["expected_users"]
+        self._execute("INSERT INTO watch_rooms(id, share_code, episode_id, target_key, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)", (room_id, share_code, episode_id, target_key, json.dumps(state), str(state["updated_at"])))
+        result = {"room_id": room_id, "share_code": share_code, "state": watch_together.snapshot(state) if host_token else state}
+        if host_token:
+            result["host_token"] = host_token
+        return result
 
     def get_room(self, room_id: str) -> Dict[str, Any]:
         row = self._db.execute("SELECT * FROM watch_rooms WHERE id = ?", (room_id,)).fetchone()
         if not row:
             raise KeyError("Комната не найдена")
         state = json.loads(row["state_json"])
+        if state.get("protocol") in (2, 3):
+            with self._lock:
+                # Re-read under the same lock as commands to avoid stale writes.
+                row = self._db.execute("SELECT * FROM watch_rooms WHERE id = ?", (room_id,)).fetchone()
+                if not row:
+                    raise KeyError("Комната не найдена")
+                state = json.loads(row["state_json"])
+                public = watch_together.snapshot(state)
+                self._execute("UPDATE watch_rooms SET state_json = ? WHERE id = ?", (json.dumps(state), room_id))
+                return {"room_id": row["id"], "share_code": row["share_code"], "state": public}
         if row["target_key"] and not state.get("target_key"):
             state["target_key"] = row["target_key"]
         return {"room_id": row["id"], "share_code": row["share_code"], "state": state}
 
-    def update_room(self, room_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def update_room(self, room_id: str, payload: Dict[str, Any], actor=None) -> Dict[str, Any]:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM watch_rooms WHERE id = ?", (room_id,)).fetchone()
+            if not row:
+                raise KeyError("Комната не найдена")
+            state = json.loads(row["state_json"])
+            if state.get("protocol") in (2, 3):
+                if state.get("protocol") == 3 and not actor:
+                    raise AccountError("Войдите в свой аккаунт", 401)
+                credentials = watch_together.update(state, {**payload, "_account": actor})
+                if state.get("protocol") == 3:
+                    self._account_room_checkpoint(room_id, state, actor)
+                public = watch_together.snapshot(state)
+                self._execute("UPDATE watch_rooms SET state_json = ?, updated_at = ? WHERE id = ?", (json.dumps(state), str(state["updated_at"]), room_id))
+                return {"room_id": room_id, "share_code": row["share_code"], "state": public, **credentials}
         current = self.get_room(room_id)
         state = current["state"]
         if "position" in payload:
@@ -2931,6 +3067,52 @@ class MediaLibrary:
         state.update({"seq": int(state.get("seq", 0)) + 1, "updated_at": now_iso()})
         self._execute("UPDATE watch_rooms SET episode_id = ?, target_key = ?, state_json = ?, updated_at = ? WHERE id = ?", (str(state.get("episode_id", "") or ""), str(state.get("target_key", "") or ""), json.dumps(state), state["updated_at"], room_id))
         return {"room_id": room_id, "share_code": current["share_code"], "state": state}
+
+
+    def _account_room_checkpoint(self, room_id, state, actor):
+        private = state["_private"]
+        now = time.time()
+        users = private.get("context_users", [])
+        if state.get("ended"):
+            self.accounts.release_room(room_id)
+            return
+        if not users:
+            return
+        context = self.accounts.context_for(users)
+        old_context = state.get("context_id")
+        if old_context and old_context != context["id"]:
+            self.accounts.release_room(room_id)
+        state["context_id"] = context["id"]
+        state["context_label"] = " · ".join(row[0] for row in self._db.execute("SELECT display_name FROM account_users WHERE id IN (%s)" % ",".join("?" for _ in users), users))
+        state["context_kind"] = context["kind"]
+        if now - private["host_seen"] >= watch_together.HEARTBEAT_TIMEOUT:
+            self.accounts.release_room(room_id)
+            return
+        if context["kind"] == "shared":
+            self.accounts.claim_room(actor["id"], context["id"], room_id)
+        edition = str(state.get("provider", "alloha"))
+        if state.get("translation"):
+            edition += ":" + str(state["translation"])
+        meta = {"title_id": state["title_id"], "season": state["season"], "episode": state["episode"], "edition": edition}
+        previous = self.accounts.get_progress(actor["id"], context["id"], meta)
+        state["shared_progress"] = previous
+        peers = list(private["participants"].values())
+        active = {p.get("account_id") for p in peers if p["ready"] and p["generation"] == state["generation"] and now - p["seen"] < 4}
+        if not set(users).issubset(active) or now - private.get("checkpoint_at", 0) < 5:
+            return
+        leader = next((p for p in peers if p["host"] and p.get("position") is not None), None)
+        if not leader:
+            return
+        actual = leader["position"]
+        target = watch_together.position(state, now)
+        if abs(actual - target) > 3:
+            return
+        duration = float(state.get("duration", 0) or 0)
+        checkpoint = self.accounts.write_progress(actor["id"], context["id"], {**meta,
+            "position": actual, "duration": duration, "completed": bool(duration and actual >= duration * .95),
+            "expected_revision": previous["revision"], "operation_id": uuid.uuid4().hex}, room_id=room_id)
+        private["checkpoint_at"] = now
+        state["shared_progress"] = checkpoint
 
 
 def quote_path(value: str) -> str:
@@ -2951,10 +3133,13 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
         request_url = urllib.parse.urlsplit(self.path)
         request_path = request_url.path
         versioned = "v=" in request_url.query
-        if request_path in {"/app.js", "/styles.css"} and versioned:
+        if versioned and request_path.endswith((".js", ".css")) and request_path != "/sw.js":
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")
         elif request_path in {"/index.html", "/app.js", "/styles.css", "/sw.js"}:
             self.send_header("Cache-Control", "no-store, max-age=0")
+        elif request_path.startswith("/assets/fonts/") and self.command in {"GET", "HEAD"}:
+            # Font files keep their names forever; a new font gets a new name.
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
         elif request_path.startswith("/assets/") and self.command in {"GET", "HEAD"}:
             self.send_header("Cache-Control", "public, max-age=604800")
         super().end_headers()
@@ -3006,12 +3191,14 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-CineVault-Admin-Token")
             self.send_header("Access-Control-Max-Age", "600")
 
-    def send_json(self, status: int, payload: Dict[str, Any]) -> None:
+    def send_json(self, status: int, payload: Dict[str, Any], extra_headers=None) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_cors_headers()
+        for key, value in (extra_headers or {}).items():
+            self.send_header(key, value)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -3085,6 +3272,8 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if accounts_http.handle(self, "GET", parsed):
+            return
         protected = parsed.path.startswith("/api/") and parsed.path != "/api/health" or parsed.path.startswith("/media/")
         download_file = parsed.path.endswith("/download/file") or (parsed.path.startswith("/api/catalog/downloads/") and parsed.path.endswith("/file"))
         if protected and not (self.download_authorized(parsed) if download_file else self.require_viewer()):
@@ -3129,6 +3318,21 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                 if CATALOG_STATE_DIR is not None:
                     record_alloha_result(CATALOG_STATE_DIR, kinopoisk_id, *player_options_counts(options))
                 self.send_json(200, options)
+            except ValueError:
+                self.send_json(400, {"error": "Kinopoisk ID должен быть положительным числом"})
+            except KeyError:
+                self.send_json(404, {"error": "Карточка Kinopoisk не найдена в каталоге CineVault"})
+            except RuntimeError as exc:
+                self.send_json(502, {"error": str(exc)})
+        elif parsed.path == "/api/alloha-episodes":
+            try:
+                params = urllib.parse.parse_qs(parsed.query)
+                kinopoisk_id = int(params.get("kinopoisk", [""])[0])
+                if kinopoisk_id < 1:
+                    raise ValueError
+                imported_catalog_item(str(kinopoisk_id), include_hidden=True)
+                referer = getattr(self.server, "public_base_url", "") or f"https://{self.headers.get('Host', '')}/"
+                self.send_json(200, {"seasons": fetch_alloha_episodes(kinopoisk_id, referer)})
             except ValueError:
                 self.send_json(400, {"error": "Kinopoisk ID должен быть положительным числом"})
             except KeyError:
@@ -3268,7 +3472,15 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
     def handle_watch_room_events(self, room_id: str) -> None:
         if not self.require_viewer():
             return
-        subscribers = self.server.watch_room_subscribe(room_id)  # type: ignore[attr-defined]
+        try:
+            initial = self.library.get_room(room_id)
+            subscribers = self.server.watch_room_subscribe(room_id)  # type: ignore[attr-defined]
+        except KeyError:
+            self.send_json(404, {"error": "Комната не найдена"})
+            return
+        except ValueError as exc:
+            self.send_json(429, {"error": str(exc)})
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache, no-transform")
@@ -3276,15 +3488,14 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
         try:
-            initial = self.library.get_room(room_id)
             self.wfile.write(f"data: {json.dumps(initial, ensure_ascii=False)}\n\n".encode("utf-8"))
             self.wfile.flush()
             while True:
                 try:
-                    event = subscribers.get(timeout=20)
+                    event = subscribers.get(timeout=3)
                     body = f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode("utf-8")
                 except queue.Empty:
-                    body = b": keep-alive\n\n"
+                    body = f"data: {json.dumps(self.library.get_room(room_id), ensure_ascii=False)}\n\n".encode("utf-8")
                 self.wfile.write(body)
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, KeyError):
@@ -3294,6 +3505,8 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if accounts_http.handle(self, "POST", parsed):
+            return
         try:
             if parsed.path in {"/api/library/upload", "/api/library/bulk-upload"}:
                 if not self.admin_authorized():
@@ -3373,7 +3586,8 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                 if not self.require_viewer():
                     return
                 payload = self.read_json()
-                self.send_json(201, self.library.create_room(str(payload.get("episode_id", "")), payload))
+                actor = accounts_http.authorize_mutation(self) if payload.get("protocol") == 3 else None
+                self.send_json(201, self.library.create_room(str(payload.get("episode_id", "")), payload, actor=actor))
                 return
             if parsed.path == "/api/catalog/requests":
                 if not self.require_viewer():
@@ -3384,11 +3598,18 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                 if not self.require_viewer():
                     return
                 payload = self.read_json()
-                result = self.library.update_room(parsed.path.rsplit("/", 1)[-1], payload)
-                self.server.watch_room_publish(result["room_id"], result)  # type: ignore[attr-defined]
+                room_id = parsed.path.rsplit("/", 1)[-1]
+                room = self.library.get_room(room_id)
+                actor = accounts_http.authorize_mutation(self) if room["state"].get("protocol") == 3 else None
+                result = self.library.update_room(room_id, payload, actor=actor)
+                self.server.watch_room_publish(result["room_id"], {key: value for key, value in result.items() if key not in {"participant_token", "host_token"}})  # type: ignore[attr-defined]
                 self.send_json(200, result)
                 return
             self.send_json(404, {"error": "Неизвестный endpoint"})
+        except AccountError as exc:
+            self.send_json(exc.status, {"error": str(exc)})
+        except PermissionError as exc:
+            self.send_json(403, {"error": str(exc)})
         except (KeyError, ValueError, TypeError, RuntimeError, json.JSONDecodeError) as exc:
             self.send_json(400, {"error": str(exc)})
 
@@ -3670,8 +3891,13 @@ def main() -> None:
     # Refreshes run sync tools in child processes; they update this index.
     os.environ["CINEVAULT_CATALOG_INDEX"] = str(CATALOG_INDEX.index_path)
     if CATALOG_INDEX.stale():
-        print("Catalog index: building…", flush=True)
-        CATALOG_INDEX.build_in_child(wait=True)
+        if CATALOG_INDEX.usable():
+            # Serve the previous index right away; the fresh one replaces it when ready.
+            print("Catalog index: outdated, rebuilding in the background", flush=True)
+            CATALOG_INDEX.build_in_child()
+        else:
+            print("Catalog index: building…", flush=True)
+            CATALOG_INDEX.build_in_child(wait=True)
     handler = lambda *a, **kw: MediaLibraryHandler(*a, directory=str(APP_DIR), **kw)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     server.library = library  # type: ignore[attr-defined]
@@ -3686,6 +3912,8 @@ def main() -> None:
     def watch_room_subscribe(room_id: str) -> queue.Queue:
         subscriber: queue.Queue = queue.Queue(maxsize=8)
         with watch_room_lock:
+            if len(watch_room_subscribers.get(room_id, ())) >= 32:
+                raise ValueError("Слишком много подключений к комнате")
             watch_room_subscribers.setdefault(room_id, set()).add(subscriber)
         return subscriber
     def watch_room_unsubscribe(room_id: str, subscriber: queue.Queue) -> None:

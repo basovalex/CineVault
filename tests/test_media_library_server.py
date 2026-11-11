@@ -21,6 +21,7 @@ from tools.media_library_server import (
     KinopoiskOnDemandUpdater,
     MediaLibrary,
     MediaLibraryHandler,
+    alloha_episode_list,
     alloha_player_options,
     build_sitemap_xml,
     catalog_page,
@@ -72,7 +73,7 @@ class MediaLibraryTests(unittest.TestCase):
         self.assertLess(catalog_confidence_rating({"rating": 10, "voteCount": 5}),
                         catalog_confidence_rating({"rating": 8, "voteCount": 5000}))
 
-    def test_new_collection_requires_metadata_and_vote_count(self):
+    def test_new_collection_needs_a_poster_not_votes(self):
         from datetime import datetime
         year = datetime.now().year
         cards = [
@@ -82,10 +83,14 @@ class MediaLibraryTests(unittest.TestCase):
             {"id": "few-votes", "kind": "series", "title": "Мало оценок", "year": year,
              "voteCount": 5, "posterImage": "https://example.org/poster.jpg",
              "description": "Подробное описание сериала с героями и сюжетом, достаточное для карточки каталога."},
+            {"id": "no-poster", "kind": "series", "title": "Без постера", "year": year, "voteCount": 9000},
+            {"id": "old", "kind": "series", "title": "Давний", "year": year - 2, "voteCount": 9000,
+             "posterImage": "https://example.org/poster.jpg"},
         ]
         with patch("tools.media_library_server.imported_catalog_entries", return_value=cards):
             payload = catalog_page({"collection": ["new"]})
-        self.assertEqual([item["id"] for item in payload["items"]], ["ready"])
+        # "The last year" is about the release date: a fresh title is listed before it has votes.
+        self.assertEqual([item["id"] for item in payload["items"]], ["ready", "few-votes"])
 
     def test_alloha_player_options_only_accepts_known_embed_host(self):
         payload = {"data": [{"type": "Alloha", "translations": [
@@ -95,6 +100,12 @@ class MediaLibraryTests(unittest.TestCase):
         ]}]}
         options = alloha_player_options(payload)
         self.assertEqual([option["name"] for option in options], ["LostFilm"])
+
+    def test_alloha_episode_list_keeps_real_numbers_and_ignores_films(self):
+        page = """<script>const fileList = JSON.parse('{"type":"serial","all":{"4":{"13":{},"1":{}},"2":{"1":{}},"0":{"1":{}}}}');</script>"""
+        self.assertEqual(alloha_episode_list(page), [{"number": 2, "episodes": [1]}, {"number": 4, "episodes": [1, 13]}])
+        self.assertEqual(alloha_episode_list("""const fileList = JSON.parse('{"type":"movie","all":{}}');"""), [])
+        self.assertEqual(alloha_episode_list("<html></html>"), [])
 
     def test_player_options_endpoint_requires_catalog_card(self):
         handler = lambda *args, **kwargs: MediaLibraryHandler(*args, directory=self.temp_dir.name, **kwargs)

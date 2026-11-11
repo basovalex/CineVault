@@ -1,0 +1,2676 @@
+{
+  "method": "Серверные отчёты реальных iframe, позиции экстраполированы к server_time. Две вкладки, один браузер/сеть; не сравнение кадров и не физический телефон.",
+  "summary": {
+    "elapsed": 600.73,
+    "samples": 121,
+    "playing_samples": 121,
+    "fresh_both_samples": 121,
+    "median": 0.6075228958587786,
+    "p95": 0.6303332963561843,
+    "max": 0.6361508526000534
+  },
+  "samples": [
+    {
+      "elapsed": 0.01,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 415.97219,
+          "age": 0.05,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 414.873638,
+          "age": 0.535,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6136531943816976
+    },
+    {
+      "elapsed": 5.01,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 420.751667,
+          "age": 0.271,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 419.654893,
+          "age": 0.756,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6123787344207585
+    },
+    {
+      "elapsed": 10.01,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 425.800053,
+          "age": 0.225,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 424.701305,
+          "age": 0.716,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.607568772171021
+    },
+    {
+      "elapsed": 15.02,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 430.84765,
+          "age": 0.19,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 429.74764,
+          "age": 0.675,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6154149396514867
+    },
+    {
+      "elapsed": 20.03,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 435.893,
+          "age": 0.151,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 434.794879,
+          "age": 0.638,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6113148457488933
+    },
+    {
+      "elapsed": 25.03,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 440.938333,
+          "age": 0.105,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 439.841919,
+          "age": 0.595,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6061982216491515
+    },
+    {
+      "elapsed": 30.04,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 445.722333,
+          "age": 0.335,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 444.888663,
+          "age": 0.554,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6145640410613851
+    },
+    {
+      "elapsed": 35.04,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 450.767667,
+          "age": 0.291,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 449.669359,
+          "age": 0.777,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6123472780304269
+    },
+    {
+      "elapsed": 40.05,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 455.816067,
+          "age": 0.251,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 454.715955,
+          "age": 0.737,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6144369034881265
+    },
+    {
+      "elapsed": 45.06,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 460.862633,
+          "age": 0.212,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 459.763615,
+          "age": 0.697,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6142071708374033
+    },
+    {
+      "elapsed": 50.07,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 465.902753,
+          "age": 0.17,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 464.810098,
+          "age": 0.658,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6052110760498408
+    },
+    {
+      "elapsed": 55.07,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 470.949,
+          "age": 0.13,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 469.857908,
+          "age": 0.615,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6055439805908236
+    },
+    {
+      "elapsed": 60.08,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 475.73061,
+          "age": 0.356,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 474.903286,
+          "age": 0.575,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6080718904724449
+    },
+    {
+      "elapsed": 65.08,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 480.776598,
+          "age": 0.317,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 479.684716,
+          "age": 0.802,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.607299814254759
+    },
+    {
+      "elapsed": 70.09,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 485.823252,
+          "age": 0.277,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 484.732078,
+          "age": 0.76,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6082361871948478
+    },
+    {
+      "elapsed": 75.1,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 490.869,
+          "age": 0.232,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 489.780648,
+          "age": 0.717,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6041791789551212
+    },
+    {
+      "elapsed": 80.1,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 495.918859,
+          "age": 0.19,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 494.827411,
+          "age": 0.674,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6075228958587786
+    },
+    {
+      "elapsed": 85.11,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 500.965,
+          "age": 0.151,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 499.874057,
+          "age": 0.633,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6085351916961486
+    },
+    {
+      "elapsed": 90.11,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 505.746517,
+          "age": 0.371,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 504.653947,
+          "age": 0.856,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6078140071105622
+    },
+    {
+      "elapsed": 95.11,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 510.793017,
+          "age": 0.331,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 509.70043,
+          "age": 0.816,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6075360833282843
+    },
+    {
+      "elapsed": 100.12,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 515.839667,
+          "age": 0.287,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 515.616607,
+          "age": 0.721,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.21117533439644376
+    },
+    {
+      "elapsed": 105.13,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 520.885,
+          "age": 0.246,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 520.663794,
+          "age": 0.685,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.2173149083557746
+    },
+    {
+      "elapsed": 110.13,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 525.934539,
+          "age": 0.208,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 525.710574,
+          "age": 0.646,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.21413581481931487
+    },
+    {
+      "elapsed": 115.14,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 530.714333,
+          "age": 0.434,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 530.492518,
+          "age": 0.866,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.21043192344666295
+    },
+    {
+      "elapsed": 120.14,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 535.76245,
+          "age": 0.39,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 535.539225,
+          "age": 0.826,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.21326410522465267
+    },
+    {
+      "elapsed": 125.15,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 540.808287,
+          "age": 0.35,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 540.586067,
+          "age": 0.785,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.21257895591736542
+    },
+    {
+      "elapsed": 130.16,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 545.855667,
+          "age": 0.309,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 545.633431,
+          "age": 0.746,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.21415225416558314
+    },
+    {
+      "elapsed": 135.16,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 550.901,
+          "age": 0.268,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 550.679778,
+          "age": 0.706,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.2171320153504439
+    },
+    {
+      "elapsed": 140.17,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 555.871667,
+          "age": 0.232,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 555.725697,
+          "age": 0.667,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.2892609703826565
+    },
+    {
+      "elapsed": 145.18,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 560.66099,
+          "age": 0.456,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 560.507223,
+          "age": 0.894,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.2838889257507162
+    },
+    {
+      "elapsed": 150.18,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 565.701,
+          "age": 0.417,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 565.554555,
+          "age": 0.855,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.29079107063296306
+    },
+    {
+      "elapsed": 155.19,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 570.751667,
+          "age": 0.379,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 570.60089,
+          "age": 0.814,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.283821922729544
+    },
+    {
+      "elapsed": 160.2,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 575.738333,
+          "age": 0.336,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 575.648672,
+          "age": 0.773,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.34754693724062236
+    },
+    {
+      "elapsed": 165.2,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 580.783667,
+          "age": 0.294,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 580.67557,
+          "age": 0.728,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.3260169793395562
+    },
+    {
+      "elapsed": 170.21,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 585.833211,
+          "age": 0.253,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 585.456925,
+          "age": 0.956,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.32659915090937375
+    },
+    {
+      "elapsed": 175.22,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 590.613,
+          "age": 0.481,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 590.503806,
+          "age": 0.919,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.3287198946533181
+    },
+    {
+      "elapsed": 180.23,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 595.658333,
+          "age": 0.442,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 595.549607,
+          "age": 0.879,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.32798316557318685
+    },
+    {
+      "elapsed": 185.23,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 600.706402,
+          "age": 0.403,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 600.596682,
+          "age": 0.838,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.3259758866119
+    },
+    {
+      "elapsed": 190.24,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 605.754333,
+          "age": 0.36,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 605.643939,
+          "age": 0.798,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.3274559984741927
+    },
+    {
+      "elapsed": 195.24,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 610.799667,
+          "age": 0.312,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 610.69159,
+          "age": 0.753,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.33338217892458033
+    },
+    {
+      "elapsed": 200.25,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 615.582603,
+          "age": 0.541,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 615.472518,
+          "age": 0.98,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.328271161117641
+    },
+    {
+      "elapsed": 205.25,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 620.629,
+          "age": 0.502,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 620.518937,
+          "age": 0.941,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.32905514689639404
+    },
+    {
+      "elapsed": 210.26,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 625.674333,
+          "age": 0.461,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 625.566277,
+          "age": 0.898,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.3283982961120273
+    },
+    {
+      "elapsed": 215.27,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 630.723296,
+          "age": 0.422,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 630.612432,
+          "age": 0.859,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.3265928462371903
+    },
+    {
+      "elapsed": 220.27,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 635.769065,
+          "age": 0.382,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 635.660309,
+          "age": 0.817,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.3266511617126753
+    },
+    {
+      "elapsed": 225.28,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 640.815667,
+          "age": 0.34,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 640.707528,
+          "age": 0.778,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.33017591470343177
+    },
+    {
+      "elapsed": 230.29,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 645.597604,
+          "age": 0.57,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 645.487848,
+          "age": 1.005,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.3247020173491819
+    },
+    {
+      "elapsed": 235.3,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 650.645,
+          "age": 0.528,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 650.534089,
+          "age": 0.966,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.3272298691406377
+    },
+    {
+      "elapsed": 240.3,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 655.690333,
+          "age": 0.489,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 655.581474,
+          "age": 0.925,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.3273959781798794
+    },
+    {
+      "elapsed": 245.31,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 660.755034,
+          "age": 0.427,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 660.629095,
+          "age": 0.881,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.32796491349790813
+    },
+    {
+      "elapsed": 250.32,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 665.800276,
+          "age": 0.393,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 665.676161,
+          "age": 0.844,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.3271138570403309
+    },
+    {
+      "elapsed": 255.32,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 670.527667,
+          "age": 0.618,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 670.457836,
+          "age": 1.069,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.38022984442147845
+    },
+    {
+      "elapsed": 260.33,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 675.578333,
+          "age": 0.575,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 675.503492,
+          "age": 1.029,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.3794381843414385
+    },
+    {
+      "elapsed": 265.33,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 680.629,
+          "age": 0.533,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 680.550155,
+          "age": 0.987,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.3750849011230457
+    },
+    {
+      "elapsed": 270.34,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 685.669,
+          "age": 0.491,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 685.596874,
+          "age": 0.946,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.38254276029965695
+    },
+    {
+      "elapsed": 275.34,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 690.714333,
+          "age": 0.45,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 690.643975,
+          "age": 0.905,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.3842411420745293
+    },
+    {
+      "elapsed": 280.35,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 695.714682,
+          "age": 0.411,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 695.690811,
+          "age": 0.865,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.4302071974792625
+    },
+    {
+      "elapsed": 285.36,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 700.495667,
+          "age": 0.636,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 700.470686,
+          "age": 1.089,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.42861678404233317
+    },
+    {
+      "elapsed": 290.36,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 705.541,
+          "age": 0.599,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 705.518588,
+          "age": 1.052,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.4306491038207696
+    },
+    {
+      "elapsed": 295.37,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 710.589088,
+          "age": 0.558,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 710.56577,
+          "age": 1.01,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.4287710712738999
+    },
+    {
+      "elapsed": 300.38,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 715.637,
+          "age": 0.513,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 715.612872,
+          "age": 0.968,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.43076392008981657
+    },
+    {
+      "elapsed": 305.38,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 720.682333,
+          "age": 0.474,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 720.660569,
+          "age": 0.927,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.4305992526398086
+    },
+    {
+      "elapsed": 310.39,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 725.727667,
+          "age": 0.433,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 725.707037,
+          "age": 0.882,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.42856705390931893
+    },
+    {
+      "elapsed": 315.39,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 730.469,
+          "age": 0.654,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 730.488697,
+          "age": 1.105,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.4708340658874022
+    },
+    {
+      "elapsed": 320.4,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 735.46453,
+          "age": 0.614,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 735.534758,
+          "age": 1.066,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.5220252469330262
+    },
+    {
+      "elapsed": 325.4,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 740.510773,
+          "age": 0.574,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 740.580622,
+          "age": 1.026,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.5217969274749521
+    },
+    {
+      "elapsed": 330.41,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 745.557,
+          "age": 0.532,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 745.629274,
+          "age": 0.986,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.5257606809844901
+    },
+    {
+      "elapsed": 335.42,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 750.60533,
+          "age": 0.491,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 750.674425,
+          "age": 0.947,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.5250712477875368
+    },
+    {
+      "elapsed": 340.42,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 755.343667,
+          "age": 0.719,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 755.456514,
+          "age": 1.171,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.5643197592468141
+    },
+    {
+      "elapsed": 345.43,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 760.394333,
+          "age": 0.68,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 760.503024,
+          "age": 1.133,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.562096141830466
+    },
+    {
+      "elapsed": 350.44,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 765.434333,
+          "age": 0.64,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 765.549222,
+          "age": 1.091,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.5666836243285616
+    },
+    {
+      "elapsed": 355.44,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 770.420093,
+          "age": 0.596,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 770.59709,
+          "age": 1.047,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6274779379577922
+    },
+    {
+      "elapsed": 360.45,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 775.466333,
+          "age": 0.556,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 775.644214,
+          "age": 1.008,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6295461630402315
+    },
+    {
+      "elapsed": 365.45,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 780.514433,
+          "age": 0.516,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 780.690389,
+          "age": 0.969,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.628282059341359
+    },
+    {
+      "elapsed": 370.46,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 785.295667,
+          "age": 0.739,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 785.471945,
+          "age": 1.191,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6281210233001957
+    },
+    {
+      "elapsed": 375.47,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 790.341,
+          "age": 0.698,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 790.518187,
+          "age": 1.15,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6299510342712438
+    },
+    {
+      "elapsed": 380.47,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 795.389206,
+          "age": 0.66,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 795.567102,
+          "age": 1.11,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6285969983063069
+    },
+    {
+      "elapsed": 385.48,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 800.436751,
+          "age": 0.616,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 800.613601,
+          "age": 1.065,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6261209636688818
+    },
+    {
+      "elapsed": 390.48,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 805.482333,
+          "age": 0.575,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 805.658907,
+          "age": 1.029,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6296351038207604
+    },
+    {
+      "elapsed": 395.49,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 810.530952,
+          "age": 0.531,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 810.706916,
+          "age": 0.984,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6291691086425999
+    },
+    {
+      "elapsed": 400.49,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 815.311545,
+          "age": 0.754,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 815.48766,
+          "age": 1.207,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6291608450317199
+    },
+    {
+      "elapsed": 405.5,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 820.357,
+          "age": 0.715,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 820.535099,
+          "age": 1.165,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.628370129608129
+    },
+    {
+      "elapsed": 410.51,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 825.405516,
+          "age": 0.674,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 825.581941,
+          "age": 1.127,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6296930511474557
+    },
+    {
+      "elapsed": 415.51,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 830.45262,
+          "age": 0.633,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 830.629061,
+          "age": 1.085,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6289332370910188
+    },
+    {
+      "elapsed": 420.52,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 835.498333,
+          "age": 0.586,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 836.472549,
+          "age": 0.248,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6361508526000534
+    },
+    {
+      "elapsed": 425.52,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 840.277,
+          "age": 0.814,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 841.517966,
+          "age": 0.205,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6314038414153629
+    },
+    {
+      "elapsed": 430.52,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 845.327667,
+          "age": 0.77,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 846.566303,
+          "age": 0.162,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6305630038604022
+    },
+    {
+      "elapsed": 435.53,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 850.373,
+          "age": 0.732,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 851.614306,
+          "age": 0.122,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6315321257171718
+    },
+    {
+      "elapsed": 440.54,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 855.418333,
+          "age": 0.691,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 856.659044,
+          "age": 0.081,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6315179133758875
+    },
+    {
+      "elapsed": 445.54,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 860.468174,
+          "age": 0.649,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 861.706726,
+          "age": 0.039,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6285697478790553
+    },
+    {
+      "elapsed": 450.55,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 865.514333,
+          "age": 0.608,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 866.487096,
+          "age": 0.264,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6296033244018417
+    },
+    {
+      "elapsed": 455.56,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 870.295941,
+          "age": 0.834,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 871.534358,
+          "age": 0.225,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6289688054962426
+    },
+    {
+      "elapsed": 460.56,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 875.341814,
+          "age": 0.793,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 876.582259,
+          "age": 0.181,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6282340110016094
+    },
+    {
+      "elapsed": 465.57,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 880.388891,
+          "age": 0.752,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 881.627544,
+          "age": 0.143,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6293278294830316
+    },
+    {
+      "elapsed": 470.57,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 885.437508,
+          "age": 0.711,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 886.675996,
+          "age": 0.101,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6286740713959489
+    },
+    {
+      "elapsed": 475.58,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 890.483797,
+          "age": 0.668,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 891.456707,
+          "age": 0.323,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6288443338013394
+    },
+    {
+      "elapsed": 480.58,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 895.52973,
+          "age": 0.625,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 896.503665,
+          "age": 0.281,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6303332963561843
+    },
+    {
+      "elapsed": 485.58,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 900.312362,
+          "age": 0.845,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 901.550348,
+          "age": 0.237,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6300820426330347
+    },
+    {
+      "elapsed": 490.59,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 905.359107,
+          "age": 0.802,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 906.596058,
+          "age": 0.192,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6271108453521492
+    },
+    {
+      "elapsed": 495.59,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 910.405,
+          "age": 0.763,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 911.644965,
+          "age": 0.152,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6285157583618002
+    },
+    {
+      "elapsed": 500.6,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 915.450333,
+          "age": 0.72,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 916.68986,
+          "age": 0.11,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6296992431182389
+    },
+    {
+      "elapsed": 505.6,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 920.500353,
+          "age": 0.676,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 921.473294,
+          "age": 0.326,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6231957264099037
+    },
+    {
+      "elapsed": 510.61,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 925.279667,
+          "age": 0.902,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 926.518893,
+          "age": 0.294,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6305371686706849
+    },
+    {
+      "elapsed": 515.61,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 930.328026,
+          "age": 0.86,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 931.56618,
+          "age": 0.252,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6297918021240321
+    },
+    {
+      "elapsed": 520.62,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 935.374512,
+          "age": 0.814,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 936.591925,
+          "age": 0.207,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6111798800353654
+    },
+    {
+      "elapsed": 525.63,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 940.420669,
+          "age": 0.781,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 941.639111,
+          "age": 0.169,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6072061429900941
+    },
+    {
+      "elapsed": 530.64,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 945.466333,
+          "age": 0.744,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 946.68703,
+          "age": 0.131,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6078677916260631
+    },
+    {
+      "elapsed": 535.64,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 950.515844,
+          "age": 0.702,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 951.468406,
+          "age": 0.357,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6078261391753585
+    },
+    {
+      "elapsed": 540.65,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 955.295667,
+          "age": 0.931,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 956.515947,
+          "age": 0.32,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6090057575988794
+    },
+    {
+      "elapsed": 545.66,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 960.341,
+          "age": 0.892,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 961.561845,
+          "age": 0.281,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.60991765663141
+    },
+    {
+      "elapsed": 550.67,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 965.38999,
+          "age": 0.851,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 966.607874,
+          "age": 0.243,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6094168979492451
+    },
+    {
+      "elapsed": 555.67,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 970.437,
+          "age": 0.809,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 971.655881,
+          "age": 0.2,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6104429850158795
+    },
+    {
+      "elapsed": 560.68,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 975.482333,
+          "age": 0.772,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 976.436581,
+          "age": 0.427,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6090057381134102
+    },
+    {
+      "elapsed": 565.69,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 980.530776,
+          "age": 0.734,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 981.482155,
+          "age": 0.388,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6056129324952053
+    },
+    {
+      "elapsed": 570.69,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 985.311667,
+          "age": 0.958,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 986.530623,
+          "age": 0.348,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6089031759795489
+    },
+    {
+      "elapsed": 575.7,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 990.357,
+          "age": 0.916,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 991.577456,
+          "age": 0.304,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6092590052185187
+    },
+    {
+      "elapsed": 580.71,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 995.402333,
+          "age": 0.876,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 996.62395,
+          "age": 0.263,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.608844058410682
+    },
+    {
+      "elapsed": 585.72,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 1000.453,
+          "age": 0.837,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 1001.671355,
+          "age": 0.227,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6082568764495591
+    },
+    {
+      "elapsed": 590.72,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 1005.498333,
+          "age": 0.798,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 1006.453596,
+          "age": 0.45,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6071334891204287
+    },
+    {
+      "elapsed": 595.73,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 1010.281155,
+          "age": 1.022,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 1011.498881,
+          "age": 0.411,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6070768911132518
+    },
+    {
+      "elapsed": 600.73,
+      "playing": true,
+      "generation": 4,
+      "participants": [
+        {
+          "name": "Тест интерфейса",
+          "position": 1015.327667,
+          "age": 0.982,
+          "online": true,
+          "corrections": 0
+        },
+        {
+          "name": "Гость теста",
+          "position": 1016.544596,
+          "age": 0.373,
+          "online": true,
+          "corrections": 11
+        }
+      ],
+      "estimated_delta": 0.6080470496215185
+    }
+  ]
+}
