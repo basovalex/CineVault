@@ -2461,6 +2461,8 @@
   let remoteCatalogError = false;
   let searchDraft = "";
   let searchSuggestionCatalog = [];
+  // Episode ratings of popular series (IMDb), by catalogue id; null when there is no map to show.
+  const episodeRatingsCache = new Map();
   let searchSuggestionTimer = 0;
   let searchSuggestionRequest = null;
   const posterOverrides = Object.freeze({
@@ -4922,6 +4924,15 @@
     if (isShowcase()) return main ? openItemPlayer(item, episode, season) : openTrailer(item);
     const hasKinopoisk = Number(item?.kinopoiskId || item?.kinopoisk_id || 0) > 0;
     if (!hasKinopoisk) return openItemPlayer(item, episode, season);
+    // Alloha when it has the title (95% of those with 50 000+ votes, 11.11.2026), our own
+    // CineVault player when it does not, the trailer when neither does. The chooser below is
+    // kept unused: drop this block to bring it back.
+    loadPlayerOptions(item).catch(() => []).then((loaded) => {
+      if ((loaded || []).some((provider) => provider.id === "alloha")) openAlternativePlayer(item, { resume: true, season, episode });
+      else if (main) openItemPlayer(item, episode, season);
+      else openTrailer(item);
+    });
+    return;
     const lastPlayer = lastPlayerFor(item);
     const episodeLabel = episode ? ` · ${episodeTag(season || selectedSeason, episode)}` : "";
     const option = (id, label, note) => `<button class="player-choice${lastPlayer === id ? " is-last" : ""}" data-player-choice="${escapeHtml(id)}" type="button"><span class="player-choice-icon" aria-hidden="true">${playerIcon("play")}</span><span class="player-choice-copy"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(note)}</small></span>${lastPlayer === id ? `<span class="player-choice-badge">Вы смотрели здесь</span>` : ""}</button>`;
@@ -4977,8 +4988,10 @@
   // says so; if it never loads, or the source has nothing to show, the viewer gets
   // a plain explanation with a retry and a way to pick another source.
   function createFrameWatch(holder, { item, season = null, episode = null, retry } = {}) {
+    // When the source has nothing, our own player is the way out; the trailer when there is none.
+    const ownPlayer = Boolean(item) && (hasPlayableSource(item) || shouldRefreshKinopoiskPlayback(item));
     holder.querySelector(".frame-state")?.remove();
-    holder.insertAdjacentHTML("beforeend", `<div class="frame-state" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><strong>Подключаю видео…</strong><small>Обычно это занимает несколько секунд.</small><div class="frame-state-actions" hidden><button class="primary-button" type="button" data-frame-retry>Повторить</button><button class="secondary-button" type="button" data-frame-other>Другой источник</button></div></div>`);
+    holder.insertAdjacentHTML("beforeend", `<div class="frame-state" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><strong>Подключаю видео…</strong><small>Обычно это занимает несколько секунд.</small><div class="frame-state-actions" hidden><button class="primary-button" type="button" data-frame-retry>Повторить</button><button class="secondary-button" type="button" data-frame-other>${ownPlayer ? "Плеер CineVault" : "Трейлер"}</button></div></div>`);
     const box = holder.querySelector(".frame-state");
     let failTimer = 0;
     let helpTimer = 0;
@@ -4994,14 +5007,14 @@
     };
     const actions = {
       retry: () => closePlayerThen(() => retry?.()),
-      other: () => closePlayerThen(() => openWatchChooser(item, { season, episode })),
+      other: () => closePlayerThen(() => (ownPlayer ? openItemPlayer(item, episode, season) : openTrailer(item))),
     };
     const bind = (root) => {
       root.querySelectorAll("[data-frame-retry]").forEach((button) => button.addEventListener("click", actions.retry));
       root.querySelectorAll("[data-frame-other]").forEach((button) => button.addEventListener("click", actions.other));
     };
     bind(box);
-    const fail = (title = "Источник не отвечает", text = "Можно попробовать ещё раз или выбрать другой источник.") => {
+    const fail = (title = "Источник не отвечает", text = ownPlayer ? "Можно попробовать ещё раз или открыть плеер CineVault." : "Можно попробовать ещё раз или посмотреть трейлер.") => {
       if (!holder.isConnected) return;
       window.clearTimeout(failTimer);
       box.classList.add("is-error");
@@ -5013,7 +5026,7 @@
     };
     const showHelp = () => {
       if (!holder.isConnected || alive || holder.parentElement?.querySelector(".frame-help")) return;
-      holder.insertAdjacentHTML("afterend", `<p class="frame-help">Видео не появилось? <button class="text-button" type="button" data-frame-retry>Повторить</button> или <button class="text-button" type="button" data-frame-other>выбрать другой источник</button>.</p>`);
+      holder.insertAdjacentHTML("afterend", `<p class="frame-help">Видео не появилось? <button class="text-button" type="button" data-frame-retry>Повторить</button> или откройте <button class="text-button" type="button" data-frame-other>${ownPlayer ? "плеер CineVault" : "трейлер"}</button>.</p>`);
       bind(holder.nextElementSibling);
     };
     return {
@@ -5039,7 +5052,7 @@
           const controller = new AbortController();
           const stop = window.setTimeout(() => controller.abort(), 12000);
           fetch(probe, { mode: "no-cors", cache: "no-store", signal: controller.signal })
-            .catch(() => fail("Источник не открывается", "Возможно, его не пускает сеть или VPN. Попробуйте другой источник."))
+            .catch(() => fail("Источник не открывается", "Возможно, его не пускает сеть или VPN. Попробуйте ещё раз или выберите вариант ниже."))
             .finally(() => window.clearTimeout(stop));
         }
       },
@@ -6683,6 +6696,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     // Look the players up while the viewer reads the page, so "Смотреть" is instant.
     if (enteringTitle && !awaitingPremierePlayback(item)) { loadPlayerOptions(item).catch(() => {}); loadAllohaEpisodes(item); }
     if (enteringTitle && Number(item.catalogId || 0) === 2205 && !item.episodePosterUrls && !episodeAssetsLoading) loadEpisodeAssets();
+    if (item.kind === "series" && !episodeRatingsCache.has(item.id)) loadEpisodeRatings(item);
     // Loading metadata and episodes finishes after the page is already open.
     // Rebuilding the detail DOM must not throw the reader back to the top.
     const preservedScrollY = enteringTitle ? 0 : window.scrollY;
@@ -6800,6 +6814,58 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     return `<article class="episode-card episode-card-skeleton"><div class="episode-card-art" style="--poster:${item.poster}"><span class="episode-card-image"><span class="episode-image-placeholder" aria-hidden="true"></span><span class="episode-loading-icon" aria-hidden="true"></span><span class="episode-card-number">${String(episode).padStart(2, "0")}</span></span></div><div class="episode-card-copy"><div class="episode-card-kicker">Сезон ${season} · серия ${episode}</div><span class="episode-skeleton-line episode-skeleton-line-wide"></span><span class="episode-skeleton-line"></span></div></article>`;
   }
 
+  // A map is shown only when there is enough to read from it.
+  const EPISODE_MAP_MIN_RATED = 6;
+  async function loadEpisodeRatings(item) {
+    episodeRatingsCache.set(item.id, null);
+    try {
+      const response = await apiFetch(`/api/episode-ratings?title=${encodeURIComponent(item.id)}`, { headers: { accept: "application/json" } });
+      if (!response.ok) return;
+      const payload = await response.json();
+      const seasons = (Array.isArray(payload.seasons) ? payload.seasons : []).filter((season) => Array.isArray(season.episodes) && season.episodes.length);
+      if (seasons.reduce((sum, season) => sum + season.episodes.length, 0) < EPISODE_MAP_MIN_RATED) return;
+      episodeRatingsCache.set(item.id, seasons);
+      if (activeTitleId === item.id) renderDetails(item.id);
+    } catch { /* no map: the page stays as it is */ }
+  }
+  function episodeRatingFor(item, season, episode) {
+    const seasons = episodeRatingsCache.get(item.id);
+    return seasons?.find((entry) => entry.season === season)?.episodes.find((entry) => entry.episode === episode) || null;
+  }
+  // Six steps, like SeriesGraph: the number is always printed, the colour only helps.
+  function ratingStep(rating) { return rating >= 9 ? 5 : rating >= 8 ? 4 : rating >= 7 ? 3 : rating >= 6 ? 2 : rating >= 5 ? 1 : 0; }
+  const RATING_STEP_NAMES = ["Провал", "Плохо", "Средне", "Хорошо", "Отлично", "Шедевр"];
+  function episodeMapMarkup(item) {
+    const seasons = episodeRatingsCache.get(item.id);
+    if (!seasons) return "";
+    const rows = Math.max(...seasons.map((season) => Math.max(...season.episodes.map((entry) => entry.episode))));
+    const all = seasons.flatMap((season) => season.episodes.map((entry) => ({ ...entry, season: season.season })));
+    const trusted = all.filter((entry) => entry.votes >= 100);
+    const best = (trusted.length ? trusted : all).reduce((top, entry) => entry.rating > top.rating ? entry : top);
+    const averages = seasons.map((season) => ({ season: season.season, rating: season.episodes.reduce((sum, entry) => sum + entry.rating, 0) / season.episodes.length }));
+    const strongest = averages.reduce((top, entry) => entry.rating > top.rating ? entry : top);
+    const weakest = averages.reduce((low, entry) => entry.rating < low.rating ? entry : low);
+    const facts = [
+      `Лучшая серия — ${best.season} сезон, ${best.episode} серия: ${best.rating.toFixed(1)}`,
+      seasons.length > 1 ? `сильнее всего ${strongest.season} сезон (${strongest.rating.toFixed(1)})` : "",
+      seasons.length > 1 && weakest.season !== strongest.season ? `слабее всего ${weakest.season} сезон (${weakest.rating.toFixed(1)})` : "",
+    ].filter(Boolean).join(", ");
+    const head = `<span class="ep-map-corner" aria-hidden="true"></span>${seasons.map((season) => `<span class="ep-map-season">С${season.season}</span>`).join("")}`;
+    const body = Array.from({ length: rows }, (_, index) => {
+      const episode = index + 1;
+      const cells = seasons.map((season) => {
+        const entry = season.episodes.find((candidate) => candidate.episode === episode);
+        if (!entry) return `<span class="ep-map-empty" aria-hidden="true"></span>`;
+        const name = episodeTitle(item, season.season, episode);
+        const label = `${season.season} сезон, ${episode} серия «${name}»: ${entry.rating.toFixed(1)}, ${countWord(entry.votes, "оценка", "оценки", "оценок")}`;
+        return `<button class="ep-map-cell is-r${ratingStep(entry.rating)}${entry.votes < 100 ? " is-few" : ""}" data-map-season="${season.season}" data-map-episode="${episode}" type="button" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${entry.rating.toFixed(1)}</button>`;
+      }).join("");
+      return `<span class="ep-map-episode">${episode}</span>${cells}`;
+    }).join("");
+    const legend = RATING_STEP_NAMES.map((name, step) => `<span><i class="is-r${step}" aria-hidden="true"></i>${name}</span>`).reverse().join("");
+    return `<section class="section ep-map-section" aria-labelledby="ep-map-title"><div class="section-header"><div><h2 id="ep-map-title">Оценки серий</h2><span>по оценкам зрителей IMDb</span></div></div><p class="ep-map-facts">${escapeHtml(facts)}.</p><div class="ep-map-scroll"><div class="ep-map" style="--seasons:${seasons.length}">${head}${body}</div></div><div class="ep-map-legend">${legend}</div></section>`;
+  }
+
   function renderSeasons(item) {
     const isImportedSeries = Number(item.catalogId || 0) === 2205;
     const onlineAssetState = episodeAssetStateFor(item);
@@ -6827,10 +6893,11 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       const progressText = current ? "Продолжить просмотр" : "";
       const ratio = !seen && Number(episodeProgress?.duration) > 0 ? Math.min(100, Math.round((Number(episodeProgress.position) / Number(episodeProgress.duration)) * 100)) : 0;
       const poster = episodePosterMarkup(item, selectedSeason, episode, title, episodePlayable);
-      return `<article class="episode-card${current ? " is-now" : ""}${seen ? " is-seen" : ""}">${ratio > 0 ? `<span class="episode-card-progress" style="--progress:${ratio}%" aria-hidden="true"></span>` : ""}${poster}<div class="episode-card-copy"><div class="episode-card-kicker">Сезон ${selectedSeason} · серия ${episode}</div><h3>${escapeHtml(title)}</h3>${episodeVoiceMarkup(item, selectedSeason, episode, title)}${progressText ? `<p>${escapeHtml(progressText)}</p>` : ""}</div></article>`;
+      const rated = episodeRatingFor(item, selectedSeason, episode);
+      return `<article class="episode-card${current ? " is-now" : ""}${seen ? " is-seen" : ""}">${ratio > 0 ? `<span class="episode-card-progress" style="--progress:${ratio}%" aria-hidden="true"></span>` : ""}${poster}<div class="episode-card-copy"><div class="episode-card-kicker">Сезон ${selectedSeason} · серия ${episode}${rated ? ` <span class="episode-rating is-r${ratingStep(rated.rating)}" title="Оценка IMDb">${rated.rating.toFixed(1)}</span>` : ""}</div><h3>${escapeHtml(title)}</h3>${episodeVoiceMarkup(item, selectedSeason, episode, title)}${progressText ? `<p>${escapeHtml(progressText)}</p>` : ""}</div></article>`;
     }).join("");
     const loadingNote = assetsLoading ? `<div class="episode-loading-note" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю список серий…</div>` : isImportedSeries && episodeImagesLoading ? `<div class="episode-loading-note" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю серии сезона…</div>` : assetsError ? `<div class="episode-loading-note is-error" role="status">${escapeHtml(assetsError)} Показываю доступные данные.</div>` : "";
-    return `<section class="section"><div class="section-header"><div><h2>Сезоны и серии</h2><span>${countWord(seasonCount, "сезон", "сезона", "сезонов")} · ${countWord(seasonList.reduce((sum, season) => sum + season.episodes.length, 0), "серия", "серии", "серий")}</span></div>${sourceAction}</div><div class="season-tabs">${seasonList.map((season) => `<button class="filter-button ${selectedSeason === season.number ? "is-active" : ""}" data-season="${season.number}" type="button">Сезон ${season.number}</button>`).join("")}</div>${loadingNote}<div class="episode-list is-season-entering">${episodeRows}</div></section>`;
+    return `<section class="section"><div class="section-header"><div><h2>Сезоны и серии</h2><span>${countWord(seasonCount, "сезон", "сезона", "сезонов")} · ${countWord(seasonList.reduce((sum, season) => sum + season.episodes.length, 0), "серия", "серии", "серий")}</span></div>${sourceAction}</div><div class="season-tabs">${seasonList.map((season) => `<button class="filter-button ${selectedSeason === season.number ? "is-active" : ""}" data-season="${season.number}" type="button">Сезон ${season.number}</button>`).join("")}</div>${loadingNote}<div class="episode-list is-season-entering">${episodeRows}</div></section>${episodeMapMarkup(item)}`;
   }
 
   function openDirectEpisodePlayer(item, season, episode, sourceUrl) {
@@ -7526,7 +7593,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
           if (!roomId && resumeRecord && window.CineVaultAccounts?.contexts.find(c=>c.id===resumeRecord.context_id)?.kind === "shared") togetherButton.click();
         } else {
           status.textContent = "У этого источника сейчас нет озвучек для этого фильма. Выберите другой источник.";
-          frameWatch.fail("Здесь этого пока нет", "У источника нет озвучек для этого тайтла. Попробуйте другой источник.");
+          frameWatch.fail("Здесь видео пока нет", "У этого источника нет озвучек для тайтла. Ниже — другой вариант.");
         }
       } catch (error) {
         if (closed || currentRequest !== requestNumber) return;
@@ -7997,6 +8064,10 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     bindCatalogSortMenu();
     bindCatalogMoreButton();
     $$('[data-catalog-reset]').forEach((button) => button.addEventListener("click", resetCatalogFilters));
+    $$('[data-map-season]').forEach((button) => button.addEventListener("click", () => {
+      const item = getTitle(activeTitleId);
+      if (item) openWatchChooser(item, { season: Number(button.dataset.mapSeason), episode: Number(button.dataset.mapEpisode) });
+    }));
     $$('[data-upcoming-sort]').forEach((button) => button.addEventListener("click", () => {
       const next = button.dataset.upcomingSort === "soon" ? "soon" : "await";
       if ((state.upcomingSort || "await") === next) return;

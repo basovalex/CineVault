@@ -30,6 +30,13 @@
   --veil: rgba(8, 9, 11, .55);
   --veil-strong: rgba(8, 9, 11, .85);
   --danger: #ff6b5e;
+  /* Episode ratings map only (docs/DESIGN.md, «Шкала оценок»): six steps from a flop to a masterpiece. */
+  --rate-5: #0f8a4e; --rate-5-text: #f5f6f7;
+  --rate-4: #2fbf71; --rate-4-text: #04140c;
+  --rate-3: #e3c04d; --rate-3-text: #1d1704;
+  --rate-2: #ec8b39; --rate-2-text: #1f0f02;
+  --rate-1: #e0524a; --rate-1-text: #f5f6f7;
+  --rate-0: #7d2f34; --rate-0-text: #f5f6f7;
   --display: "Geologica", "Onest", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --body: "Onest", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --s-1: 13px; --s0: 15px; --s1: 17px; --s2: 24px; --s3: 34px; --s4: clamp(44px, 6.6vw, 100px);
@@ -1011,6 +1018,28 @@ span.studio-sort-button::after { display: none; }
 .frame-state-actions[hidden] { display: none; }
 .frame-help { margin: var(--sp-3) 0 0; color: var(--muted); font-size: var(--s-1); text-align: center; }
 .frame-help .text-button { padding: 0; font-size: inherit; color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+
+/* ----- Карта оценок серий ----- */
+.ep-map-facts { margin: 0 0 var(--sp-4); color: var(--text-2); }
+.ep-map-scroll { overflow-x: auto; padding-bottom: var(--sp-2); scrollbar-width: thin; }
+.ep-map { display: grid; grid-template-columns: 40px repeat(var(--seasons), minmax(52px, 72px)); gap: 4px; width: max-content; }
+.ep-map-corner, .ep-map-episode { position: sticky; left: 0; z-index: 1; background: var(--bg); }
+.ep-map-season, .ep-map-episode { display: grid; place-items: center; height: 32px; color: var(--muted); font: 600 var(--s-1)/1 var(--body); font-variant-numeric: tabular-nums; }
+.ep-map-cell, .ep-map-empty { height: 32px; border-radius: var(--r-sm); }
+.ep-map-cell { border: 0; font: 700 var(--s-1)/1 var(--body); font-variant-numeric: tabular-nums; transition: transform var(--t) var(--ease), box-shadow var(--t) var(--ease); }
+.ep-map-cell:hover, .ep-map-cell:focus-visible { box-shadow: 0 0 0 2px var(--text); transform: scale(1.06); }
+.ep-map-cell.is-few { opacity: .55; }
+.ep-map-empty { background: var(--surface); opacity: .4; }
+.ep-map-legend { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); margin-top: var(--sp-3); color: var(--muted); font-size: var(--s-1); }
+.ep-map-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.ep-map-legend i { width: 12px; height: 12px; border-radius: 50%; }
+.episode-rating { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: var(--r-sm); font-weight: 700; font-variant-numeric: tabular-nums; }
+.is-r5 { background: var(--rate-5); color: var(--rate-5-text); }
+.is-r4 { background: var(--rate-4); color: var(--rate-4-text); }
+.is-r3 { background: var(--rate-3); color: var(--rate-3-text); }
+.is-r2 { background: var(--rate-2); color: var(--rate-2-text); }
+.is-r1 { background: var(--rate-1); color: var(--rate-1-text); }
+.is-r0 { background: var(--rate-0); color: var(--rate-0-text); }
 
 /* ----- О CineVault ----- */
 .about-hero { position: relative; display: grid; align-items: end; min-height: min(70vh, 640px); margin: calc(-1 * (var(--header-h) + var(--sp-5))) 0 0 calc(50% - 50vw); width: 100vw; padding: calc(var(--header-h) + var(--sp-6)) var(--gutter) var(--sp-7); overflow: hidden; }

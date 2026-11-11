@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh CineVault episode ratings once a day, after IMDb publishes its datasets
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 UTC
+RandomizedDelaySec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

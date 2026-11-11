@@ -1,0 +1,13 @@
+[Unit]
+Description=CineVault: episode ratings of popular series from IMDb's open datasets
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/cinevault
+ExecStart=/usr/bin/python3 /srv/cinevault/tools/episode_ratings.py --data-dir /srv/cinevault/data/media-library
+# Measured 2026-11-11: 41 s and 121 MB for 5516 series; the limit keeps the site safe if IMDb grows.
+MemoryMax=400M
+Nice=10
+IOSchedulingClass=idle

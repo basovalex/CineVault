@@ -45,7 +45,7 @@ from urllib.parse import unquote, urlparse
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools import watch_together, accounts_http, client_errors
+from tools import watch_together, accounts_http, client_errors, episode_ratings
 from tools.accounts import Accounts, AccountError
 from tools.catalog_tombstones import AUDIT_FILENAME, add_tombstone, alloha_available_ids, read_audit_ids, record_alloha_result, unplayable_ids  # noqa: E402
 
@@ -3279,6 +3279,8 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if accounts_http.handle(self, "GET", parsed):
+            return
+        if episode_ratings.handle(self, parsed):
             return
         protected = parsed.path.startswith("/api/") and parsed.path != "/api/health" or parsed.path.startswith("/media/")
         download_file = parsed.path.endswith("/download/file") or (parsed.path.startswith("/api/catalog/downloads/") and parsed.path.endswith("/file"))
