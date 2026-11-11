@@ -6938,13 +6938,20 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     return poster ? `background-image:linear-gradient(180deg, transparent 35%, rgba(12, 10, 30, .78)),url(${escapeHtml(poster)})${fallback};background-size:cover;background-position:center` : `--poster:${item.poster}`;
   }
 
+  // TMDB stills are stored small (w300); the card asks for a size that stays sharp on its width and screen.
+  const TMDB_STILL = /^(https:\/\/image\.tmdb\.org\/t\/p\/)w300(\/.+)$/;
+  function stillSize(url, size) { return String(url).replace(TMDB_STILL, `$1${size}$2`); }
+  function stillSrcset(url) {
+    if (!TMDB_STILL.test(String(url))) return "";
+    return ` srcset="${escapeHtml(stillSize(url, "w500"))} 500w, ${escapeHtml(stillSize(url, "w780"))} 780w" sizes="(max-width: 720px) 132px, (max-width: 1100px) 50vw, 25vw"`;
+  }
   function episodePosterMarkup(item, season, episode, title, episodePlayable) {
     const poster = item.episodePosterUrls?.[String(season)]?.[String(episode)] || "";
     const fallback = item.posterImage || "";
     const action = episodePlayable ? `data-play-media="${escapeHtml(item.id)}"` : `data-demo-play="${escapeHtml(item.id)}"`;
     const imageSource = poster || fallback;
     const image = imageSource
-      ? `<span class="episode-card-image" style="--poster:${item.poster}"><span class="episode-image-placeholder" aria-hidden="true"></span><img data-episode-poster${poster && fallback ? ` data-fallback="${escapeHtml(fallback)}"` : ""} src="${escapeHtml(imageSource)}" alt="" loading="lazy"><span class="episode-image-status" aria-hidden="true">Не удалось загрузить</span></span>`
+      ? `<span class="episode-card-image" style="--poster:${item.poster}"><span class="episode-image-placeholder" aria-hidden="true"></span><img data-episode-poster${poster && fallback ? ` data-fallback="${escapeHtml(fallback)}"` : ""} src="${escapeHtml(stillSize(imageSource, "w500"))}"${stillSrcset(imageSource)} alt="" loading="lazy"><span class="episode-image-status" aria-hidden="true">Не удалось загрузить</span></span>`
       : `<span class="episode-card-image" style="--poster:${item.poster}"><span class="episode-image-placeholder" aria-hidden="true"></span><span class="episode-image-status" aria-hidden="true">Превью пока недоступно</span></span>`;
     return `<button class="episode-card-art${episodePlayable ? "" : " episode-card-art-unavailable"}" ${action} data-resume-season="${season}" data-episode="${episode}" type="button" aria-label="Открыть ${escapeHtml(title)}">${image}<span class="episode-card-play">${uiIcon("play")}</span><span class="episode-card-number">${String(episode).padStart(2, "0")}</span></button>`;
   }
@@ -8094,6 +8101,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       image.addEventListener("error", () => {
         if (image.dataset.fallback && !image.dataset.fallbackUsed) {
           image.dataset.fallbackUsed = "1";
+          image.removeAttribute("srcset");
           image.src = image.dataset.fallback;
           return;
         }
