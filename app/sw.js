@@ -1,4 +1,4 @@
-const SHELL_CACHE = "cinevault-shell-v108";
+const SHELL_CACHE = "cinevault-shell-v110";
 const API_CACHE = "cinevault-api-v1";
 const MEDIA_CACHE = "cinevault-media-v1";
 const SHELL = ["/", "/index.html", "/styles.css", "/config.local.js", "/app.js", "/watch-together.js", "/watch-native.js", "/accounts.js", "/manifest.json", "/favicon.svg", "/assets/fonts/onest-cyrillic.woff2", "/assets/fonts/onest-latin.woff2", "/assets/fonts/geologica-cyrillic.woff2", "/assets/fonts/geologica-latin.woff2"];

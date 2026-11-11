@@ -36,7 +36,7 @@
         .catch(() => null) };
     })();
   </script>
-    <link rel="stylesheet" href="/styles.css?v=20261111-speed-6">
+    <link rel="stylesheet" href="/styles.css?v=20261111-stable-2">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -85,17 +85,19 @@
   <script src="/accounts.js?v=20261102-iframe-release-3" defer></script>
   <script src="/watch-together.js?v=20261108-catalog-split-1" defer></script>
   <script src="/watch-native.js?v=20261104-native-room-2" defer></script>
-  <script src="/app.js?v=20261111-speed-6" defer></script>
+  <script src="/app.js?v=20261111-stable-2" defer></script>
   <script>
     if ("serviceWorker" in navigator) {
       let reloadingForUpdate = false;
+      // On the very first visit the worker takes control too; that is not an update.
+      const updatingFromOldVersion = Boolean(navigator.serviceWorker.controller);
       navigator.serviceWorker.addEventListener("controllerchange", () => {
-        if (reloadingForUpdate) return;
+        if (reloadingForUpdate || !updatingFromOldVersion) return;
         reloadingForUpdate = true;
         // Текущий плеер и незаполненные формы не перезагружаем.
         window.dispatchEvent(new Event("cinevault:updateavailable"));
       });
-      window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js?v=20261111-speed-6", { updateViaCache: "none" }).catch(() => {}));
+      window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js?v=20261111-stable-2", { updateViaCache: "none" }).catch(() => {}));
     }
   </script>
 </body>

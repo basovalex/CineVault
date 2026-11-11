@@ -72,6 +72,49 @@
     return new URL(path, `${configuredApiBaseUrl}/`).toString();
   }
 
+  // Unhandled errors: tell the server (nothing personal, see tools/client_errors.py)
+  // and never leave the viewer on a blank page.
+  const APP_VERSION = (() => {
+    try { return new URL(document.currentScript?.src || "", window.location.href).searchParams.get("v") || ""; } catch { return ""; }
+  })();
+  const reportedErrors = new Set();
+  function reportClientError(kind, error, source = "") {
+    const message = String(error?.message || error || "").slice(0, 300);
+    if (!message || reportedErrors.size >= 10 || reportedErrors.has(message)) return;
+    // Errors from browser extensions and other sites' scripts are not ours to fix.
+    if (/^Script error\.?$/.test(message) || /ResizeObserver loop/.test(message) || /^(chrome|moz|safari(-web)?)-extension:/.test(String(source))) return;
+    reportedErrors.add(message);
+    const body = JSON.stringify({
+      kind, message, stack: String(error?.stack || "").split("\n").slice(0, 6).join("\n"),
+      source: String(source || "").replace(/[?#].*$/, ""), path: window.location.pathname, version: APP_VERSION, ua: navigator.userAgent,
+    });
+    try {
+      const url = apiUrl("/api/client-errors");
+      const queued = navigator.sendBeacon?.(url, new Blob([body], { type: "application/json" }));
+      if (!queued) fetch(url, { method: "POST", body, headers: { "content-type": "application/json" }, keepalive: true }).catch(() => {});
+    } catch { /* reporting must never break the page */ }
+  }
+  function showCrashScreen() {
+    const root = document.getElementById("page");
+    if (!root || root.querySelector(".crash-state") || root.textContent.trim()) return;
+    root.innerHTML = `<section class="section"><div class="empty-state crash-state" role="alert"><h2>Что-то пошло не так</h2><p>Страница не загрузилась до конца. Обычно помогает обновить её.</p><button class="primary-button" type="button" data-crash-reload>Обновить</button></div></section>`;
+    root.querySelector("[data-crash-reload]")?.addEventListener("click", () => window.location.reload());
+  }
+  window.addEventListener("error", (event) => {
+    reportClientError("error", event.error || event.message, event.filename);
+    window.setTimeout(showCrashScreen, 0);
+  });
+  // A new version took over this tab: offer a reload instead of doing it under a running film.
+  window.addEventListener("cinevault:updateavailable", () => {
+    if (document.getElementById("update-notice")) return;
+    document.getElementById("app")?.insertAdjacentHTML("beforeend", `<div id="update-notice" class="toast toast-action" role="status"><span><strong>Вышла новая версия сайта</strong><span>Обновите страницу, когда будет удобно.</span></span><button class="primary-button" type="button" data-update-reload>Обновить</button></div>`);
+    document.querySelector("[data-update-reload]")?.addEventListener("click", () => window.location.reload());
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    if (event.reason?.name === "AbortError") return;
+    reportClientError("rejection", event.reason);
+  });
+
   // index.html may have asked for the first catalogue page already; take it once if it matches.
   function takeCatalogPrefetch(path) {
     const early = window.__cvCatalogPrefetch;
@@ -2523,11 +2566,17 @@
   function routeForTitle(id) { return `/title/${encodeURIComponent(String(id))}/`; }
 
   function readRouteFromLocation() {
+    // Addresses published before the catalogue moved to Kinopoisk ids (the sitemap still lists them).
+    // Kept inside: this runs at start-up, before constants further down the file exist.
+    const TITLE_ID_ALIASES = { "the-mentalist": "kinopoisk-412344", "desperate-housewives": "kinopoisk-160958" };
     const path = safePathname();
     const titleMatch = path.match(/^\/title\/([^/]+)\/$/);
     if (titleMatch) {
-      try { return { type: "title", id: decodeURIComponent(titleMatch[1]) }; }
-      catch { return { type: "view", view: "catalog" }; }
+      let id = "";
+      try { id = decodeURIComponent(titleMatch[1]); } catch { return { type: "view", view: "missing" }; }
+      const canonical = TITLE_ID_ALIASES[id] || id;
+      if (canonical !== id) window.history.replaceState(window.history.state, "", routeForTitle(canonical));
+      return { type: "title", id: canonical };
     }
     return { type: "view", view: ROUTE_VIEWS[path] || "home" };
   }
@@ -2604,7 +2653,7 @@
   }
 
   function updateDocumentRoute(route, item = null) {
-    const titles = { home: "CineVault — кино для вас", catalog: "Каталог — CineVault", upcoming: "Скоро — CineVault", movies: "Фильмы — CineVault", series: "Сериалы — CineVault", library: "Моя медиатека — CineVault", favorites: "Избранное — CineVault", evening: "Наш вечер — CineVault", history: "История просмотра — CineVault", settings: "Настройки — CineVault" };
+    const titles = { missing: "Не найдено — CineVault", home: "CineVault — кино для вас", catalog: "Каталог — CineVault", upcoming: "Скоро — CineVault", movies: "Фильмы — CineVault", series: "Сериалы — CineVault", library: "Моя медиатека — CineVault", favorites: "Избранное — CineVault", evening: "Наш вечер — CineVault", history: "История просмотра — CineVault", settings: "Настройки — CineVault" };
     document.title = item ? `${item.title} — CineVault` : (titles[route.view] || "CineVault — кино для вас");
     const canonical = document.querySelector('link[rel="canonical"]');
     if (canonical) {
@@ -2633,12 +2682,10 @@
     if (route.type === "title") {
       const item = getTitle(route.id);
       if (!item) {
-        const fallback = { type: "view", view: "catalog" };
-        state.view = fallback.view;
-        saveState();
-        window.history.replaceState(routeHistoryState(fallback), "", routeForView(fallback.view));
-        render();
-        updateDocumentRoute(fallback);
+        // Keep the address the person followed and say plainly that there is no such title.
+        activeTitleId = null;
+        renderMissingPage({ title: true });
+        document.title = "Не найдено — CineVault";
         scheduleScroll(0);
         return;
       }
@@ -3295,7 +3342,10 @@
     const response = await fetch(sourceFile, { cache: "no-store", headers: { accept: "application/json" } });
     return response.ok ? response.json() : [];
   }
+  // Episode titles and stills of the one locally imported series; fetched only when it is in view.
   async function loadEpisodeAssets() {
+    if (!catalog.some((entry) => Number(entry.catalogId || 0) === 2205)) { episodeAssetsLoading = false; return; }
+    episodeAssetsLoading = true;
     try {
       const [metadataResponse, stillsResponse] = await Promise.all([
         fetch("./data/desperate_housewives_episodes.json", { cache: "no-store", headers: { accept: "application/json" } }),
@@ -5545,6 +5595,7 @@
     else if (["catalog", "upcoming", "movies", "series", "favorites", "evening", "history"].includes(state.view)) renderCatalogView();
     else if (state.view === "library") { if (isAdminMode()) renderLibraryView(); else renderMissingPage(); }
     else if (state.view === "settings") renderSettings();
+    else if (state.view === "missing") renderMissingPage();
     hydrateLazyPosters();
     page.focus({ preventScroll: true });
   }
@@ -6386,8 +6437,10 @@
     return discoveryShelf({ id: "empty-picks", collectionId: "audience", title: "Можно начать с этого", description: "Любимые зрителями", items });
   }
 
-  function renderMissingPage() {
-    page.innerHTML = `<section class="section"><div class="empty-state"><h2>Такой страницы нет</h2><p>Возможно, ссылка устарела.</p><a class="primary-button" href="/" data-view="home">На главную</a></div></section>`;
+  function renderMissingPage({ title = false } = {}) {
+    page.innerHTML = title
+      ? `<section class="section"><div class="empty-state"><h2>Такого фильма или сериала нет</h2><p>Возможно, ссылка устарела. Его можно поискать в каталоге.</p><div class="hero-actions"><a class="primary-button" href="${routeForView("catalog")}" data-view="catalog">Открыть каталог</a><a class="secondary-button" href="/" data-view="home">На главную</a></div></div></section>`
+      : `<section class="section"><div class="empty-state"><h2>Такой страницы нет</h2><p>Возможно, ссылка устарела.</p><a class="primary-button" href="/" data-view="home">На главную</a></div></section>`;
   }
 
   function renderLibraryView() {
@@ -6526,6 +6579,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const enteringTitle = activeTitleId !== id;
     // Look the players up while the viewer reads the page, so "Смотреть" is instant.
     if (enteringTitle && !awaitingPremierePlayback(item)) { loadPlayerOptions(item).catch(() => {}); loadAllohaEpisodes(item); }
+    if (enteringTitle && Number(item.catalogId || 0) === 2205 && !item.episodePosterUrls && !episodeAssetsLoading) loadEpisodeAssets();
     // Loading metadata and episodes finishes after the page is already open.
     // Rebuilding the detail DOM must not throw the reader back to the top.
     const preservedScrollY = enteringTitle ? 0 : window.scrollY;

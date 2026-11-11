@@ -1009,6 +1009,11 @@ span.studio-sort-button::after { display: none; }
 /* ----- Тост ----- */
 .toast { position: fixed; z-index: var(--z-toast); left: 50%; bottom: var(--sp-5); display: grid; gap: 2px; width: max-content; max-width: calc(100vw - 2 * var(--gutter)); padding: var(--sp-3) 18px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface-2); transform: translateX(-50%); animation: fade-up var(--t) var(--ease) both; }
 .toast span { color: var(--muted); font-size: var(--s-1); }
+.toast-action { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--sp-4); }
+/* The extension offer sits in the same corner: the toast goes above it. */
+.app-shell:has(.adfilter-offer) .toast { bottom: calc(var(--sp-5) + 84px); }
+.toast-action > span { display: grid; gap: 2px; }
+.toast-action strong { color: var(--text); font-size: var(--s0); }
 .empty-state + .discovery-shelf { margin-top: 0; }
 .upcoming-sort { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-6); }
 
