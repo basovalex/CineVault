@@ -1,16 +1,22 @@
 {
-  "name": "CineVault — кино для нас",
+  "name": "CineVault — кино для вас",
   "short_name": "CineVault",
   "lang": "ru",
   "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["window-controls-overlay", "standalone"],
+  "display_override": [
+    "window-controls-overlay",
+    "standalone"
+  ],
   "orientation": "any",
-  "background_color": "#08070c",
-  "theme_color": "#15132a",
-  "categories": ["entertainment", "video"],
+  "background_color": "#08090b",
+  "theme_color": "#08090b",
+  "categories": [
+    "entertainment",
+    "video"
+  ],
   "shortcuts": [
     {
       "name": "Для вас",
@@ -28,5 +34,27 @@
       "url": "/history/"
     }
   ],
-  "icons": [{"src": "./favicon.svg", "sizes": "any", "type": "image/svg+xml"}]
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/assets/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/assets/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/assets/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
 }

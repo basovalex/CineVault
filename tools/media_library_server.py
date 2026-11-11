@@ -3142,6 +3142,12 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")
         elif request_path.startswith("/assets/") and self.command in {"GET", "HEAD"}:
             self.send_header("Cache-Control", "public, max-age=604800")
+        # Baseline protection for every answer; the page's own CSP is a <meta> in index.html.
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'self'")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         super().end_headers()
 
     def log_request(self, code="-", size="-") -> None:

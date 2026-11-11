@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#08090b">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self'; connect-src 'self' https:; media-src 'self' blob: https:; frame-src https:; worker-src 'self' blob:; manifest-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'">
   <link rel="preconnect" href="https://avatars.mds.yandex.net">
   <link rel="preconnect" href="https://cdnrrviubnyuntopbez5.svc.cdn.yandex.net">
   <link rel="preload" href="/assets/fonts/onest-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
@@ -16,27 +17,12 @@
   <base href="/">
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
   <link rel="canonical" href="/">
   <link rel="sitemap" type="application/xml" href="/sitemap.xml">
   <title>CineVault — кино для вас</title>
-  <script>
-    // The home page waits for the first catalogue page: ask for it while app.js downloads.
-    // app.js takes the answer only if it would make exactly the same request.
-    (() => {
-      if (location.pathname !== "/") return;
-      let saved = {};
-      try { saved = JSON.parse(localStorage.getItem("cinevault.state.v1") || "{}"); } catch (error) { saved = {}; }
-      const params = new URLSearchParams({ page: String(Number(saved.catalogPage) || 1), limit: "50", sort: saved.catalogSort === "year" ? "fresh" : saved.catalogSort || "now" });
-      if (saved.query) params.set("search", saved.query);
-      if (saved.catalogGenre) params.set("genre", saved.catalogGenre);
-      if (saved.catalogCollection) params.set("collection", saved.catalogCollection);
-      const path = `/api/catalog?${params}`;
-      window.__cvCatalogPrefetch = { path, answer: fetch(path, { headers: { accept: "application/json" } })
-        .then((response) => response.ok ? response.arrayBuffer().then((body) => ({ body, status: response.status, headers: [...response.headers] })) : null)
-        .catch(() => null) };
-    })();
-  </script>
-    <link rel="stylesheet" href="/styles.css?v=20261111-stable-2">
+  <script src="/boot.js?v=20261111-safe-2"></script>
+  <link rel="stylesheet" href="/styles.css?v=20261111-safe-2">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -74,31 +60,9 @@
     <div id="modal-root"></div>
   </div>
   <script src="/config.local.js" defer></script>
-  <script>
-    // hls.js is needed only by the built-in player: fetch it once the first screen is done.
-    // It must not share the slow first seconds with the catalogue and the hero frame.
-    window.addEventListener("load", () => {
-      const add = () => { if (window.Hls || document.getElementById("hls-script")) return; const script = document.createElement("script"); script.id = "hls-script"; script.src = "https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"; script.crossOrigin = "anonymous"; script.async = true; document.head.append(script); };
-      window.setTimeout(() => { if ("requestIdleCallback" in window) window.requestIdleCallback(add, { timeout: 3000 }); else add(); }, 5000);
-    });
-  </script>
   <script src="/accounts.js?v=20261102-iframe-release-3" defer></script>
   <script src="/watch-together.js?v=20261108-catalog-split-1" defer></script>
   <script src="/watch-native.js?v=20261104-native-room-2" defer></script>
-  <script src="/app.js?v=20261111-stable-2" defer></script>
-  <script>
-    if ("serviceWorker" in navigator) {
-      let reloadingForUpdate = false;
-      // On the very first visit the worker takes control too; that is not an update.
-      const updatingFromOldVersion = Boolean(navigator.serviceWorker.controller);
-      navigator.serviceWorker.addEventListener("controllerchange", () => {
-        if (reloadingForUpdate || !updatingFromOldVersion) return;
-        reloadingForUpdate = true;
-        // Текущий плеер и незаполненные формы не перезагружаем.
-        window.dispatchEvent(new Event("cinevault:updateavailable"));
-      });
-      window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js?v=20261111-stable-2", { updateViaCache: "none" }).catch(() => {}));
-    }
-  </script>
+  <script src="/app.js?v=20261111-safe-2" defer></script>
 </body>
 </html>

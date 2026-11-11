@@ -1,7 +1,7 @@
-const SHELL_CACHE = "cinevault-shell-v110";
+const SHELL_CACHE = "cinevault-shell-v112";
 const API_CACHE = "cinevault-api-v1";
 const MEDIA_CACHE = "cinevault-media-v1";
-const SHELL = ["/", "/index.html", "/styles.css", "/config.local.js", "/app.js", "/watch-together.js", "/watch-native.js", "/accounts.js", "/manifest.json", "/favicon.svg", "/assets/fonts/onest-cyrillic.woff2", "/assets/fonts/onest-latin.woff2", "/assets/fonts/geologica-cyrillic.woff2", "/assets/fonts/geologica-latin.woff2"];
+const SHELL = ["/", "/index.html", "/boot.js", "/styles.css", "/config.local.js", "/app.js", "/watch-together.js", "/watch-native.js", "/accounts.js", "/manifest.json", "/favicon.svg", "/assets/fonts/onest-cyrillic.woff2", "/assets/fonts/onest-latin.woff2", "/assets/fonts/geologica-cyrillic.woff2", "/assets/fonts/geologica-latin.woff2"];
 const SHELL_PATHS = new Set(SHELL);
 const CATALOG_API_PATHS = new Set(["/api/catalog", "/api/catalog/index", "/api/catalog/facets"]);
 // How long a fresh answer may take before the last saved copy is shown instead.

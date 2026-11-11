@@ -2552,6 +2552,37 @@
   }
   new MutationObserver(() => window.requestAnimationFrame(enhanceRails)).observe(page, { childList: true, subtree: true });
   const modalRoot = $("#modal-root");
+  // Dialogs: focus moves in, Tab stays inside, the page behind is inert, and focus
+  // returns where it was when the dialog closes. Esc already closes it (see keydown).
+  let focusBeforeModal = null;
+  const focusableSelector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea, iframe, [tabindex]:not([tabindex="-1"])';
+  new MutationObserver(() => {
+    const dialog = modalRoot.querySelector(".modal");
+    const behind = [$(".sidebar"), $(".main-area"), $(".adfilter-offer")].filter(Boolean);
+    if (dialog) {
+      behind.forEach((element) => { element.inert = true; });
+      if (!dialog.contains(document.activeElement)) {
+        if (!focusBeforeModal && document.activeElement && document.activeElement !== document.body) focusBeforeModal = document.activeElement;
+        const first = dialog.querySelector('[data-player-choice], .modal-head ~ * button:not([disabled])') || dialog.querySelector(focusableSelector);
+        (first || dialog).focus?.({ preventScroll: true });
+      }
+    } else {
+      behind.forEach((element) => { element.inert = false; });
+      const back = focusBeforeModal;
+      focusBeforeModal = null;
+      if (back?.isConnected) back.focus({ preventScroll: true });
+    }
+  }).observe(modalRoot, { childList: true, subtree: false });
+  modalRoot.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const dialog = modalRoot.querySelector(".modal");
+    const items = dialog ? [...dialog.querySelectorAll(focusableSelector)].filter((element) => element.getClientRects().length) : [];
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
 
   if ("scrollRestoration" in window.history) window.history.scrollRestoration = "manual";
 
@@ -5961,6 +5992,9 @@
   }
 
   function discoveryShelf({ id, collectionId = id, collectionView = "catalog", eyebrow, title, description, items }) {
+    // Shelves are the shop window: a card without a poster stays in the catalogue, not here.
+    const withPosters = items.filter((item) => item?.posterImage);
+    if (withPosters.length >= 4) items = withPosters;
     if (!items.length) return "";
     return `<section class="discovery-shelf" aria-labelledby="shelf-${escapeHtml(id)}"><div class="section-header discovery-shelf-header"><div>${eyebrow ? `<div class="section-kicker">${escapeHtml(eyebrow)}</div>` : ""}<h2 id="shelf-${escapeHtml(id)}">${escapeHtml(title)}</h2><p>${escapeHtml(description)}</p></div><button class="text-button" data-open-collection="${escapeHtml(collectionId)}" data-collection-view="${escapeHtml(collectionView)}" type="button">Все${uiIcon("arrow-right")}</button></div><div class="discovery-rail" aria-label="${escapeHtml(title)}">${items.map((item) => poster(item, "discovery-poster")).join("")}</div></section>`;
   }
