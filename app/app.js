@@ -17,6 +17,11 @@
   const configuredApiBaseUrl = String(window.CINEVAULT_CONFIG?.apiBaseUrl || "").trim().replace(/\/+$/, "");
   const configuredPublicBaseUrl = String(window.CINEVAULT_CONFIG?.publicBaseUrl || "").trim();
   const viewerToken = String(window.CINEVAULT_CONFIG?.viewerToken || "").trim();
+  // Account sync state (see syncAccountState): declared early, saveState runs during start-up.
+  let accountSyncUser = "";
+  let accountPushTimer = 0;
+  let accountPushedAt = 0;
+  const ACCOUNT_PUSH_GAP_MS = 15000;
   const PLAYBACK_REFRESH_FRESH_MS = 10 * 60 * 1000;
   const PLAYBACK_ERROR_REFRESH_COOLDOWN_MS = 60 * 1000;
   const PLAYBACK_REFRESH_TIMEOUT_MS = 45 * 1000;
@@ -3340,7 +3345,87 @@
     } catch { return { ...defaultState, catalogMoodOnly: false, catalogPlayableOnly: false }; }
   }
 
-  function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+  function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); scheduleAccountPush(); }
+
+  // Favourites, watchlist, history and "continue watching" follow the account across devices.
+  // The server merges what each device sends; the newer record wins and removals are kept as marks.
+  function accountSyncPayload() {
+    const now = Date.now();
+    const marks = state.savedMarks && typeof state.savedMarks === "object" ? state.savedMarks : {};
+    const payload = { history: {}, progress: state.progress || {} };
+    ["favorites", "watchlist"].forEach((name) => {
+      const current = new Set((state[name] || []).map(String));
+      const list = { ...(marks[name] || {}) };
+      current.forEach((id) => { if (!list[id]?.on) list[id] = { on: true, at: now }; });
+      Object.keys(list).forEach((id) => { if (list[id].on && !current.has(id)) list[id] = { on: false, at: now }; });
+      payload[name] = list;
+    });
+    state.savedMarks = { favorites: payload.favorites, watchlist: payload.watchlist };
+    const seen = state.historyAt && typeof state.historyAt === "object" ? state.historyAt : {};
+    (state.history || []).forEach((id, index, list) => { payload.history[id] = Number(seen[id]) || list.length - index; });
+    return payload;
+  }
+  function applyAccountState(merged) {
+    const ordered = (marks) => Object.entries(marks || {}).filter(([, mark]) => mark?.on).sort((a, b) => a[1].at - b[1].at).map(([id]) => id);
+    state.savedMarks = { favorites: merged.favorites || {}, watchlist: merged.watchlist || {} };
+    state.favorites = ordered(merged.favorites);
+    state.watchlist = ordered(merged.watchlist);
+    state.historyAt = merged.history || {};
+    state.history = Object.entries(state.historyAt).sort((a, b) => b[1] - a[1]).map(([id]) => id).slice(0, 100);
+    state.progress = merged.progress || {};
+  }
+  // Points the account saved from players (before this sync existed, or on the apps) join "continue watching".
+  async function importAccountProgress(accounts) {
+    try {
+      const { entries = [], contexts = [] } = await accounts.api("history");
+      const solo = new Set(contexts.filter((context) => context.kind === "solo").map((context) => context.id));
+      entries.filter((entry) => solo.has(entry.context_id) && String(entry.edition || "").startsWith("alloha:")).reverse().forEach((entry) => {
+        const key = `${entry.title_id}-alt`;
+        const at = Number(entry.updated_at || 0) * 1000;
+        if ((state.progress[key]?.updatedAt || 0) >= at) return;
+        state.progress[key] = { titleId: entry.title_id, providerId: entry.edition, player: "alternative", translationId: String(entry.edition).replace(/^alloha:/, ""),
+          seasonNumber: entry.season || null, episodeNumber: entry.episode || null, position: Number(entry.position || 0), duration: Number(entry.duration || 0), completed: Boolean(entry.completed), updatedAt: at };
+        state.history = [entry.title_id, ...state.history.filter((id) => id !== entry.title_id)].slice(0, 100);
+        state.historyAt = { ...(state.historyAt || {}), [entry.title_id]: Math.max(Number(state.historyAt?.[entry.title_id]) || 0, at) };
+      });
+    } catch { /* history is a bonus: the site state still syncs */ }
+  }
+  async function syncAccountState() {
+    const accounts = window.CineVaultAccounts;
+    const user = accounts?.user;
+    if (!user || isShowcase() || accountSyncUser === user.id) return;
+    accountSyncUser = user.id;
+    try {
+      // Another account used this browser before: its list must not leak into this one.
+      const foreign = state.syncedAccount && state.syncedAccount !== user.id;
+      if (foreign) { state.favorites = []; state.watchlist = []; state.history = []; state.historyAt = {}; state.progress = {}; state.savedMarks = {}; }
+      await importAccountProgress(accounts);
+      const { state: merged } = await accounts.api("site-state", { state: accountSyncPayload() });
+      applyAccountState(merged);
+      state.syncedAccount = user.id;
+      accountPushedAt = Date.now();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      if (activeTitleId) renderDetails(activeTitleId, { skipPlaybackRefresh: true });
+      else render();
+    } catch { accountSyncUser = ""; }
+  }
+  function pushAccountState(keepalive = false) {
+    window.clearTimeout(accountPushTimer);
+    accountPushTimer = 0;
+    const accounts = window.CineVaultAccounts;
+    if (!accounts?.user || accounts.user.id !== accountSyncUser || state.syncedAccount !== accountSyncUser || isShowcase()) return;
+    accountPushedAt = Date.now();
+    const headers = { "Content-Type": "application/json", accept: "application/json", "X-CineVault-CSRF": accounts.csrf || "" };
+    if (viewerToken) headers.Authorization = `Bearer ${viewerToken}`;
+    fetch("/api/account/site-state", { method: "POST", headers, credentials: "same-origin", keepalive, body: JSON.stringify({ state: accountSyncPayload() }) }).catch(() => {});
+  }
+  function scheduleAccountPush() {
+    if (!accountSyncUser || accountPushTimer) return;
+    accountPushTimer = window.setTimeout(() => pushAccountState(), Math.max(1000, ACCOUNT_PUSH_GAP_MS - (Date.now() - accountPushedAt)));
+  }
+  window.addEventListener("cinevault:account", (event) => { if (event.detail?.user) syncAccountState(); else accountSyncUser = ""; });
+  window.addEventListener("pagehide", () => { if (accountPushTimer) pushAccountState(true); });
+  window.setTimeout(() => window.CineVaultAccounts?.ready?.then(() => syncAccountState()), 0);
 
   // Watch progress belongs to this browser: "Продолжить просмотр" differs per device.
   async function loadCatalogProgress() {
@@ -3459,15 +3544,20 @@
     return episodeAssetStates[item.id] || { loading: false, error: "" };
   }
   async function loadOnlineEpisodeAssets(item) {
-    if ((!item?.episodeDataProvider && !item?.episodeDataFile) || episodeAssetStates[item.id]?.loading || episodeAssetStates[item.id]?.loaded) return;
+    // One attempt per title: a failed load must not start another on every redraw.
+    if (item?.kind !== "series" || episodeAssetStates[item.id]) return;
     const assetState = episodeAssetStates[item.id] = { loading: true, error: "", loaded: false };
     try {
       const metadataFile = item.episodeDataFile || "";
+      // Stills found on TMDB (tools/fill_episode_stills.py) beat the catalogue's own pictures, which are often of other titles.
+      const stillsRequest = fetch(`/data/stills/${encodeURIComponent(item.id)}.json`, { headers: { accept: "application/json" } })
+        .then((response) => response.ok ? response.json() : {}).catch(() => ({}));
       let localRows = [];
       if (metadataFile) {
-        const metadataResponse = await fetch(metadataFile, { cache: "no-store", headers: { accept: "application/json" } });
-        localRows = metadataResponse.ok ? await metadataResponse.json() : [];
+        const metadataResponse = await fetch(metadataFile, { cache: "no-store", headers: { accept: "application/json" } }).catch(() => null);
+        localRows = metadataResponse?.ok ? await metadataResponse.json().catch(() => []) : [];
       }
+      const stills = await stillsRequest;
       const endpoint = item.episodeDataProvider === "tvmaze"
         ? `/api/catalog/title/tvmaze/series/${encodeURIComponent(item.tvmazeId)}`
         : "";
@@ -3493,7 +3583,6 @@
         if (key !== "0-0") sourceEpisodeMap.set(key, episode);
       });
       const sourceEpisodes = [...sourceEpisodeMap.values()];
-      if (!sourceEpisodes.length) throw new Error("Пустой список серий");
       const sourceRows = await loadSourceRowsForItem(item);
       const episodeTitles = {};
       const episodeOriginalTitles = {};
@@ -3513,10 +3602,17 @@
         const image = episode.image?.original || episode.image?.medium || episode.image || episode.poster || "";
         if (image && allowEpisodePosters) episodePosterUrls[season][number] = image;
       });
-      item.episodeTitles = episodeTitles;
-      item.episodeOriginalTitles = episodeOriginalTitles;
+      Object.entries(stills && typeof stills === "object" ? stills : {}).forEach(([season, episodes]) => {
+        if (!episodes || typeof episodes !== "object") return;
+        if (!episodePosterUrls[season]) episodePosterUrls[season] = {};
+        Object.entries(episodes).forEach(([number, url]) => { if (/^https:\/\/image\.tmdb\.org\//.test(String(url))) episodePosterUrls[season][number] = url; });
+      });
+      if (sourceEpisodes.length) {
+        item.episodeTitles = episodeTitles;
+        item.episodeOriginalTitles = episodeOriginalTitles;
+        item.episodeSourceTokens = sourceTokensFromRows(sourceRows);
+      }
       item.episodePosterUrls = episodePosterUrls;
-      item.episodeSourceTokens = sourceTokensFromRows(sourceRows);
       assetState.loaded = true;
     } catch (error) {
       assetState.error = "Не удалось загрузить список серий.";
@@ -4911,6 +5007,15 @@
     if (alloha?.length && !hasOwnEpisodeSources(item)) return alloha;
     return (item?.seasons || []).map((count, index) => ({ number: index + 1, episodes: Array.from({ length: count }, (_, episode) => episode + 1) }));
   }
+  // The source's page opens faster when DNS and TLS are done while the title page is read.
+  function warmPlayerConnection() {
+    if (document.querySelector("link[data-player-warm]")) return;
+    const link = document.createElement("link");
+    link.rel = "preconnect";
+    link.href = ALTERNATIVE_PLAYER_ORIGIN;
+    link.dataset.playerWarm = "";
+    document.head.append(link);
+  }
   function loadAllohaEpisodes(item) {
     const kinopoiskId = Number(item?.kinopoiskId || item?.kinopoisk_id || 0);
     if (item?.kind !== "series" || !kinopoiskId || allohaEpisodeLists.has(kinopoiskId)) return;
@@ -5300,6 +5405,7 @@
     const titleId = String(id || "").trim();
     if (!titleId) return;
     state.history = [titleId, ...state.history.filter((entry) => entry !== titleId)].slice(0, 100);
+    state.historyAt = { ...(state.historyAt || {}), [titleId]: Date.now() };
   }
   function persistAndRender() { saveState(); render(); }
   // A menu of our own instead of a native <select>: Chrome on Windows would not open
@@ -6726,7 +6832,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     stopDetailPrebuffer();
     const enteringTitle = activeTitleId !== id;
     // Look the players up while the viewer reads the page, so "Смотреть" is instant.
-    if (enteringTitle && !awaitingPremierePlayback(item)) { loadPlayerOptions(item).catch(() => {}); loadAllohaEpisodes(item); }
+    if (enteringTitle && !awaitingPremierePlayback(item)) { loadPlayerOptions(item).catch(() => {}); loadAllohaEpisodes(item); warmPlayerConnection(); }
     if (enteringTitle && Number(item.catalogId || 0) === 2205 && !item.episodePosterUrls && !episodeAssetsLoading) loadEpisodeAssets();
     if (item.kind === "series" && !episodeRatingsCache.has(item.id)) loadEpisodeRatings(item);
     // Loading metadata and episodes finishes after the page is already open.
@@ -6927,7 +7033,8 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       const ratio = !seen && Number(episodeProgress?.duration) > 0 ? Math.min(100, Math.round((Number(episodeProgress.position) / Number(episodeProgress.duration)) * 100)) : 0;
       const poster = episodePosterMarkup(item, selectedSeason, episode, title, episodePlayable);
       const rated = episodeRatingFor(item, selectedSeason, episode);
-      return `<article class="episode-card${current ? " is-now" : ""}${seen ? " is-seen" : ""}">${ratio > 0 ? `<span class="episode-card-progress" style="--progress:${ratio}%" aria-hidden="true"></span>` : ""}${poster}<div class="episode-card-copy"><div class="episode-card-kicker">Сезон ${selectedSeason} · серия ${episode}${rated ? ` <span class="episode-rating is-r${ratingStep(rated.rating)}" title="Оценка IMDb">${rated.rating.toFixed(1)}</span>` : ""}</div><h3>${escapeHtml(title)}</h3>${episodeVoiceMarkup(item, selectedSeason, episode, title)}${progressText ? `<p>${escapeHtml(progressText)}</p>` : ""}</div></article>`;
+      const hasStill = Boolean(item.episodePosterUrls?.[String(selectedSeason)]?.[String(episode)]);
+      return `<article class="episode-card${hasStill ? " has-still" : ""}${current ? " is-now" : ""}${seen ? " is-seen" : ""}">${ratio > 0 ? `<span class="episode-card-progress" style="--progress:${ratio}%" aria-hidden="true"></span>` : ""}${poster}<div class="episode-card-copy"><div class="episode-card-kicker">Сезон ${selectedSeason} · серия ${episode}${rated ? ` <span class="episode-rating is-r${ratingStep(rated.rating)}" title="Оценка IMDb">${rated.rating.toFixed(1)}</span>` : ""}</div><h3>${escapeHtml(title)}</h3>${episodeVoiceMarkup(item, selectedSeason, episode, title)}${progressText ? `<p>${escapeHtml(progressText)}</p>` : ""}</div></article>`;
     }).join("");
     const loadingNote = assetsLoading ? `<div class="episode-loading-note" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю список серий…</div>` : isImportedSeries && episodeImagesLoading ? `<div class="episode-loading-note" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю серии сезона…</div>` : assetsError ? `<div class="episode-loading-note is-error" role="status">${escapeHtml(assetsError)} Показываю доступные данные.</div>` : "";
     return `<section class="section"><div class="section-header"><div><h2>Сезоны и серии</h2><span>${countWord(seasonCount, "сезон", "сезона", "сезонов")} · ${countWord(seasonList.reduce((sum, season) => sum + season.episodes.length, 0), "серия", "серии", "серий")}</span></div>${sourceAction}</div><div class="season-tabs">${seasonList.map((season) => `<button class="filter-button ${selectedSeason === season.number ? "is-active" : ""}" data-season="${season.number}" type="button">Сезон ${season.number}</button>`).join("")}</div>${loadingNote}<div class="episode-list is-season-entering">${episodeRows}</div></section>${episodeMapMarkup(item)}`;
@@ -7584,9 +7691,39 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     };
     window.addEventListener("cinevault:progress-choice", onProgressChoice);
     window.addEventListener("message", onPlayerMessage);
-    const showOption = (index) => {
-      const option = options[index];
+    // Which voices have an episode; a voice without it shows the source's error instead of video.
+    const voicesFor = (season, episode) => allohaEpisodeLists.get(kinopoiskId)?.find((entry) => entry.number === Number(season))?.voices?.[String(episode)] || null;
+    const firstEpisodeWithVoice = (voiceId) => {
+      const seasons = allohaEpisodeLists.get(kinopoiskId) || [];
+      const current = seasons.find((entry) => entry.number === Number(seasonNumber));
+      for (const season of [current, ...seasons].filter(Boolean)) {
+        const episode = season.episodes.find((number) => season.voices?.[String(number)]?.includes(voiceId));
+        if (episode) return [season.number, episode];
+      }
+      return null;
+    };
+    const showOption = (index, { chosen = false } = {}) => {
+      let option = options[index];
       if (!option) return;
+      let voiceNote = "";
+      if (!roomId && item.kind === "series") {
+        const seasons = pickableSeasons();
+        if (seasons.length && !(seasonNumber && episodeNumber)) { seasonNumber = seasons[0].number; episodeNumber = seasons[0].episodes[0]; }
+        const voices = voicesFor(seasonNumber, episodeNumber);
+        if (voices && !voices.includes(String(option.id))) {
+          const spot = chosen ? firstEpisodeWithVoice(String(option.id)) : null;
+          const other = chosen ? -1 : options.findIndex((candidate) => voices.includes(String(candidate.id)));
+          if (spot) {
+            [seasonNumber, episodeNumber] = spot;
+            started = false; position = 0; resumeTarget = 0;
+            voiceNote = ` В этой озвучке нет прежней серии — включил ${episodeTag(seasonNumber, episodeNumber)}.`;
+          } else if (other >= 0) {
+            voiceNote = ` В озвучке «${option.name}» этой серии нет — включил «${options[other].name}».`;
+            index = other;
+            option = options[other];
+          }
+        }
+      }
       if (activeOption && activeOption.id !== option.id) { saveProgress(false); started = false; resumeTarget = position; }
       activeOption = option;
       accountPlayback = null;
@@ -7620,7 +7757,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       frame.src = url.toString();
       frame.hidden = false;
       const resumeText = resume && item.kind === "series" && episodeNumber ? ` Продолжу: ${episodeTag(seasonNumber, episodeNumber)}, с ${formatTime(position)}.` : resumeTarget > 30 ? ` Продолжу с ${formatTime(resumeTarget)}${episodeNumber && item.kind === "series" ? `, ${episodeTag(seasonNumber, episodeNumber)}` : ""}.` : "";
-      status.textContent = `${option.name}${option.quality ? ` · ${option.quality}` : ""}.${resumeText} Место просмотра сохраняется в «Продолжить просмотр».`;
+      status.textContent = `${option.name}${option.quality ? ` · ${option.quality}` : ""}.${voiceNote}${resumeText} Место просмотра сохраняется в «Продолжить просмотр».`;
     };
     infoTimer = window.setInterval(() => { if (started) { sendCommand("getTimeSave"); if (!duration) sendCommand("duration"); } }, 2000);
     const loadOptions = async () => {
@@ -7636,6 +7773,16 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       frame.hidden = true;
       frame.removeAttribute("src");
       status.textContent = "Загружаю список озвучек…";
+      // The episode list says which voice has which episode; fetched alongside, waited for briefly.
+      const episodesReady = item.kind === "series" && !allohaEpisodeLists.get(kinopoiskId)?.some((season) => season.voices)
+        ? Promise.race([
+          apiFetch(`/api/alloha-episodes?kinopoisk=${encodeURIComponent(kinopoiskId)}`, { headers: { accept: "application/json" } })
+            .then((response) => response.ok ? response.json() : null)
+            .then((payload) => { if (Array.isArray(payload?.seasons) && payload.seasons.length) allohaEpisodeLists.set(kinopoiskId, payload.seasons); })
+            .catch(() => {}),
+          new Promise((resolve) => window.setTimeout(resolve, 4000)),
+        ])
+        : null;
       try {
         const response = await apiFetch(`/api/player-options?kinopoisk=${encodeURIComponent(kinopoiskId)}`, {
           cache: "no-store",
@@ -7656,6 +7803,8 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
         });
         voiceSelect.disabled = options.length < 2;
         if (options.length) {
+          await episodesReady;
+          if (closed || currentRequest !== requestNumber) return;
           const wantedId = roomContent?.translation || preferredId;
           const byId = wantedId ? options.findIndex((option) => String(option.id) === wantedId) : -1;
           if (resumeRecord && byId < 0) { status.textContent = "Прежняя озвучка недоступна. Откройте карточку и выберите другой вариант; сохранённая позиция не изменена."; return; }
@@ -7687,7 +7836,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       if (roomSync) {
         if (!roomSync.isHost) { voiceSelect.value = String(options.findIndex(o => String(o.id) === roomSync.state?.translation)); return; }
         roomSync.command("content", { translation: String(options[Number(voiceSelect.value)].id), season: Number(seasonNumber || 0), episode: Number(episodeNumber || 0), position }).catch(error => { status.textContent = error.message; });
-      } else showOption(Number(voiceSelect.value));
+      } else showOption(Number(voiceSelect.value), { chosen: true });
     });
     togetherButton.addEventListener("click", async () => {
       togetherButton.disabled = true;

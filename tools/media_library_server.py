@@ -374,7 +374,16 @@ def alloha_episode_list(page: str) -> list[Dict[str, Any]]:
             continue
         numbers = sorted(int(episode) for episode in episodes if str(episode).isdigit() and int(episode) > 0)
         if numbers:
-            seasons.append({"number": int(season), "episodes": numbers})
+            entry: Dict[str, Any] = {"number": int(season), "episodes": numbers}
+            # Which voices have each episode ("t42" -> "42"): a voice without it shows an error instead of video.
+            voices = {
+                str(number): sorted({str(key)[1:] for key in (episodes.get(str(number)) or {}) if str(key).startswith("t") and str(key)[1:].isdigit()}, key=int)
+                for number in numbers if isinstance(episodes.get(str(number)), dict)
+            }
+            voices = {number: ids for number, ids in voices.items() if ids}
+            if voices:
+                entry["voices"] = voices
+            seasons.append(entry)
     return sorted(seasons, key=lambda season: season["number"])
 
 

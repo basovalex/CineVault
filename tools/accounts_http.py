@@ -41,6 +41,8 @@ def handle(handler, method, parsed):
                     result = {'contexts': store.contexts(current['id'])}
                 elif route == 'history':
                     result = {'entries': store.history(current['id'], params.get('context_id', [None])[0]), 'contexts': store.contexts(current['id'])}
+                elif route == 'site-state':
+                    result = store.site_state(current['id'])
                 elif route == 'progress':
                     data = {key: values[0] for key, values in params.items()}
                     result = store.get_progress(current['id'], data.get('context_id', ''), data)
@@ -81,6 +83,8 @@ def handle(handler, method, parsed):
                     result = {'context_id': store.accept_invite(current['id'], data.get('token', ''))}
                 elif route == 'progress':
                     result = store.write_progress(current['id'], data.get('context_id', ''), data)
+                elif route == 'site-state':
+                    result = store.save_site_state(current['id'], data.get('state'))
                 elif route == 'hide-history':
                     store.hide_history(current['id'], data.get('context_id', ''), data.get('title_id', ''))
                     result = {'ok': True}

@@ -89,6 +89,8 @@ class Accounts:
             CREATE TABLE IF NOT EXISTS account_hidden_history (
               user_id TEXT NOT NULL, context_id TEXT NOT NULL, title_id TEXT NOT NULL,
               PRIMARY KEY(user_id,context_id,title_id));
+            CREATE TABLE IF NOT EXISTS account_site_state (
+              user_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at REAL NOT NULL);
             ''')
             db.commit()
 
@@ -193,6 +195,7 @@ class Accounts:
             self.db.execute('DELETE FROM account_progress WHERE context_id=?', (personal,))
             self.db.execute('DELETE FROM account_watch_events WHERE context_id=?', (personal,))
             self.db.execute('DELETE FROM context_invites WHERE owner_id=?', (actor['id'],))
+            self.db.execute('DELETE FROM account_site_state WHERE user_id=?', (actor['id'],))
             self.db.commit()
 
     def context_for(self, user_ids):
@@ -349,3 +352,66 @@ class Accounts:
         with self.lock:
             self.db.execute('UPDATE watch_contexts SET writer_room=NULL,writer_until=0 WHERE writer_room=?', (room_id,))
             self.db.commit()
+
+    def site_state(self, actor_id):
+        with self.lock:
+            row = self.db.execute('SELECT state_json FROM account_site_state WHERE user_id=?', (actor_id,)).fetchone()
+        return {'state': json.loads(row['state_json']) if row else merge_site_state({}, {})}
+
+    def save_site_state(self, actor_id, incoming):
+        """Merge what a device sends with what other devices saved; the newer record wins."""
+        if not isinstance(incoming, dict):
+            raise AccountError('Нужен JSON-объект')
+        with self.lock:
+            row = self.db.execute('SELECT state_json FROM account_site_state WHERE user_id=?', (actor_id,)).fetchone()
+            merged = merge_site_state(json.loads(row['state_json']) if row else {}, incoming)
+            encoded = json.dumps(merged, ensure_ascii=False, separators=(',', ':'))
+            if len(encoded) > SITE_STATE_LIMIT:
+                raise AccountError('Слишком много данных', 413)
+            self.db.execute('INSERT INTO account_site_state VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json, updated_at=excluded.updated_at',
+                            (actor_id, encoded, self.clock()))
+            self.db.commit()
+        return {'state': merged}
+
+
+SITE_STATE_LIMIT = 768 * 1024
+SITE_MARK_LISTS = ('favorites', 'watchlist')
+
+
+def _stamp(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) and number > 0 else 0.0
+
+
+def merge_site_state(saved, incoming):
+    """Favourites and watchlist are {id: {on, at}} so a removal on one device reaches the others;
+    history is {id: last seen}; progress is the site's own records, the latest per key."""
+    result = {}
+    for name in SITE_MARK_LISTS:
+        marks = {}
+        for source in (saved, incoming):
+            for key, mark in ((source or {}).get(name) or {}).items() if isinstance((source or {}).get(name), dict) else ():
+                if not isinstance(mark, dict) or not str(key).strip() or len(str(key)) > 120:
+                    continue
+                entry = {'on': bool(mark.get('on')), 'at': _stamp(mark.get('at'))}
+                if str(key) not in marks or entry['at'] >= marks[str(key)]['at']:
+                    marks[str(key)] = entry
+        result[name] = dict(sorted(marks.items(), key=lambda item: item[1]['at'], reverse=True)[:2000])
+    history = {}
+    for source in (saved, incoming):
+        for key, seen in ((source or {}).get('history') or {}).items() if isinstance((source or {}).get('history'), dict) else ():
+            if str(key).strip() and len(str(key)) <= 120:
+                history[str(key)] = max(history.get(str(key), 0.0), _stamp(seen))
+    result['history'] = dict(sorted(history.items(), key=lambda item: item[1], reverse=True)[:300])
+    progress = {}
+    for source in (saved, incoming):
+        for key, record in ((source or {}).get('progress') or {}).items() if isinstance((source or {}).get('progress'), dict) else ():
+            if not isinstance(record, dict) or not str(key).strip() or len(str(key)) > 160:
+                continue
+            if str(key) not in progress or _stamp(record.get('updatedAt')) >= _stamp(progress[str(key)].get('updatedAt')):
+                progress[str(key)] = record
+    result['progress'] = dict(sorted(progress.items(), key=lambda item: _stamp(item[1].get('updatedAt')), reverse=True)[:600])
+    return result

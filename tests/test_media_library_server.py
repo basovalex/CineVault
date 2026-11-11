@@ -106,6 +106,8 @@ class MediaLibraryTests(unittest.TestCase):
         self.assertEqual(alloha_episode_list(page), [{"number": 2, "episodes": [1]}, {"number": 4, "episodes": [1, 13]}])
         self.assertEqual(alloha_episode_list("""const fileList = JSON.parse('{"type":"movie","all":{}}');"""), [])
         self.assertEqual(alloha_episode_list("<html></html>"), [])
+        voiced = """const fileList = JSON.parse('{"type":"serial","all":{"1":{"1":{"t42":{},"t63":{}},"2":{"t63":{},"x":{}}}}}');"""
+        self.assertEqual(alloha_episode_list(voiced), [{"number": 1, "episodes": [1, 2], "voices": {"1": ["42", "63"], "2": ["63"]}}])
 
     def test_player_options_endpoint_requires_catalog_card(self):
         handler = lambda *args, **kwargs: MediaLibraryHandler(*args, directory=self.temp_dir.name, **kwargs)

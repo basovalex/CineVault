@@ -122,6 +122,30 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(error.exception.status,429)
 
 
+    def test_site_state_merges_devices_and_keeps_removals(self):
+        first = {'favorites': {'a': {'on': True, 'at': 10}, 'b': {'on': True, 'at': 10}}, 'history': {'a': 10},
+                 'progress': {'a-alt': {'titleId': 'a', 'position': 50, 'updatedAt': 10}}}
+        self.store.save_site_state(self.sid, first)
+        second = {'favorites': {'b': {'on': False, 'at': 20}, 'c': {'on': True, 'at': 5}}, 'history': {'c': 30, 'a': 5},
+                  'progress': {'a-alt': {'titleId': 'a', 'position': 10, 'updatedAt': 5}, 'c-alt': {'titleId': 'c', 'position': 7, 'updatedAt': 30}}}
+        state = self.store.save_site_state(self.sid, second)['state']
+        self.assertEqual(state['favorites'], {'a': {'on': True, 'at': 10.0}, 'b': {'on': False, 'at': 20.0}, 'c': {'on': True, 'at': 5.0}} | {})
+        self.assertEqual(list(state['history']), ['c', 'a'])
+        self.assertEqual(state['history']['a'], 10.0)
+        self.assertEqual(state['progress']['a-alt']['position'], 50)
+        self.assertEqual(list(state['progress']), ['c-alt', 'a-alt'])
+        self.assertEqual(self.store.site_state(self.sid)['state'], state)
+        self.assertEqual(self.store.site_state(self.mid)['state']['favorites'], {})
+
+    def test_site_state_ignores_junk_and_is_removed_with_the_account(self):
+        state = self.store.save_site_state(self.sid, {'favorites': {'x': 'yes', '': {'on': True}}, 'history': [1], 'progress': {'k': 5}})['state']
+        self.assertEqual(state, {'favorites': {}, 'watchlist': {}, 'history': {}, 'progress': {}})
+        with self.assertRaises(AccountError):
+            self.store.save_site_state(self.sid, ['not', 'a', 'dict'])
+        self.store.save_site_state(self.sid, {'favorites': {'a': {'on': True, 'at': 1}}})
+        self.store.delete({'id': self.sid}, 'example-password-1')
+        self.assertIsNone(self.library._db.execute('SELECT 1 FROM account_site_state WHERE user_id=?', (self.sid,)).fetchone())
+
 if __name__ == '__main__':unittest.main()
 
 class AccountRoomTests(unittest.TestCase):
