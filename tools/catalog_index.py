@@ -33,10 +33,14 @@ INDEX_FILENAME = "catalog_index.sqlite3"
 ALLOHA_FILENAME = "catalog_alloha.jsonl"
 SCHEMA_VERSION = 6
 FRESH_MIN_VOTES = 200
+# The world audience first: IMDb votes per year of the title's life. Kinopoisk votes count
+# a little, so a title that IMDb does not know still has a place. A weak title (IMDb rating,
+# or Kinopoisk when IMDb has none, under 6) is held back.
 NOW_INTEREST_SQL = (
-    "(c.votes + CAST(COALESCE(json_extract(c.summary_json, '$.imdbVoteCount'), 0) AS INTEGER)) * 1.0"
+    "(CAST(COALESCE(json_extract(c.summary_json, '$.imdbVoteCount'), 0) AS INTEGER) + c.votes * 0.15) * 1.0"
     " / MAX(1, CAST(strftime('%Y', 'now') AS INTEGER) - c.year + 1)"
-    " * CASE WHEN COALESCE(CAST(json_extract(c.summary_json, '$.ratingKinopoisk') AS REAL),"
+    " * CASE WHEN COALESCE(NULLIF(CAST(json_extract(c.summary_json, '$.imdbRating') AS REAL), 0),"
+    " CAST(json_extract(c.summary_json, '$.ratingKinopoisk') AS REAL),"
     " CAST(json_extract(c.summary_json, '$.rating') AS REAL), 0) BETWEEN 0.1 AND 5.99 THEN 0.4 ELSE 1 END"
 )
 FRESH_MIN_RATING = 5.0

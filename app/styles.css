@@ -26,6 +26,9 @@
   --track-hover: rgba(245, 246, 247, .5);
   --surface-glass: rgba(27, 30, 36, .82);
   --shade: rgba(8, 9, 11, .72);
+  --veil-light: rgba(8, 9, 11, .2);
+  --veil: rgba(8, 9, 11, .55);
+  --veil-strong: rgba(8, 9, 11, .85);
   --danger: #ff6b5e;
   --display: "Geologica", "Onest", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --body: "Onest", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -621,7 +624,8 @@ select option { background-color: var(--surface); color: var(--text); }
 .player-title-logo { display: block; max-width: min(360px, 56vw); max-height: 52px; object-fit: contain; }
 .player-head-actions { display: flex; align-items: center; gap: 8px; }
 .player-head-actions #alternative-together svg { width: 20px; height: 20px; stroke: currentColor; }
-.player-modal:has(#alternative-player-frame) .player-toolbar:not(:has(#room-start-season)) { display: none; }
+/* Our voice list stays visible: when the saved voice has no such episode, the source hides its own lists. */
+.player-modal:has(#alternative-player-frame) .player-toolbar { margin: 0 0 var(--sp-3); }
 #alternative-player-status[hidden] { display: none; }
 
 .adfilter-guide ol { display: grid; gap: 12px; margin: 8px 0 14px; padding-left: 22px; }
@@ -757,6 +761,8 @@ button { cursor: pointer; }
 .discovery-rail { display: grid; grid-auto-flow: column; grid-auto-columns: calc((100% - var(--sp-4) * 6) / 7); gap: var(--sp-4); overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x mandatory; scrollbar-width: none; }
 .discovery-rail::-webkit-scrollbar { display: none; }
 .discovery-rail > * { scroll-snap-align: start; }
+/* With a mouse or trackpad snapping fights the wheel and stops the rail; the arrows page through instead. */
+@media (hover: hover) and (pointer: fine) { .discovery-rail { scroll-snap-type: none; } }
 .rail-arrow { position: absolute; z-index: 2; top: 0; display: grid; place-items: center; width: 44px; height: 44px; margin-top: calc((100% - var(--sp-4) * 6) / 7 * .75 - 22px); border: 0; border-radius: 50%; background: var(--scrim); color: var(--text); opacity: 0; transition: opacity var(--t) var(--ease), background-color var(--t) var(--ease); }
 .rail-arrow.is-prev { left: calc(var(--sp-2) * -1); }
 .rail-arrow.is-next { right: calc(var(--sp-2) * -1); }
@@ -1006,6 +1012,21 @@ span.studio-sort-button::after { display: none; }
 .frame-help { margin: var(--sp-3) 0 0; color: var(--muted); font-size: var(--s-1); text-align: center; }
 .frame-help .text-button { padding: 0; font-size: inherit; color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
 
+/* ----- О CineVault ----- */
+.about-hero { position: relative; display: grid; align-items: end; min-height: min(70vh, 640px); margin: calc(-1 * (var(--header-h) + var(--sp-5))) 0 0 calc(50% - 50vw); width: 100vw; padding: calc(var(--header-h) + var(--sp-6)) var(--gutter) var(--sp-7); overflow: hidden; }
+.about-wall { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: var(--sp-3); padding: var(--sp-3); opacity: .42; transform: rotate(-4deg) scale(1.15); }
+.about-poster { display: block; aspect-ratio: 2 / 3; overflow: hidden; border-radius: var(--r); background: var(--surface); }
+.about-poster img { width: 100%; height: 100%; object-fit: cover; }
+.about-hero::before { content: ""; position: absolute; inset: 0; z-index: 1; background: linear-gradient(0deg, var(--bg) 6%, var(--veil) 60%, var(--veil-light) 100%), linear-gradient(90deg, var(--veil-strong), transparent 70%); }
+.about-copy { position: relative; z-index: 2; max-width: 640px; }
+.about-copy h1 { margin: 14px 0 0; font: 700 var(--s-title)/1.02 var(--display); letter-spacing: -.035em; }
+.about-copy p { margin: var(--sp-4) 0 0; color: var(--text-2); font-size: var(--s1); }
+.about-features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-4); }
+.about-feature { padding: var(--sp-5); border-radius: var(--r-lg); background: var(--surface); }
+.about-feature .ui-icon { width: 28px; height: 28px; color: var(--accent); }
+.about-feature h3 { margin: var(--sp-3) 0 0; font: 600 var(--s1)/1.3 var(--display); }
+.about-feature p { margin: var(--sp-2) 0 0; color: var(--muted); }
+
 /* ----- Тост ----- */
 .toast { position: fixed; z-index: var(--z-toast); left: 50%; bottom: var(--sp-5); display: grid; gap: 2px; width: max-content; max-width: calc(100vw - 2 * var(--gutter)); padding: var(--sp-3) 18px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface-2); transform: translateX(-50%); animation: fade-up var(--t) var(--ease) both; }
 .toast span { color: var(--muted); font-size: var(--s-1); }
@@ -1048,6 +1069,8 @@ span.studio-sort-button::after { display: none; }
   .toast { bottom: calc(58px + var(--sp-4) + env(safe-area-inset-bottom)); }
   .discovery-rail { grid-auto-columns: calc((100% - var(--sp-4) * 4) / 5); }
   .detail-about-grid { grid-template-columns: minmax(0, 1fr); gap: var(--sp-5); }
+  .about-features { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .about-wall { grid-template-columns: repeat(6, minmax(0, 1fr)); }
   .rail-arrow { margin-top: calc((100% - var(--sp-4) * 4) / 5 * .75 - 22px); }
   .landscape-rail { grid-auto-columns: calc((100% - var(--sp-4)) / 2); }
   .genre-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1096,6 +1119,8 @@ span.studio-sort-button::after { display: none; }
   .detail-backdrop::after { background: linear-gradient(0deg, var(--bg) 0%, rgba(8, 9, 11, .9) 36%, rgba(8, 9, 11, .3) 70%, rgba(8, 9, 11, 0) 100%); }
   .detail-fact { grid-template-columns: 112px minmax(0, 1fr); }
   .episode-list { grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); }
+  .about-features { grid-template-columns: minmax(0, 1fr); }
+  .about-wall { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .settings-row { flex-wrap: wrap; }
 }
 

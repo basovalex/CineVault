@@ -395,6 +395,17 @@ class CatalogIndexTest(unittest.TestCase):
         # «Любимые зрителями» keeps the all-time order even when the catalogue asks for "now".
         self.assertEqual(ids({"collection": ["audience"], "sort": ["now"]}), ["classic", "fresh-hit", "fresh-flop"])
 
+    def test_interest_now_follows_the_world_audience(self):
+        from tools.catalog_index import upsert_entry
+        year = datetime.now().year
+        for card in (
+            {"id": "local-hit", "year": year, "voteCount": 1_500_000, "imdbVoteCount": 2_000, "ratingKinopoisk": 8.1},
+            {"id": "world-hit", "year": year, "voteCount": 200_000, "imdbVoteCount": 400_000, "imdbRating": 7.9},
+        ):
+            upsert_entry(self.index_path, {**card, "title": card["id"], "kind": "series", "posterImage": "poster"})
+        order = [item["id"] for item in self.index.page({"sort": ["now"]}, None)["items"] if item["id"] in {"local-hit", "world-hit"}]
+        self.assertEqual(order, ["world-hit", "local-hit"])
+
     def test_upcoming_prioritizes_anticipation_not_rating(self):
         from tools.catalog_index import upsert_entry
         for identifier, days, votes in (("less-awaited", 1, 5), ("more-awaited", 30, 50000)):

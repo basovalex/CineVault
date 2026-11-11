@@ -77,7 +77,7 @@ CATALOG_INDEX_FIELDS = (
 _catalog_cache_lock = threading.Lock()
 _catalog_cache: Dict[str, Any] = {"mtime_ns": None, "items": []}
 _catalog_hidden_cache: Dict[str, Any] = {"loaded_at": 0.0, "dir": None, "value": None}
-SITEMAP_VIEW_PATHS = ("/", "/catalog/", "/upcoming/", "/movies/", "/series/")
+SITEMAP_VIEW_PATHS = ("/", "/catalog/", "/upcoming/", "/movies/", "/series/", "/about/")
 SITEMAP_SEED_TITLE_IDS = {
     "sintel-open",
     "big-buck-bunny-open",
@@ -109,7 +109,7 @@ SITEMAP_TITLE_ID_BY_KINOPOISK_ID = {
     412344: "the-mentalist",
 }
 APP_ROUTE_RE = re.compile(
-    r"^/(?:title/[^/]+/?|catalog/?|upcoming/?|movies/?|series/?|library/?|favorites/?|evening/?|history/?|settings/?)$"
+    r"^/(?:title/[^/]+/?|catalog/?|upcoming/?|movies/?|series/?|library/?|favorites/?|evening/?|history/?|settings/?|about/?)$"
 )
 DEFAULT_KINOPOISK_UPDATE_DELAY_SECONDS = 2
 DEFAULT_KINOPOISK_UPDATE_TIMEOUT_SECONDS = 5 * 60

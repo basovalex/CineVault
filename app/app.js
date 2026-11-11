@@ -2418,7 +2418,7 @@
   };
 
   const defaultState = { view: "home", theme: "cinema", mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "now", catalogPage: 1, favorites: [], watchlist: [], progress: {}, ratings: {}, history: [], recommendationHistory: [], tasteMemory: [], offline: {}, voiceSelections: {}, playbackSelections: {}, playerVolume: 1, playerMuted: false, rutubeUrl: "", skipSegments: true };
-  const ROUTE_PATHS = Object.freeze({ home: "/", catalog: "/catalog/", upcoming: "/upcoming/", movies: "/movies/", series: "/series/", library: "/library/", favorites: "/favorites/", evening: "/evening/", history: "/history/", settings: "/settings/" });
+  const ROUTE_PATHS = Object.freeze({ home: "/", catalog: "/catalog/", upcoming: "/upcoming/", movies: "/movies/", series: "/series/", library: "/library/", favorites: "/favorites/", evening: "/evening/", history: "/history/", settings: "/settings/", about: "/about/" });
   const ROUTE_VIEWS = Object.freeze(Object.fromEntries(Object.entries(ROUTE_PATHS).map(([view, path]) => [path, view])));
   let state = loadState();
   // One dark theme; older builds stored a theme choice that is no longer read.
@@ -2684,7 +2684,7 @@
   }
 
   function updateDocumentRoute(route, item = null) {
-    const titles = { missing: "Не найдено — CineVault", home: "CineVault — кино для вас", catalog: "Каталог — CineVault", upcoming: "Скоро — CineVault", movies: "Фильмы — CineVault", series: "Сериалы — CineVault", library: "Моя медиатека — CineVault", favorites: "Избранное — CineVault", evening: "Наш вечер — CineVault", history: "История просмотра — CineVault", settings: "Настройки — CineVault" };
+    const titles = { about: "О CineVault", missing: "Не найдено — CineVault", home: "CineVault — кино для вас", catalog: "Каталог — CineVault", upcoming: "Скоро — CineVault", movies: "Фильмы — CineVault", series: "Сериалы — CineVault", library: "Моя медиатека — CineVault", favorites: "Избранное — CineVault", evening: "Наш вечер — CineVault", history: "История просмотра — CineVault", settings: "Настройки — CineVault" };
     document.title = item ? `${item.title} — CineVault` : (titles[route.view] || "CineVault — кино для вас");
     const canonical = document.querySelector('link[rel="canonical"]');
     if (canonical) {
@@ -3487,7 +3487,7 @@
       item.episodeSourceTokens = sourceTokensFromRows(sourceRows);
       assetState.loaded = true;
     } catch (error) {
-      assetState.error = "Не удалось загрузить список серий и превью онлайн.";
+      assetState.error = "Не удалось загрузить список серий.";
     } finally {
       assetState.loading = false;
       if (activeTitleId === item.id) renderDetails(item.id);
@@ -4918,6 +4918,8 @@
   function openWatchChooser(item, { episode = null, season = null } = {}) {
     if (!item) return;
     const main = Boolean(item) && (hasPlayableSource(item) || shouldRefreshKinopoiskPlayback(item));
+    // In the showcase only our own player and trailers are shown.
+    if (isShowcase()) return main ? openItemPlayer(item, episode, season) : openTrailer(item);
     const hasKinopoisk = Number(item?.kinopoiskId || item?.kinopoisk_id || 0) > 0;
     if (!hasKinopoisk) return openItemPlayer(item, episode, season);
     const lastPlayer = lastPlayerFor(item);
@@ -5627,6 +5629,7 @@
     else if (state.view === "library") { if (isAdminMode()) renderLibraryView(); else renderMissingPage(); }
     else if (state.view === "settings") renderSettings();
     else if (state.view === "missing") renderMissingPage();
+    else if (state.view === "about") renderAboutPage();
     hydrateLazyPosters();
     page.focus({ preventScroll: true });
   }
@@ -5642,7 +5645,7 @@
       discoveryShelf({ id: "fresh-movies", collectionId: "new", collectionView: "movies", title: "Недавние фильмы", description: "Фильмы этого и прошлого года", items: rotatingFreshItems(freshCatalog.filter((item) => item.kind === "movie"), 12) }),
       discoveryShelf({ id: "fresh-series", collectionId: "new", collectionView: "series", title: "Недавние сериалы", description: "Сериалы этого и прошлого года", items: rotatingFreshItems(freshCatalog.filter((item) => item.kind === "series"), 12) }),
       topTenShelf(worldTrendingCatalog.length >= 10 ? worldTrendingCatalog : audienceCatalog),
-      discoveryShelf({ id: "audience", title: "Любимые зрителями", description: "По числу оценок на IMDb и Кинопоиске", items: audienceCatalog.slice(0, 12) }),
+      discoveryShelf({ id: "audience", title: "Любимые зрителями", description: "По числу оценок на IMDb и Кинопоиске", items: rotatingFreshItems(audienceCatalog, 12, undefined, 40) }),
       discoveryShelf({ id: "personal", eyebrow: "", title: "Для вас", description: recommendationProfile().genres.size ? "По жанрам и людям из избранного и просмотренного" : "Идеи со всего мира, которые могут понравиться", items: personalCollectionItems(12) }),
       genreTilesShelf(),
       moodStrip,
@@ -5906,7 +5909,8 @@
   function collectionItems(collectionId, limit = 8) {
     const matching = discoveryItems().filter((item) => matchesCollection(item, collectionId));
     const solid = matching.filter(isPopularEnough);
-    return sortDiscoveryItems(solid.length >= limit ? solid : matching, collectionId).slice(0, limit);
+    // The strongest three stay; the rest change every day among the best three dozen.
+    return rotatingFreshItems(sortDiscoveryItems(solid.length >= limit ? solid : matching, collectionId), limit, undefined, 36);
   }
 
   // A stable daily rotation leaves the most relevant cards in place while
@@ -6072,11 +6076,12 @@
     return Math.log10(1 + votes);
   }
 
-  // Same measure as the server sort "now": ratings per year of the title's life.
+  // Same measure as the server sort "now": the world audience (IMDb votes) per year of the
+  // title's life, Kinopoisk votes with a small weight, weak titles held back.
   function nowInterest(item) {
-    const votes = Math.max(0, Number(item?.voteCount || 0)) + Math.max(0, Number(item?.imdbVoteCount || 0));
+    const votes = Math.max(0, Number(item?.imdbVoteCount || 0)) + Math.max(0, Number(item?.voteCount || 0)) * .15;
     const age = Math.max(1, new Date().getFullYear() - Number(item?.year || 0) + 1);
-    const rating = catalogRatingValue(item);
+    const rating = Number(item?.imdbRating || 0) || catalogRatingValue(item);
     return votes / age * (rating > 0 && rating < 6 ? .4 : 1);
   }
 
@@ -6471,6 +6476,62 @@
     return discoveryShelf({ id: "empty-picks", collectionId: "audience", title: "Можно начать с этого", description: "Любимые зрителями", items });
   }
 
+  // Showcase: a ready-made account for showing the product. The viewer's own favourites,
+  // history and progress are put aside and come back untouched when it is switched off.
+  const SHOWCASE_KEY = "cinevault.showcase";
+  const SHOWCASE_BACKUP_KEY = "cinevault.showcase.backup";
+  function isShowcase() { try { return localStorage.getItem(SHOWCASE_KEY) === "1"; } catch { return false; } }
+  async function setShowcase(enabled) {
+    if (enabled === isShowcase()) return;
+    if (!enabled) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(SHOWCASE_BACKUP_KEY) || "null");
+        if (saved) Object.assign(state, { favorites: saved.favorites || [], history: saved.history || [], progress: saved.progress || {}, watchlist: saved.watchlist || [] });
+        localStorage.removeItem(SHOWCASE_BACKUP_KEY);
+        localStorage.removeItem(SHOWCASE_KEY);
+      } catch { /* storage is unavailable: nothing was put aside */ }
+      saveState();
+      return;
+    }
+    if (!audienceCatalog.length) await loadAudienceCatalog();
+    const pool = [...new Map([...worldTrendingCatalog, ...audienceCatalog, ...catalog].filter((item) => item?.posterImage && item.backdropImage).map((item) => [item.id, item])).values()];
+    if (pool.length < 6) return;
+    try {
+      localStorage.setItem(SHOWCASE_BACKUP_KEY, JSON.stringify({ favorites: state.favorites, history: state.history, progress: state.progress, watchlist: state.watchlist }));
+      localStorage.setItem(SHOWCASE_KEY, "1");
+    } catch { return; }
+    const now = Date.now();
+    const watching = pool.slice(0, 4);
+    const progress = {};
+    watching.forEach((item, index) => {
+      const duration = item.kind === "series" ? 2700 : Math.max(5400, Number(item.runtime || 110) * 60);
+      const position = Math.round(duration * [0.42, 0.68, 0.23, 0.81][index]);
+      const key = item.kind === "series" ? `${item.id}-s1e${index + 2}` : item.id;
+      progress[key] = { titleId: item.id, seasonNumber: item.kind === "series" ? 1 : null, episodeNumber: item.kind === "series" ? index + 2 : null, position, duration, completed: false, updatedAt: now - index * 3600000 };
+    });
+    state.progress = progress;
+    state.history = watching.map((item) => item.id);
+    state.favorites = pool.slice(4, 14).map((item) => item.id);
+    state.watchlist = [];
+    saveState();
+  }
+
+  // «О CineVault»: what the product is, for the person it is shown to.
+  function renderAboutPage() {
+    const posters = [...new Map([...worldTrendingCatalog, ...audienceCatalog, ...catalog].filter((item) => item?.posterImage).map((item) => [item.id, item])).values()].slice(0, 18);
+    if (posters.length < 6 && !audienceCatalog.length) loadAudienceCatalog().then(() => { if (state.view === "about") renderAboutPage(); });
+    const wall = posters.map((item) => `<span class="about-poster"><img src="${escapeHtml(previewImageUrl(highResolutionPosterUrl(item.posterImage)))}" alt="" loading="lazy" decoding="async"></span>`).join("");
+    const features = [
+      ["play", "Свой плеер", "Качество, перемотка, пропуск заставок и продолжение с того же места на любом устройстве."],
+      ["star", "Что смотрят в мире", "Каталог фильмов и сериалов с рейтингами Кинопоиска и IMDb, подборки на каждый день и по вашему вкусу."],
+      ["heart", "Избранное и история", "Всё начатое и отложенное — под рукой, с отметкой, где вы остановились."],
+      ["check", "Смотреть вместе", "Общая комната: пауза и перемотка у всех одновременно, даже в разных городах."],
+      ["info", "Везде", "Сайт ставится как приложение, есть приложения для iPhone, Android и Android TV с управлением с пульта."],
+      ["close", "Без лишнего", "Без рекламы в собственном плеере и с расширением, которое убирает её у внешних источников."],
+    ].map(([icon, title, text]) => `<article class="about-feature">${uiIcon(icon)}<h3>${title}</h3><p>${text}</p></article>`).join("");
+    page.innerHTML = `<section class="about-hero"><div class="about-wall" aria-hidden="true">${wall}</div><div class="about-copy"><span class="feature-chip">О продукте</span><h1>CineVault — кинотеатр дома</h1><p>Фильмы и сериалы в одном месте: найти, начать и продолжить на любом экране.</p><div class="hero-actions"><a class="primary-button" href="${routeForView("catalog")}" data-view="catalog">Открыть каталог</a><a class="secondary-button" href="/" data-view="home">На главную</a></div></div></section><section class="section"><div class="section-header"><div><h2>Что умеет</h2></div></div><div class="about-features">${features}</div></section>`;
+  }
+
   function renderMissingPage({ title = false } = {}) {
     page.innerHTML = title
       ? `<section class="section"><div class="empty-state"><h2>Такого фильма или сериала нет</h2><p>Возможно, ссылка устарела. Его можно поискать в каталоге.</p><div class="hero-actions"><a class="primary-button" href="${routeForView("catalog")}" data-view="catalog">Открыть каталог</a><a class="secondary-button" href="/" data-view="home">На главную</a></div></div></section>`
@@ -6540,6 +6601,9 @@
 <section class="settings-section"><h2>Просмотр</h2>
 <label class="settings-toggle"><input type="checkbox" id="settings-skip"${state.skipSegments !== false ? " checked" : ""}><span><strong>Пропускать заставки автоматически</strong><small>Если для серии известны тайминги вступления и титров.</small></span></label>
 <div class="settings-row"><div><strong>История просмотра</strong><small>Удалит «Продолжить просмотр» и историю на всех устройствах.</small></div><button class="secondary-button danger-button" id="settings-clear-history" type="button">Очистить историю</button></div></section>
+<section class="settings-section"><h2>Показ</h2>
+<label class="settings-toggle"><input type="checkbox" id="settings-showcase"${isShowcase() ? " checked" : ""}><span><strong>Режим показа</strong><small>Готовые избранное и «Продолжить просмотр», а смотреть можно только в своём плеере и трейлеры. Ваши данные вернутся, когда режим выключите.</small></span></label>
+<div class="settings-row"><div><strong>О CineVault</strong><small>Что умеет сайт и приложения.</small></div><a class="secondary-button" href="/about/" data-view="about">Открыть</a></div></section>
 ${isAdminMode() ? `<details class="settings-admin"><summary>Для администратора</summary><div class="settings-row"><div><strong>Общий каталог</strong><small>Добавление фильмов, серий и источников.</small></div><a class="secondary-button" href="/library/" data-view="library">Открыть</a></div><div class="settings-row"><div><strong>Режим администратора</strong><small>Служебные разделы видны только на этом устройстве.</small></div><button class="secondary-button" id="settings-admin-off" type="button">Выключить</button></div><div class="settings-grid"><section class="settings-card"><h3>TMDB-каталог</h3><p>${escapeHtml(tmdbStatus)}</p><small class="muted">TMDB добавляет реальные постеры, описания, рейтинги, сезоны и трейлеры. Ключ хранится только локально.</small><p class="attribution">This product uses the TMDB API but is not endorsed or certified by TMDB.</p></section><section class="settings-card"><h3>RUTUBE-плеер</h3><p>Вставь ссылку на разрешённое видео RUTUBE, чтобы открыть его встроенным плеером и сохранять позицию просмотра.</p><div class="provider-input"><input id="rutube-url" type="url" value="${escapeHtml(state.rutubeUrl || "")}" placeholder="https://rutube.ru/video/..." autocomplete="off"><button class="primary-button" id="rutube-open" type="button">Открыть</button></div><button class="secondary-button" id="rutube-test" type="button">Проверить тестовый плеер</button><p id="rutube-feedback" class="muted small" aria-live="polite"></p></section><section class="settings-card settings-card-wide"><h3>Демо: LegalDemoProvider</h3><p>Оффлайн-адаптер для проверки каталога, сезонов, серий и выбора перевода. Он читает только локальные fixtures и не обращается к сайтам, proxy или cookies.</p><div class="provider-input"><input id="hdrezka-query" type="search" value="Тестовый сериал" placeholder="Например, Тестовый сериал" autocomplete="off"><button class="secondary-button" id="hdrezka-search" type="button">Искать</button></div><div class="provider-input hdrezka-episode-inputs"><label>Сезон <input id="hdrezka-season" type="number" min="1" value="1"></label><label>Серия <input id="hdrezka-episode" type="number" min="1" value="1"></label></div><p id="hdrezka-feedback" class="muted small" aria-live="polite"></p><div id="hdrezka-results"></div></section></div></details>` : ""}`;
     bindPageActions();
     $("#settings-admin-off")?.addEventListener("click", () => {
@@ -6547,6 +6611,11 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       renderSettings();
     });
     $("#settings-skip")?.addEventListener("change", (event) => { state.skipSegments = event.currentTarget.checked; saveState(); });
+    $("#settings-showcase")?.addEventListener("change", async (event) => {
+      const input = event.currentTarget;
+      input.disabled = true;
+      try { await setShowcase(input.checked); } finally { renderSettings(); }
+    });
     $("#settings-clear-history")?.addEventListener("click", (event) => {
       const button = event.currentTarget;
       if (button.dataset.confirm !== "1") { button.dataset.confirm = "1"; button.textContent = "Точно очистить?"; window.setTimeout(() => { if (button.isConnected) { button.dataset.confirm = ""; button.textContent = "Очистить историю"; } }, 4000); return; }
@@ -6760,7 +6829,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       const poster = episodePosterMarkup(item, selectedSeason, episode, title, episodePlayable);
       return `<article class="episode-card${current ? " is-now" : ""}${seen ? " is-seen" : ""}">${ratio > 0 ? `<span class="episode-card-progress" style="--progress:${ratio}%" aria-hidden="true"></span>` : ""}${poster}<div class="episode-card-copy"><div class="episode-card-kicker">Сезон ${selectedSeason} · серия ${episode}</div><h3>${escapeHtml(title)}</h3>${episodeVoiceMarkup(item, selectedSeason, episode, title)}${progressText ? `<p>${escapeHtml(progressText)}</p>` : ""}</div></article>`;
     }).join("");
-    const loadingNote = assetsLoading ? `<div class="episode-loading-note" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю список серий и превью онлайн…</div>` : isImportedSeries && episodeImagesLoading ? `<div class="episode-loading-note" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю превью сезона…</div>` : assetsError ? `<div class="episode-loading-note is-error" role="status">${escapeHtml(assetsError)} Показываю доступные данные.</div>` : "";
+    const loadingNote = assetsLoading ? `<div class="episode-loading-note" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю список серий…</div>` : isImportedSeries && episodeImagesLoading ? `<div class="episode-loading-note" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю серии сезона…</div>` : assetsError ? `<div class="episode-loading-note is-error" role="status">${escapeHtml(assetsError)} Показываю доступные данные.</div>` : "";
     return `<section class="section"><div class="section-header"><div><h2>Сезоны и серии</h2><span>${countWord(seasonCount, "сезон", "сезона", "сезонов")} · ${countWord(seasonList.reduce((sum, season) => sum + season.episodes.length, 0), "серия", "серии", "серий")}</span></div>${sourceAction}</div><div class="season-tabs">${seasonList.map((season) => `<button class="filter-button ${selectedSeason === season.number ? "is-active" : ""}" data-season="${season.number}" type="button">Сезон ${season.number}</button>`).join("")}</div>${loadingNote}<div class="episode-list is-season-entering">${episodeRows}</div></section>`;
   }
 
