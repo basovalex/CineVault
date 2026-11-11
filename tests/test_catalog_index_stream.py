@@ -81,6 +81,21 @@ class StreamedBuildTests(unittest.TestCase):
         self.assertEqual(genres, [("a", "драма"), ("b", "комедия"), ("m1", "триллер"), ("m1", "ужасы")])
         self.assertFalse(any(path.suffix in {".staging", ".building"} for path in self.dir.iterdir()))
 
+    def test_found_frames_fill_only_cards_without_one(self):
+        from tools.catalog_index import BACKDROPS_FILENAME
+        (self.dir / BACKDROPS_FILENAME).write_text(json.dumps({"m1": "https://image.tmdb.org/t/p/w1280/m1.jpg", "a": "https://image.tmdb.org/t/p/w1280/a.jpg", "b": "not-a-url"}), encoding="utf-8")
+        catalog = json.loads(self.catalog.read_text(encoding="utf-8"))
+        catalog[0]["backdropImage"] = "https://own/a.jpg"
+        self.catalog.write_text(json.dumps(catalog, ensure_ascii=False), encoding="utf-8")
+        index = self.dir / "index.sqlite3"
+        build_index(self.catalog, index)
+        db = sqlite3.connect(str(index))
+        frames = {row[0]: json.loads(row[1]).get("backdropImage") for row in db.execute("SELECT id, payload_json FROM card_payloads")}
+        db.close()
+        self.assertEqual(frames["m1"], "https://image.tmdb.org/t/p/w1280/m1.jpg")
+        self.assertEqual(frames["a"], "https://own/a.jpg")
+        self.assertIsNone(frames["b"])
+
 
 if __name__ == "__main__":
     unittest.main()

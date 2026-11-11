@@ -31,6 +31,9 @@ if str(ROOT) not in sys.path:
 
 INDEX_FILENAME = "catalog_index.sqlite3"
 ALLOHA_FILENAME = "catalog_alloha.jsonl"
+# Frames for cards that came without one: {card id: image URL}, filled from TMDB by
+# tools/fill_backdrops.py. A separate file, so nightly catalogue syncs never overwrite it.
+BACKDROPS_FILENAME = "catalog_backdrops.json"
 SCHEMA_VERSION = 6
 FRESH_MIN_VOTES = 200
 # The world audience first: IMDb votes per year of the title's life. Kinopoisk votes count
@@ -176,7 +179,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 
 def source_mtimes(catalog_path: Path) -> Dict[str, int]:
     result = {}
-    for name in ("catalog_imports.json", "catalog_metadata.json", "catalog_popular.json", ALLOHA_FILENAME):
+    for name in ("catalog_imports.json", "catalog_metadata.json", "catalog_popular.json", ALLOHA_FILENAME, BACKDROPS_FILENAME):
         try:
             result[name] = (catalog_path.parent / name).stat().st_mtime_ns
         except OSError:
@@ -278,6 +281,7 @@ def _build_index(server: Any, catalog_path: Path, out_path: Path, mtimes: Dict[s
     if not catalog_path.is_file():
         raise RuntimeError("Каталог CineVault временно недоступен")
     ranking = server.load_catalog_popularity(popular_path if popular_path.is_file() else None)
+    backdrops = load_backdrops(catalog_path)
     staging_path = out_path.with_suffix(".staging")
     temporary = out_path.with_suffix(".building")
     staging_path.unlink(missing_ok=True)
@@ -303,6 +307,7 @@ def _build_index(server: Any, catalog_path: Path, out_path: Path, mtimes: Dict[s
         for (payload_json,) in stage.execute("SELECT payload FROM items ORDER BY seq"):
             item = json.loads(payload_json)
             server.apply_catalog_popularity([item], ranking)
+            fill_backdrop(item, backdrops)
             identifier = str(item.get("id") or "")
             if not identifier or identifier in seen:
                 continue
@@ -315,7 +320,7 @@ def _build_index(server: Any, catalog_path: Path, out_path: Path, mtimes: Dict[s
             if len(rows) >= BATCH_SIZE:
                 flush()
         flush()
-        count += merge_alloha(db, catalog_path.with_name(ALLOHA_FILENAME), server.CATALOG_INDEX_FIELDS)
+        count += merge_alloha(db, catalog_path.with_name(ALLOHA_FILENAME), server.CATALOG_INDEX_FIELDS, backdrops)
         db.executemany("INSERT INTO card_genres VALUES (?, ?)", stage.execute("SELECT card_id, genre FROM genres ORDER BY rowid"))
         db.executemany("INSERT INTO meta VALUES (?, ?)", [("schema", str(SCHEMA_VERSION)), ("mtimes", json.dumps(mtimes)), ("built_at", str(time.time()))])
         db.commit()
@@ -397,7 +402,21 @@ def _stage_items(stage: sqlite3.Connection, catalog_path: Path, metadata_path: P
     return legacy_ids
 
 
-def merge_alloha(db: sqlite3.Connection, path: Path, index_fields: Iterable[str]) -> int:
+def load_backdrops(catalog_path: Path) -> Dict[str, str]:
+    try:
+        payload = json.loads(catalog_path.with_name(BACKDROPS_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(key): str(value) for key, value in payload.items() if str(value).startswith("https://")} if isinstance(payload, dict) else {}
+
+
+def fill_backdrop(item: Dict[str, Any], backdrops: Dict[str, str]) -> None:
+    """A card keeps its own frame; one without gets the frame found for it, if any."""
+    if not item.get("backdropImage") and backdrops.get(str(item.get("id") or "")):
+        item["backdropImage"] = backdrops[str(item["id"])]
+
+
+def merge_alloha(db: sqlite3.Connection, path: Path, index_fields: Iterable[str], backdrops: Optional[Dict[str, str]] = None) -> int:
     """Stream the Alloha library: flag known cards, add the rest."""
     if not path.is_file():
         return 0
@@ -426,6 +445,7 @@ def merge_alloha(db: sqlite3.Connection, path: Path, index_fields: Iterable[str]
                     db.execute("UPDATE card_payloads SET payload_json = ? WHERE id = ?", (json.dumps(payload, ensure_ascii=False), identifier))
                 db.execute("UPDATE cards SET alloha = 1 WHERE id = ?", (identifier,))
                 continue
+            fill_backdrop(card, backdrops or {})
             row, payload = _row(card, "alloha", index_fields, alloha=1)
             db.execute("INSERT OR IGNORE INTO cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", row)
             db.execute("INSERT OR IGNORE INTO card_payloads VALUES (?, ?)", payload)
