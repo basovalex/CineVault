@@ -387,11 +387,68 @@ def alloha_episode_list(page: str) -> list[Dict[str, Any]]:
     return sorted(seasons, key=lambda season: season["number"])
 
 
-def fetch_alloha_episodes(kinopoisk_id: int, referer: str = "") -> list[Dict[str, Any]]:
+ALLOHA_API_URL = "https://api.apbugall.org/"
+
+
+def alloha_api_details(payload: Any) -> Dict[str, Any]:
+    """Seasons with the voices of every episode, and each voice's flags, from the Alloha partner API.
+
+    "adv" marks a voice whose video has advertising burned into the picture: no filter removes it."""
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return {"seasons": [], "voices": {}}
+    voices: Dict[str, Dict[str, Any]] = {}
+    for key, voice in (data.get("translation_iframe") or {}).items() if isinstance(data.get("translation_iframe"), dict) else ():
+        if str(key).isdigit() and isinstance(voice, dict):
+            voices[str(key)] = {"name": str(voice.get("name") or "")[:80], "adv": voice.get("adv") is True,
+                                "quality": str(voice.get("quality") or "")[:40], "uhd": voice.get("uhd") is True}
+    seasons = []
+    for key, season in (data.get("seasons") or {}).items() if isinstance(data.get("seasons"), dict) else ():
+        if not str(key).isdigit() or int(key) < 1 or not isinstance(season, dict) or not isinstance(season.get("episodes"), dict):
+            continue
+        episodes = {int(number): episode for number, episode in season["episodes"].items() if str(number).isdigit() and int(number) > 0}
+        if not episodes:
+            continue
+        entry: Dict[str, Any] = {"number": int(key), "episodes": sorted(episodes)}
+        by_episode = {str(number): sorted((str(voice) for voice in (episode.get("translation") or {}) if str(voice).isdigit()), key=int)
+                      for number, episode in episodes.items() if isinstance(episode, dict) and isinstance(episode.get("translation"), dict)}
+        by_episode = {number: ids for number, ids in by_episode.items() if ids}
+        if by_episode:
+            entry["voices"] = by_episode
+        seasons.append(entry)
+    return {"seasons": sorted(seasons, key=lambda season: season["number"]), "voices": voices}
+
+
+def fetch_alloha_details(kinopoisk_id: int, referer: str = "") -> Dict[str, Any]:
+    """The partner API first (fast, per-voice data); the player page is the fallback for seasons."""
     with _player_options_lock:
         cached = _alloha_episodes_cache.get(kinopoisk_id)
-    if cached and time.monotonic() - cached[0] < ALLOHA_EPISODES_CACHE_SECONDS:
+    if cached and time.monotonic() - cached[0] < ALLOHA_EPISODES_CACHE_SECONDS and isinstance(cached[1], dict):
         return cached[1]
+    details: Dict[str, Any] = {"seasons": [], "voices": {}}
+    token = os.environ.get("CINEVAULT_APBUGALL_TOKEN", "").strip()
+    if token:
+        try:
+            response = requests.post(ALLOHA_API_URL, params={"token": token, "kp": kinopoisk_id}, headers={"Accept": "application/json"}, timeout=12)
+            if response.ok:
+                details = alloha_api_details(response.json())
+        except (requests.RequestException, ValueError):
+            pass
+    if not details["seasons"]:
+        try:
+            details["seasons"] = fetch_alloha_episodes(kinopoisk_id, referer)
+        except RuntimeError:
+            if not details["voices"]:
+                raise
+    if details["seasons"] or details["voices"]:
+        with _player_options_lock:
+            if len(_alloha_episodes_cache) > 2000:
+                _alloha_episodes_cache.clear()
+            _alloha_episodes_cache[kinopoisk_id] = (time.monotonic(), details)
+    return details
+
+
+def fetch_alloha_episodes(kinopoisk_id: int, referer: str = "") -> list[Dict[str, Any]]:
     alloha = next((provider for provider in fetch_player_options(kinopoisk_id).get("providers") or [] if provider.get("id") == "alloha"), None)
     translations = (alloha or {}).get("translations") or []
     if not translations:
@@ -404,22 +461,14 @@ def fetch_alloha_episodes(kinopoisk_id: int, referer: str = "") -> list[Dict[str
             stream=True,
         ) as response:
             if response.status_code == 429:
-                return cached[1] if cached else []
+                return []
             response.raise_for_status()
             raw = response.raw.read(ALLOHA_PAGE_MAX_BYTES + 1, decode_content=True)
     except requests.RequestException as exc:
-        if cached:
-            return cached[1]
         raise RuntimeError("Не удалось получить список серий Alloha") from exc
     if len(raw) > ALLOHA_PAGE_MAX_BYTES:
         raise RuntimeError("Страница Alloha слишком большая")
-    seasons = alloha_episode_list(raw.decode("utf-8", "ignore"))
-    if seasons:
-        with _player_options_lock:
-            if len(_alloha_episodes_cache) > 2000:
-                _alloha_episodes_cache.clear()
-            _alloha_episodes_cache[kinopoisk_id] = (time.monotonic(), seasons)
-    return seasons
+    return alloha_episode_list(raw.decode("utf-8", "ignore"))
 DEFAULT_KINOPOISK_IMPORT_TIMEOUT_SECONDS = 30 * 60
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024 * 1024
 MAX_SOURCE_JSON_BYTES = 10 * 1024 * 1024
@@ -3349,7 +3398,7 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                     raise ValueError
                 imported_catalog_item(str(kinopoisk_id), include_hidden=True)
                 referer = getattr(self.server, "public_base_url", "") or f"https://{self.headers.get('Host', '')}/"
-                self.send_json(200, {"seasons": fetch_alloha_episodes(kinopoisk_id, referer)})
+                self.send_json(200, fetch_alloha_details(kinopoisk_id, referer))
             except ValueError:
                 self.send_json(400, {"error": "Kinopoisk ID должен быть положительным числом"})
             except KeyError:

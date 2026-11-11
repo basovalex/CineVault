@@ -22,6 +22,7 @@ from tools.media_library_server import (
     MediaLibrary,
     MediaLibraryHandler,
     alloha_episode_list,
+    alloha_api_details,
     alloha_player_options,
     build_sitemap_xml,
     catalog_page,
@@ -100,6 +101,18 @@ class MediaLibraryTests(unittest.TestCase):
         ]}]}
         options = alloha_player_options(payload)
         self.assertEqual([option["name"] for option in options], ["LostFilm"])
+
+    def test_alloha_api_details_reads_voices_per_episode_and_burned_in_ads(self):
+        payload = {"status": "success", "data": {
+            "translation_iframe": {"22": {"name": "Fox", "quality": "WEB-DL", "adv": False, "iframe": "x"}, "96": {"name": "Coldfilm", "adv": True}, "bad": {}},
+            "seasons": {"2": {"episodes": {"1": {"translation": {"22": {}, "96": {}}}, "3": {"translation": {"96": {}}}}},
+                        "1": {"episodes": {"1": {"translation": {}}}}, "0": {"episodes": {"1": {}}}}}}
+        details = alloha_api_details(payload)
+        self.assertEqual(details["voices"]["96"]["adv"], True)
+        self.assertEqual(details["voices"]["22"], {"name": "Fox", "adv": False, "quality": "WEB-DL", "uhd": False})
+        self.assertNotIn("bad", details["voices"])
+        self.assertEqual(details["seasons"], [{"number": 1, "episodes": [1]}, {"number": 2, "episodes": [1, 3], "voices": {"1": ["22", "96"], "3": ["96"]}}])
+        self.assertEqual(alloha_api_details({"status": "error"}), {"seasons": [], "voices": {}})
 
     def test_alloha_episode_list_keeps_real_numbers_and_ignores_films(self):
         page = """<script>const fileList = JSON.parse('{"type":"serial","all":{"4":{"13":{},"1":{}},"2":{"1":{}},"0":{"1":{}}}}');</script>"""

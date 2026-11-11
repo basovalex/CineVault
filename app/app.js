@@ -4999,6 +4999,8 @@
   // Alloha's own seasons and episode numbers. They can differ from the catalog's
   // and have gaps, so real numbers are kept instead of a count.
   const allohaEpisodeLists = new Map();
+  // Voice id -> {adv}: "adv" is advertising burned into the video itself, which no filter can remove.
+  const allohaVoiceFlags = new Map();
   function hasOwnEpisodeSources(item) {
     return Boolean(item?.libraryEpisodes?.length);
   }
@@ -5025,6 +5027,7 @@
         ? apiFetch(`/api/alloha-episodes?kinopoisk=${encodeURIComponent(kinopoiskId)}`, { cache: "no-store", headers: { accept: "application/json" } }).then((response) => response.ok ? response.json() : null)
         : null)
       .then((payload) => {
+        if (payload?.voices && typeof payload.voices === "object") allohaVoiceFlags.set(kinopoiskId, payload.voices);
         const seasons = Array.isArray(payload?.seasons) ? payload.seasons : [];
         if (!seasons.length) return;
         const before = JSON.stringify(titleSeasonList(item));
@@ -7699,6 +7702,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     window.addEventListener("cinevault:progress-choice", onProgressChoice);
     window.addEventListener("message", onPlayerMessage);
     // Which voices have an episode; a voice without it shows the source's error instead of video.
+    const burnedInAds = (option) => allohaVoiceFlags.get(kinopoiskId)?.[String(option?.id)]?.adv === true;
     const voicesFor = (season, episode) => allohaEpisodeLists.get(kinopoiskId)?.find((entry) => entry.number === Number(season))?.voices?.[String(episode)] || null;
     const firstEpisodeWithVoice = (voiceId) => {
       const seasons = allohaEpisodeLists.get(kinopoiskId) || [];
@@ -7719,7 +7723,9 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
         const voices = voicesFor(seasonNumber, episodeNumber);
         if (voices && !voices.includes(String(option.id))) {
           const spot = chosen ? firstEpisodeWithVoice(String(option.id)) : null;
-          const other = chosen ? -1 : options.findIndex((candidate) => voices.includes(String(candidate.id)));
+          const has = (candidate) => voices.includes(String(candidate.id));
+          const clean = chosen ? -1 : options.findIndex((candidate) => has(candidate) && !burnedInAds(candidate));
+          const other = chosen ? -1 : clean >= 0 ? clean : options.findIndex(has);
           if (spot) {
             [seasonNumber, episodeNumber] = spot;
             started = false; position = 0; resumeTarget = 0;
@@ -7781,11 +7787,14 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       frame.removeAttribute("src");
       status.textContent = "Загружаю список озвучек…";
       // The episode list says which voice has which episode; fetched alongside, waited for briefly.
-      const episodesReady = item.kind === "series" && !allohaEpisodeLists.get(kinopoiskId)?.some((season) => season.voices)
+      const episodesReady = !allohaVoiceFlags.has(kinopoiskId) || (item.kind === "series" && !allohaEpisodeLists.get(kinopoiskId)?.some((season) => season.voices))
         ? Promise.race([
           apiFetch(`/api/alloha-episodes?kinopoisk=${encodeURIComponent(kinopoiskId)}`, { headers: { accept: "application/json" } })
             .then((response) => response.ok ? response.json() : null)
-            .then((payload) => { if (Array.isArray(payload?.seasons) && payload.seasons.length) allohaEpisodeLists.set(kinopoiskId, payload.seasons); })
+            .then((payload) => {
+              if (payload?.voices && typeof payload.voices === "object") allohaVoiceFlags.set(kinopoiskId, payload.voices);
+              if (Array.isArray(payload?.seasons) && payload.seasons.length) allohaEpisodeLists.set(kinopoiskId, payload.seasons);
+            })
             .catch(() => {}),
           new Promise((resolve) => window.setTimeout(resolve, 4000)),
         ])
@@ -7812,11 +7821,14 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
         if (options.length) {
           await episodesReady;
           if (closed || currentRequest !== requestNumber) return;
+          options.forEach((option, index) => { if (burnedInAds(option)) voiceSelect.options[index].textContent += " · реклама в видео"; });
           const wantedId = roomContent?.translation || preferredId;
           const byId = wantedId ? options.findIndex((option) => String(option.id) === wantedId) : -1;
           if (resumeRecord && byId < 0) { status.textContent = "Прежняя озвучка недоступна. Откройте карточку и выберите другой вариант; сохранённая позиция не изменена."; return; }
           const preferredIndex = byId >= 0 ? byId : options.findIndex((option) => option.name === preferredName);
-          showOption(preferredIndex >= 0 ? preferredIndex : 0);
+          // With nothing saved, the first voice without ads in the picture opens.
+          const cleanIndex = options.findIndex((option) => !burnedInAds(option));
+          showOption(preferredIndex >= 0 ? preferredIndex : Math.max(0, cleanIndex));
           attachRoom();
           if (!roomId && resumeRecord && window.CineVaultAccounts?.contexts.find(c=>c.id===resumeRecord.context_id)?.kind === "shared") togetherButton.click();
         } else {
