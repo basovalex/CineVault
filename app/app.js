@@ -2461,6 +2461,12 @@
   let remoteCatalogError = false;
   let searchDraft = "";
   let searchSuggestionCatalog = [];
+  // Titles met outside the current list (similar titles, a title opened by its address): they can
+  // be opened, but they must not join the list the viewer searched or filtered.
+  let looseTitles = [];
+  function rememberLooseTitles(items) {
+    looseTitles = [...new Map([...looseTitles, ...items].filter(Boolean).map((entry) => [entry.id, entry])).values()].slice(-400);
+  }
   // Episode ratings of popular series (IMDb), by catalogue id; null when there is no map to show.
   const episodeRatingsCache = new Map();
   let searchSuggestionTimer = 0;
@@ -3107,7 +3113,7 @@
         const loaded = Array.isArray(payload.items) ? payload.items[0] : null;
         if (loaded) {
           item = mergeCachedImportedDetails(loaded);
-          catalog = [...catalog.filter((entry) => entry.id !== item.id), item];
+          rememberLooseTitles([item]);
         }
       } catch {}
     }
@@ -3281,6 +3287,7 @@
       catalog = catalog.map((entry) => entry.id === item.id ? { ...details, ...entry } : entry);
       discoveryCatalog = discoveryCatalog.map((entry) => entry.id === item.id ? { ...details, ...entry } : entry);
       upcomingCatalog = upcomingCatalog.map((entry) => entry.id === item.id ? { ...details, ...entry } : entry);
+      looseTitles = looseTitles.map((entry) => entry.id === item.id ? { ...details, ...entry } : entry);
       importedDetailsLoaded.add(kinopoiskId);
       if (activeTitleId === item.id) renderDetails(item.id, { skipPlaybackRefresh: true });
     } catch {
@@ -3622,6 +3629,7 @@
           const cached = cache[item.id];
           const update = cached || await fetchTmdbDetails(item);
           catalog = catalog.map((entry) => entry.id === item.id && !String(entry.providerName || "").startsWith("Kinopoisk") ? { ...entry, ...update } : entry);
+          looseTitles = looseTitles.map((entry) => entry.id === item.id && !String(entry.providerName || "").startsWith("Kinopoisk") ? { ...entry, ...update } : entry);
           cache[item.id] = update;
           synced += 1;
           results.push({ status: "fulfilled" });
@@ -5233,6 +5241,7 @@
       || worldTrendingCatalog.find((item) => item.id === id)
       || savedTitlesCatalog.find((item) => item.id === id)
       || searchSuggestionCatalog.find((item) => item.id === id)
+      || looseTitles.find((item) => item.id === id)
       || audienceCatalog.find((item) => item.id === id)
       || progressCatalog.find((item) => item.id === id)
       || trendingCatalog.find((item) => item.id === id);
@@ -6681,7 +6690,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       section.dataset.similarTitles = item.id;
       section.innerHTML = `<div class="section-header discovery-shelf-header"><div><h2>Похожие</h2></div></div><div class="discovery-rail">${items.map((candidate) => poster(candidate)).join('')}</div>`;
       page.append(section);
-      catalog = [...catalog, ...items.filter((candidate) => !catalog.some((existing) => existing.id === candidate.id))];
+      rememberLooseTitles(items);
     } catch { similarTitlesCache.delete(item.id); }
   }
 
