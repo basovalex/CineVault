@@ -116,11 +116,31 @@
   });
 
   // index.html may have asked for the first catalogue page already; take it once if it matches.
+  const posterOverrides = Object.freeze({
+    "kinopoisk-5304403": "/data/posters/kinopoisk-5304403.jpg",
+  });
+  // Titles shown with their poster only: no wide frame on the title page or in shelves.
+  const posterOnlyTitles = new Set(["kinopoisk-5304403"]);
+  // Hand-picked posters replace the server's wherever a catalogue answer brings the card.
+  function overrideCatalogBody(path, body) {
+    if (!String(path).startsWith("/api/catalog") || !body) return body;
+    const text = typeof body === "string" ? body : new TextDecoder().decode(body);
+    if (!Object.keys(posterOverrides).some((id) => text.includes(`"${id}"`))) return body;
+    const visit = (value) => {
+      if (!value || typeof value !== "object") return;
+      if (Array.isArray(value)) { value.forEach(visit); return; }
+      if (posterOverrides[value.id]) value.posterImage = posterOverrides[value.id];
+      if (posterOnlyTitles.has(value.id) && value.backdropImage) value.backdropImage = "";
+      Object.values(value).forEach(visit);
+    };
+    try { const data = JSON.parse(text); visit(data); return JSON.stringify(data); } catch { return body; }
+  }
+
   function takeCatalogPrefetch(path) {
     const early = window.__cvCatalogPrefetch;
     window.__cvCatalogPrefetch = null;
     if (!early || early.path !== path || configuredApiBaseUrl || viewerToken) return null;
-    return early.answer.then((data) => data ? new Response(data.body, { status: data.status, headers: data.headers }) : null).catch(() => null);
+    return early.answer.then((data) => data ? new Response(overrideCatalogBody(path, data.body), { status: data.status, headers: data.headers }) : null).catch(() => null);
   }
 
   async function apiFetch(path, options = {}) {
@@ -138,7 +158,7 @@
         const response = await fetch(apiUrl(path), { ...options, headers, signal: controller.signal });
         if ([204, 205, 304].includes(response.status)) return response;
         // Read the body here so the timeout and the retry also cover a stall mid-transfer.
-        const body = await response.arrayBuffer();
+        const body = overrideCatalogBody(path, await response.arrayBuffer());
         return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
       } catch (error) {
         if (callerSignal?.aborted || attempt >= API_GET_ATTEMPTS) throw error;
@@ -2471,11 +2491,14 @@
   const episodeRatingsCache = new Map();
   let searchSuggestionTimer = 0;
   let searchSuggestionRequest = null;
-  const posterOverrides = Object.freeze({
-    "kinopoisk-5304403": "/data/posters/kinopoisk-5304403.jpg",
-  });
+  function withTitleOverrides(item) {
+    if (!item) return item;
+    const poster = posterOverrides[item.id];
+    const dropFrame = posterOnlyTitles.has(item.id) && item.backdropImage;
+    return poster || dropFrame ? { ...item, ...(poster ? { posterImage: poster } : {}), ...(dropFrame ? { backdropImage: "" } : {}) } : item;
+  }
   function applyPosterOverrides() {
-    catalog = catalog.map((item) => posterOverrides[item.id] ? { ...item, posterImage: posterOverrides[item.id] } : item);
+    catalog = catalog.map(withTitleOverrides);
   }
   applyPosterOverrides();
   let tmdbStatus = tmdbCredential ? "Загружаю постеры и данные TMDB…" : "TMDB-ключ не найден";
@@ -3063,7 +3086,7 @@
       if (!response.ok) return;
       const payload = await response.json();
       if (!Array.isArray(payload.items)) return;
-      discoveryCatalog = payload.items.map((entry) => posterOverrides[entry.id] ? { ...entry, posterImage: posterOverrides[entry.id] } : entry);
+      discoveryCatalog = payload.items.map(withTitleOverrides);
     } catch {
       // The current catalogue page remains a useful fallback when the index is unavailable.
     }
@@ -3074,7 +3097,7 @@
       const response = await apiFetch("/api/catalog?collection=trending&sort=popular&limit=50", { cache: "no-store", headers: { accept: "application/json" } });
       if (!response.ok) return;
       const payload = await response.json();
-      if (Array.isArray(payload.items)) trendingCatalog = payload.items.map((entry) => posterOverrides[entry.id] ? { ...entry, posterImage: posterOverrides[entry.id] } : entry);
+      if (Array.isArray(payload.items)) trendingCatalog = payload.items.map(withTitleOverrides);
     } catch {}
   }
 
@@ -3094,7 +3117,7 @@
         if (movies[index]) balanced.push(movies[index]);
         if (series[index]) balanced.push(series[index]);
       }
-      freshCatalog = balanced.map((entry) => posterOverrides[entry.id] ? { ...entry, posterImage: posterOverrides[entry.id] } : entry);
+      freshCatalog = balanced.map(withTitleOverrides);
     } catch {
       freshCatalog = [];
     }
@@ -3333,7 +3356,7 @@
       const response = await apiFetch(`/api/catalog?${params}`, { cache: "no-store", headers: { accept: "application/json" } });
       if (!response.ok) return;
       const payload = await response.json();
-      if (Array.isArray(payload.items)) progressCatalog = payload.items.map((entry) => posterOverrides[entry.id] ? { ...entry, posterImage: posterOverrides[entry.id] } : entry);
+      if (Array.isArray(payload.items)) progressCatalog = payload.items.map(withTitleOverrides);
     } catch {}
   }
   function loadMetadataCache() { try { return JSON.parse(localStorage.getItem(TMDB_CACHE_KEY) || "{}"); } catch { return {}; } }
@@ -6757,7 +6780,8 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const premiere = premiereDate && !Number.isNaN(premiereDate.getTime())
       ? premiereDate.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).replace(/\s*г\.$/, "")
       : premiereRaw;
-    const backdropUrl = item.backdropImage || (item.posterImage ? highResolutionPosterUrl(item.posterImage) : "");
+    const frame = posterOnlyTitles.has(item.id) ? "" : item.backdropImage;
+    const backdropUrl = frame || (item.posterImage ? highResolutionPosterUrl(item.posterImage) : "");
     const backdropStyle = "";
     const factMarkup = [
       detailFact("Оригинальное название", item.originalTitle),
@@ -6773,7 +6797,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const actorAll = actors.length > 8 ? `<details class="detail-more"><summary>Показать всех актёров (${actors.length})</summary><div class="detail-people">${actors.map((actor) => `<span class="detail-person">${escapeHtml(actor)}</span>`).join("")}</div></details>` : "";
     const catalogReturnView = ["catalog", "movies", "series", "favorites", "evening", "history", "home"].includes(state.view) ? state.view : "catalog";
     const backLabel = `${uiIcon("arrow-left")}${catalogReturnView === "home" ? "Назад" : "Назад к списку"}`;
-    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell${item.backdropImage ? " has-backdrop" : ""}"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}</div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"}</div><h1>${escapeHtml(item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">${uiIcon("star")}</span><strong>${ratingKinopoisk}</strong><small>КиноПоиск</small></div><div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div><div class="detail-status-card"><span class="detail-status-dot ${playbackReady && hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${!playbackReady ? "Проверяю, где смотреть…" : hasPlayableSource(item) || requiresRefresh || kinopoiskId > 0 ? "Можно смотреть" : "Видео пока нет"}</strong><small>${item.kind === "series" ? countWord(titleSeasonList(item).length, "сезон", "сезона", "сезонов") : formatRuntime(item.runtime)}</small></div></div><div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${refreshAction}${detailWatch}${alternativePlayerAction}${!upcoming || item.trailerUrl ? `<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button">${uiIcon("play")}<span>Трейлер</span></button>` : ""}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button></div></div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" && playbackReady ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section>${actors.length ? `<section class="section detail-cast"><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}</div>`;
+    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell${frame ? " has-backdrop" : ""}"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}</div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"}</div><h1>${escapeHtml(item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">${uiIcon("star")}</span><strong>${ratingKinopoisk}</strong><small>КиноПоиск</small></div><div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div><div class="detail-status-card"><span class="detail-status-dot ${playbackReady && hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${!playbackReady ? "Проверяю, где смотреть…" : hasPlayableSource(item) || requiresRefresh || kinopoiskId > 0 ? "Можно смотреть" : "Видео пока нет"}</strong><small>${item.kind === "series" ? countWord(titleSeasonList(item).length, "сезон", "сезона", "сезонов") : formatRuntime(item.runtime)}</small></div></div><div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${refreshAction}${detailWatch}${alternativePlayerAction}${!upcoming || item.trailerUrl ? `<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button">${uiIcon("play")}<span>Трейлер</span></button>` : ""}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button></div></div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" && playbackReady ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section>${actors.length ? `<section class="section detail-cast"><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}</div>`;
     progressiveBackground($(".detail-shell"), "--detail-backdrop", backdropUrl);
     if (awaitingPlayback) {
       const status = page.querySelector('.detail-status-card strong');
