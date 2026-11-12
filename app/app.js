@@ -4875,7 +4875,7 @@
       const start = await lampacJson(`/lite/events?${query}&life=true`, 10000);
       if (start?.memkey) {
         const deadline = Date.now() + 25000;
-        for (let delay = 500; Date.now() < deadline && !isClosed(); delay = Math.min(1200, delay + 250)) {
+        for (let delay = 300; Date.now() < deadline && !isClosed(); delay = Math.min(1200, delay + 250)) {
           await new Promise((resolve) => window.setTimeout(resolve, delay));
           const answer = await lampacJson(`/lifeevents?memkey=${encodeURIComponent(start.memkey)}&${query}`, 10000).catch(() => null);
           if (!answer) continue;
@@ -4898,12 +4898,12 @@
   // A source either answers with the title itself or with a list of look-alikes;
   // a look-alike is taken only when its year matches, never guessed.
   async function lampacResolve(url, item) {
-    let node = await lampacJson(url);
+    let node = await lampacJson(url, 10000);
     for (let hop = 0; node?.type === "similar" && hop < 2; hop += 1) {
       const year = String(item.year || "");
       const match = (node.data || []).find((entry) => year && String(entry.year || "") === year);
       if (!match?.url) return null;
-      node = await lampacJson(match.url);
+      node = await lampacJson(match.url, 10000);
     }
     return node && ["movie", "season", "episode"].includes(node.type) && (node.data || []).length ? node : null;
   }
@@ -5491,6 +5491,7 @@
     const tmdbShow = series ? cvTmdbShow(item).catch(() => null) : Promise.resolve(null);
     const tmdbShowSoon = () => Promise.race([tmdbShow, new Promise((resolve) => window.setTimeout(() => resolve(null), 4000))]);
     const sources = [];
+    const pending = new Map();
     let active = "";
     let token = 0;
     let closed = false;
@@ -5507,7 +5508,7 @@
       statusRoot.innerHTML = text ? `${busy ? `<span class="loading-spinner" aria-hidden="true"></span>` : ""}<span>${text}</span>${share === null ? "" : `<span class="lampac-progress" aria-hidden="true"><i style="width:${Math.round(share * 100)}%"></i></span>`}` : "";
     };
     const renderSources = () => {
-      sourcesRoot.innerHTML = sources.map((source) => `<button class="filter-button${source.id === active ? " is-active" : ""}" type="button" role="tab" aria-selected="${source.id === active}" data-lampac-source="${escapeHtml(source.id)}">${escapeHtml(source.name)}${source.lines ? `<span class="lampac-quality" title="Лучшее качество у этого источника; у отдельных озвучек и серий может быть ниже">до ${lampacQualityLabel(source.lines)}</span>` : ""}</button>`).join("");
+      sourcesRoot.innerHTML = sources.map((source) => `<button class="filter-button${source.id === active ? " is-active" : ""}" type="button" role="tab" aria-selected="${source.id === active}" data-lampac-source="${escapeHtml(source.id)}">${escapeHtml(source.name)}${source.lines ? `<span class="lampac-quality" title="Лучшее качество у этого источника; у отдельных озвучек и серий может быть ниже">до ${lampacQualityLabel(source.lines)}</span>` : ""}</button>`).join("") + [...pending.values()].map((name) => `<span class="filter-button lampac-pending" aria-label="${escapeHtml(name)}: проверяю"><span class="loading-spinner" aria-hidden="true"></span>${escapeHtml(name)}</span>`).join("");
     };
     const progressKey = (seasonNumber, episodeNumber) => lampacProgressKey(item, seasonNumber, episodeNumber);
     const play = async (list, index, { voiceName = "", isMovie = false } = {}) => {
@@ -5681,12 +5682,16 @@
       const lookups = [];
       const lookup = async (entry) => {
         const id = String(entry.balanser || entry.name || entry.url);
+        pending.set(id, entry.name || id);
+        renderSources();
         try {
           // The list gives bare source addresses; the title's ids go on top, as Lampa does.
           const url = new URL(entry.url, lampacOrigin());
           lampacQuery(item).forEach((value, key) => { if (!url.searchParams.has(key)) url.searchParams.set(key, value); });
           const node = await lampacResolve(url.href, item);
-          if (!node || closed) return;
+          pending.delete(id);
+          if (closed) return;
+          if (!node) { renderSources(); return; }
           const source = { id, name: entry.name || id, node, lines: 0 };
           sources.push(source);
           renderSources();
@@ -5697,7 +5702,10 @@
           }).catch(() => {});
           if (!active || (id === saved.source && !body.dataset.touched)) select(id);
           else showSearch();
-        } catch {}
+        } catch {
+          pending.delete(id);
+          if (!closed) renderSources();
+        }
       };
       const listed = await lampacSourceList(item, (entries) => {
         entries.forEach((entry) => lookups.push(lookup(entry)));

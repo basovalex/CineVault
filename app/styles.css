@@ -1161,6 +1161,8 @@ span.studio-sort-button::after { display: none; }
 .lampac-modal { width: min(760px, 100%); margin-top: 8vh; }
 .lampac-sources { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-3); }
 .lampac-sources:empty { display: none; }
+.lampac-sources .lampac-pending { display: inline-flex; align-items: center; gap: var(--sp-2); opacity: .55; cursor: default; }
+.lampac-sources .lampac-pending .loading-spinner { width: 12px; height: 12px; border-width: 2px; }
 .lampac-sources .filter-button.is-active { background: var(--accent-soft); color: var(--accent); }
 .lampac-status { display: flex; align-items: center; gap: 10px; min-height: 24px; margin-bottom: var(--sp-2); color: var(--muted); font-size: var(--s-1); }
 .lampac-progress { flex: 1; max-width: 160px; height: 4px; margin-left: auto; overflow: hidden; border-radius: var(--r-pill); background: var(--surface-2); }
