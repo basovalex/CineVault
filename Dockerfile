@@ -7,7 +7,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin cinevault \
-    && pip install --no-cache-dir requests
+    && pip install --no-cache-dir requests cryptography
 
 WORKDIR /opt/cinevault
 COPY --chown=cinevault:cinevault app ./app

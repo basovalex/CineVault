@@ -1,4 +1,4 @@
-const SHELL_CACHE = "cinevault-shell-v169";
+const SHELL_CACHE = "cinevault-shell-v171";
 const API_CACHE = "cinevault-api-v1";
 const MEDIA_CACHE = "cinevault-media-v1";
 const SHELL = ["/", "/index.html", "/boot.js", "/styles.css", "/config.local.js", "/app.js", "/lampac-player.js", "/watch-together.js", "/watch-native.js", "/accounts.js", "/manifest.json", "/favicon.svg", "/assets/fonts/onest-cyrillic.woff2", "/assets/fonts/onest-latin.woff2", "/assets/fonts/geologica-cyrillic.woff2", "/assets/fonts/geologica-latin.woff2"];
@@ -85,4 +85,27 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   event.respondWith(caches.match(event.request).then((cached) => cached || fetch(event.request)));
+});
+
+// Notifications from the server: a new episode or a premiere from the "Напомнить" list.
+self.addEventListener("push", (event) => {
+  let message = {};
+  try { message = event.data ? event.data.json() : {}; } catch { message = { body: event.data?.text() || "" }; }
+  event.waitUntil(self.registration.showNotification(message.title || "CineVault", {
+    body: message.body || "",
+    icon: "/assets/icons/icon-192.png",
+    badge: "/assets/icons/icon-192.png",
+    image: message.image || undefined,
+    tag: message.key || undefined,
+    data: { url: message.url || "/feed/" },
+  }));
+});
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = new URL(event.notification.data?.url || "/", self.location.origin).href;
+  event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+    const open = clients.find((client) => client.url.startsWith(self.location.origin));
+    if (open) return open.navigate(url).then((client) => (client || open).focus()).catch(() => open.focus());
+    return self.clients.openWindow(url);
+  }));
 });

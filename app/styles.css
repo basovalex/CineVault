@@ -1437,3 +1437,5 @@ span.studio-sort-button::after { display: none; }
 .episode-card.is-future .episode-air { margin-left: 0; }
 .site-toast { position: fixed; z-index: 9999; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); padding: 10px 16px; border-radius: var(--r-pill); background: var(--surface-2); color: var(--text); font-size: var(--s-1); box-shadow: var(--shadow-pop); opacity: 0; transform: translate(-50%, 10px); transition: opacity .2s var(--ease), transform .2s var(--ease); pointer-events: none; }
 .site-toast.is-shown { opacity: 1; transform: translate(-50%, 0); }
+.notify-push { display: flex; gap: var(--sp-3); align-items: center; justify-content: space-between; margin-top: var(--sp-2); padding: var(--sp-3) var(--sp-2) var(--sp-2); border-top: 1px solid var(--line); color: var(--muted); font-size: var(--s-1); line-height: 1.4; }
+.notify-push button { flex: none; }

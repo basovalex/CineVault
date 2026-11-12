@@ -6324,21 +6324,25 @@
     if (!tmdbId) {
       const query = encodeURIComponent(item.originalTitle || item.title || "");
       const yearParam = item.year ? `&${kind === "tv" ? "first_air_date_year" : "year"}=${Number(item.year)}` : "";
-      const found = await tmdbRequest(`search/${kind}?query=${query}${yearParam}&language=ru-RU`);
+      const found = await cvTmdb(`search/${kind}?query=${query}${yearParam}&language=ru-RU`);
       tmdbId = Number(found.results?.[0]?.id || 0);
     }
     if (!tmdbId) return [];
     const [ru, en] = await Promise.all([
-      tmdbRequest(`${kind}/${tmdbId}/videos?language=ru-RU`).catch(() => ({})),
-      tmdbRequest(`${kind}/${tmdbId}/videos?language=en-US`).catch(() => ({})),
+      cvTmdb(`${kind}/${tmdbId}/videos?language=ru-RU`).catch(() => ({})),
+      cvTmdb(`${kind}/${tmdbId}/videos?language=en-US`).catch(() => ({})),
     ]);
     const seen = new Set();
-    return [...(ru.results || []), ...(en.results || [])]
+    const all = [...(ru.results || []), ...(en.results || [])];
+    return all
       // Trailers only: no teasers, clips, featurettes or vertical shorts.
-      .filter((video) => video.site === "YouTube" && video.type === "Trailer" && /^[\w-]{6,20}$/.test(video.key)
-        && !/#?shorts?\b|тизер|teaser|tv spot|реакция|reaction|обзор|review/i.test(String(video.name || ""))
+      // Trailers first; a film that is not out yet often has only a teaser, then that is shown.
+      .filter((video) => video.site === "YouTube" && /^[\w-]{6,20}$/.test(video.key)
+        && (video.type === "Trailer" || (video.type === "Teaser" && !all.some((other) => other.site === "YouTube" && other.type === "Trailer")))
+        && !/#?shorts?\b|tv spot|реакция|reaction|обзор|review/i.test(String(video.name || ""))
+        && (video.type === "Teaser" || !/тизер|teaser/i.test(String(video.name || "")))
         && !seen.has(video.key) && seen.add(video.key))
-      .sort((a, b) => (b.official === true) - (a.official === true) || (b.iso_639_1 === "ru") - (a.iso_639_1 === "ru") || Number(b.size || 0) - Number(a.size || 0))
+      .sort((a, b) => (b.iso_639_1 === "ru") - (a.iso_639_1 === "ru") || (b.type === "Trailer") - (a.type === "Trailer") || (b.official === true) - (a.official === true) || Number(b.size || 0) - Number(a.size || 0))
       .slice(0, 4)
       .map((video) => ({ id: video.key, title: video.name, label: video.iso_639_1 === "ru" ? "YouTube · русский" : "YouTube · оригинал", embedUrl: `https://www.youtube-nocookie.com/embed/${video.key}?autoplay=1&rel=0&modestbranding=1` }));
   }
@@ -8204,7 +8208,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       if (item.kind === "series" && item.nextEpisode?.airDate >= today) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Новая серия ${escapeHtml(airDateLabel(item.nextEpisode.airDate))}</span><small>${item.nextEpisode.season} сезон, ${item.nextEpisode.episode} серия${item.nextEpisode.name && !/^(Эпизод|Серия|Episode)\s*\d+$/i.test(item.nextEpisode.name) ? ` · ${escapeHtml(item.nextEpisode.name)}` : ""}</small></p>`;
       if (item.kind === "movie" && item.source === "tmdb" && String(item.premiere || "") > today && !upcomingPremiere(item)) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Премьера ${escapeHtml(airDateLabel(item.premiere))}</span></p>`;
       return "";
-    })()}<div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${refreshAction}${detailWatch}${alternativePlayerAction}${!upcoming || item.trailerUrl ? `<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button">${uiIcon("play")}<span>Трейлер</span></button>` : ""}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button>${parseTmdbItemId(item.id) && (item.kind === "series" || String(item.premiere || "") > new Date().toISOString().slice(0, 10) || isSubscribed(item.id)) ? subscribeButtonMarkup(item.id) : ""}</div></div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" && playbackReady ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section>${actors.length ? `<section class="section detail-cast"><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}</div>`;
+    })()}<div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${refreshAction}${detailWatch}${alternativePlayerAction}${`<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button">${uiIcon("play")}<span>Трейлер</span></button>`}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button>${parseTmdbItemId(item.id) && (item.kind === "series" || String(item.premiere || "") > new Date().toISOString().slice(0, 10) || isSubscribed(item.id)) ? subscribeButtonMarkup(item.id) : ""}</div></div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" && playbackReady ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section>${actors.length ? `<section class="section detail-cast"><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}</div>`;
     progressiveBackground($(".detail-shell"), "--detail-backdrop", backdropUrl);
     if (awaitingPlayback) {
       const status = page.querySelector('.detail-status-card strong');
@@ -8510,6 +8514,61 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const what = entry.season ? `${entry.season} сезон, ${entry.episode} серия${entry.name ? ` · ${escapeHtml(entry.name)}` : ""}` : escapeHtml(entry.name || "Фильм");
     return `<a class="notify-item${upcoming ? " is-upcoming" : ""}" href="${routeForTitle(entry.id)}" data-notify-open="${escapeHtml(entry.id)}" data-notify-season="${entry.season}" data-notify-episode="${entry.episode}"><span class="notify-art${upcoming ? " is-poster" : ""}">${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy">` : ""}</span><span class="notify-copy"><b>${escapeHtml(entry.title)}</b><span>${what}</span><small>${upcoming ? `Выйдет ${escapeHtml(feedDateLabel(entry.airDate))}` : `${entry.season ? "Новая серия" : "Уже можно смотреть"} · ${escapeHtml(feedDateLabel(entry.airDate))}`}</small></span></a>`;
   }
+  // ---- Notifications on the device itself (Web Push): the server checks new episodes and
+  // premieres of the "Напомнить" list and sends them even when the site is closed.
+  const PUSH_SUPPORTED = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  const IOS_BROWSER_TAB = /iPhone|iPad|iPod/.test(navigator.userAgent) && !window.matchMedia?.("(display-mode: standalone)").matches && !navigator.standalone;
+  async function pushSubscription() {
+    if (!PUSH_SUPPORTED) return null;
+    const registration = await navigator.serviceWorker.ready;
+    return registration.pushManager.getSubscription();
+  }
+  async function pushApi(route, body) {
+    const accounts = window.CineVaultAccounts;
+    const response = await fetch(`/api/push/${route}`, body === undefined ? { credentials: "same-origin" } : { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-CineVault-CSRF": accounts?.csrf || "" }, body: JSON.stringify(body) });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(json.error || `Ошибка ${response.status}`);
+    return json;
+  }
+  async function enablePush() {
+    if (!window.CineVaultAccounts?.user) { announceLive("Сначала войдите в аккаунт — уведомления приходят по нему"); window.CineVaultAccounts?.form?.(); return false; }
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") { announceLive("Уведомления запрещены в настройках браузера"); return false; }
+    const { key } = await pushApi("key");
+    const registration = await navigator.serviceWorker.ready;
+    const raw = atob(key.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - key.length % 4) % 4));
+    const subscription = (await registration.pushManager.getSubscription()) || await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Uint8Array.from(raw, (char) => char.charCodeAt(0)) });
+    await pushApi("subscribe", { subscription: subscription.toJSON(), hello: true });
+    announceLive("Уведомления включены");
+    return true;
+  }
+  async function disablePush() {
+    const subscription = await pushSubscription();
+    if (subscription) {
+      await pushApi("unsubscribe", { endpoint: subscription.endpoint }).catch(() => {});
+      await subscription.unsubscribe().catch(() => {});
+    }
+    announceLive("Уведомления на этом устройстве выключены");
+  }
+  async function pushControlMarkup() {
+    if (IOS_BROWSER_TAB) return `<div class="notify-push"><span>Чтобы уведомления приходили на iPhone, добавьте сайт на экран «Домой» (Поделиться → На экран «Домой») и откройте его оттуда.</span></div>`;
+    if (!PUSH_SUPPORTED) return "";
+    const on = Notification.permission === "granted" && Boolean(await pushSubscription().catch(() => null));
+    return `<div class="notify-push"><span>${on ? "Уведомления приходят на это устройство" : "Присылать уведомления на это устройство, даже когда сайт закрыт"}</span><button class="${on ? "text-button" : "primary-button"}" data-push-toggle="${on ? "off" : "on"}" type="button">${on ? "Выключить" : "Включить"}</button></div>`;
+  }
+  async function renderPushControl() {
+    const slot = $("#notify-push-slot");
+    if (!slot) return;
+    slot.innerHTML = await pushControlMarkup();
+    slot.querySelector("[data-push-toggle]")?.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const button = event.currentTarget;
+      button.disabled = true;
+      try { if (button.dataset.pushToggle === "on") await enablePush(); else await disablePush(); }
+      catch (error) { announceLive(`Не получилось: ${error.message}`); }
+      renderPushControl();
+    });
+  }
   function renderNotifyPanel() {
     const panel = $("#notify-panel");
     if (!panel) return;
@@ -8522,7 +8581,8 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       : notices.length || soon.length
         ? `${notices.map((entry) => noticeMarkup(entry).replace('class="notify-item"', `class="notify-item${unread.has(entry.key) ? " is-new" : ""}"`)).join("")}${soon.length ? `<div class="notify-subhead">Скоро выйдут</div>${soon.map((entry) => noticeMarkup(entry, { upcoming: true })).join("")}` : ""}`
         : subsLoading ? `<p class="notify-empty"><span class="loading-spinner" aria-hidden="true"></span> Проверяю новые серии…</p>` : `<p class="notify-empty">С момента подписки новых серий не выходило.</p>`;
-    panel.innerHTML = `<div class="notify-head"><b>Уведомления</b><a href="${routeForView("feed")}" data-view="feed" data-notify-close>Вся лента</a></div><div class="notify-list">${body}</div>`;
+    panel.innerHTML = `<div class="notify-head"><b>Уведомления</b><a href="${routeForView("feed")}" data-view="feed" data-notify-close>Вся лента</a></div><div class="notify-list">${body}</div><div id="notify-push-slot"></div>`;
+    renderPushControl();
   }
   function toggleNotifyPanel(open = !notifyPanelOpen) {
     const panel = $("#notify-panel");
@@ -8549,6 +8609,8 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     else loadTmdbTitle(id).then(go).catch(() => go(known));
   }
   function installNotifications() {
+    const wantedSeason = Number(new URLSearchParams(window.location.search).get("season") || 0);
+    if (wantedSeason) selectedSeason = wantedSeason;
     const button = $("#notify-button");
     if (!button || button.dataset.ready) return;
     button.dataset.ready = "1";

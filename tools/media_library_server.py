@@ -45,7 +45,7 @@ from urllib.parse import unquote, urlparse
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools import watch_together, accounts_http, client_errors, episode_ratings
+from tools import watch_together, accounts_http, client_errors, episode_ratings, push_notifier
 from tools.accounts import Accounts, AccountError
 from tools.catalog_tombstones import AUDIT_FILENAME, add_tombstone, alloha_available_ids, read_audit_ids, record_alloha_result, unplayable_ids  # noqa: E402
 
@@ -3338,6 +3338,8 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if accounts_http.handle(self, "GET", parsed):
             return
+        if push_notifier.handle(self, "GET", parsed):
+            return
         if episode_ratings.handle(self, parsed):
             return
         protected = parsed.path.startswith("/api/") and parsed.path != "/api/health" or parsed.path.startswith("/media/")
@@ -3579,6 +3581,8 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if accounts_http.handle(self, "POST", parsed):
+            return
+        if push_notifier.handle(self, "POST", parsed):
             return
         if client_errors.handle(self, parsed):
             return
@@ -4036,6 +4040,7 @@ def main() -> None:
     else:
         print("Kinopoisk playback refresh: disabled.", flush=True)
     print("Browser MP4 export: disabled; online playback remains available.", flush=True)
+    push_notifier.start(library, server.public_base_url)
     threading.Thread(target=warm_catalog, args=(args.port,), name="catalog-warmup", daemon=True).start()
     try:
         server.serve_forever()
