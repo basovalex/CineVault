@@ -2798,6 +2798,10 @@
         return;
       }
       if (replaceHistory) window.history.replaceState(routeHistoryState(route), "", window.location.href);
+      if (item.source === "tmdb" && !item.detailed) {
+        // Opened from a list: show what is known at once, then the full card.
+        loadTmdbTitle(item.id).then(() => { if (activeTitleId === item.id) renderDetails(item.id); }).catch(() => {});
+      }
       renderDetails(item.id);
       updateDocumentRoute(route, item);
       scheduleScroll(0);
@@ -3186,7 +3190,7 @@
     if (!id) return null;
     if (parseTmdbItemId(id)) {
       const known = getTitle(id);
-      if (known?.people) return known;
+      if (known?.detailed) return known;
       try { return await loadTmdbTitle(id); } catch { return known || null; }
     }
     let item = getTitle(id);
@@ -4090,6 +4094,7 @@
       "arrow-left": '<path d="M19 12H5M11 6l-6 6 6 6"/>',
       external: '<path d="M14 5h5v5M19 5l-8 8M18 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h4"/>',
       close: '<path d="m7 7 10 10M17 7 7 17"/>',
+      calendar: '<rect x="4" y="5.5" width="16" height="14" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/>',
     };
     return `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${paths[name] || ""}</svg>`;
   }
@@ -5424,6 +5429,21 @@
     if (!path) return "";
     return `${cvTmdbLocal() ? "https://image.tmdb.org/t/p" : "/tmdb/t/p"}/${size}${path}`;
   }
+  // «15 ноября» (this year) or «15 ноября 2027»; «сегодня»/«завтра» close by, as Lampa says it.
+  function airDateLabel(date) {
+    const value = String(date || "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return "";
+    const today = new Date().toISOString().slice(0, 10);
+    const tomorrow = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
+    if (value === today) return "сегодня";
+    if (value === tomorrow) return "завтра";
+    const parsed = new Date(`${value}T00:00:00Z`);
+    const sameYear = value.slice(0, 4) === today.slice(0, 4);
+    return parsed.toLocaleDateString("ru-RU", { day: "numeric", month: "long", ...(sameYear ? {} : { year: "numeric" }), timeZone: "UTC" }).replace(/\s*г\.$/, "");
+  }
+  function episodeAirDate(item, season, episode) {
+    return item?.episodeAirDates?.[String(season)]?.[String(episode)] || "";
+  }
   function tmdbItemId(kind, tmdbId) {
     return `tmdb-${kind === "series" ? "tv" : "movie"}-${tmdbId}`;
   }
@@ -5486,6 +5506,8 @@
     const age = tmdbAgeRating(raw);
     if (age) item.ageRating = age;
     if (raw.status) item.tmdbStatus = raw.status;
+    const nextEpisode = raw.next_episode_to_air;
+    if (nextEpisode?.air_date) item.nextEpisode = { season: nextEpisode.season_number, episode: nextEpisode.episode_number, name: nextEpisode.name || "", airDate: nextEpisode.air_date };
     return item;
   }
   const tmdbTitleLoads = new Map();
@@ -5498,8 +5520,14 @@
     const request = cvTmdb(`${kindPath}/${parsed.tmdbId}?language=ru-RU&append_to_response=${extra}`, 10000)
       .then((raw) => {
         const item = withTitleOverrides(tmdbToItem(raw, parsed.kind));
-        rememberLooseTitles([item]);
-        return item;
+        item.detailed = true;
+        // A short copy from a list may already be on screen: complete it in place.
+        const known = getTitle(id);
+        if (known && known !== item) Object.assign(known, item);
+        // Episodes looked up before the seasons were known are looked up again.
+        if (episodeAssetStates[id] && !Object.keys((known || item).episodeAirDates || {}).length) delete episodeAssetStates[id];
+        rememberLooseTitles([known || item]);
+        return known || item;
       })
       .catch((error) => { tmdbTitleLoads.delete(id); throw error; });
     tmdbTitleLoads.set(id, request);
@@ -8106,7 +8134,13 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const actorAll = actors.length > 8 ? `<details class="detail-more"><summary>Показать всех актёров (${actors.length})</summary><div class="detail-people">${actors.map((actor) => `<span class="detail-person">${escapeHtml(actor)}</span>`).join("")}</div></details>` : "";
     const catalogReturnView = ["catalog", "movies", "series", "favorites", "evening", "history", "home"].includes(state.view) ? state.view : "catalog";
     const backLabel = `${uiIcon("arrow-left")}${catalogReturnView === "home" ? "Назад" : "Назад к списку"}`;
-    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell${frame ? " has-backdrop" : ""}"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}</div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"}</div><h1>${escapeHtml(item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">${uiIcon("star")}</span><strong>${ratingKinopoisk}</strong><small>${item.source === "tmdb" ? "TMDB" : "КиноПоиск"}</small></div>${item.source === "tmdb" && !Number(item.imdbRating || 0) ? "" : `<div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div>`}<div class="detail-status-card"><span class="detail-status-dot ${playbackReady && hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${!playbackReady ? "Проверяю, где смотреть…" : hasPlayableSource(item) || requiresRefresh || kinopoiskId > 0 || lampacWatchable ? "Можно смотреть" : "Видео пока нет"}</strong><small>${item.kind === "series" ? countWord(titleSeasonList(item).length, "сезон", "сезона", "сезонов") : formatRuntime(item.runtime)}</small></div></div><div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${refreshAction}${detailWatch}${alternativePlayerAction}${!upcoming || item.trailerUrl ? `<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button">${uiIcon("play")}<span>Трейлер</span></button>` : ""}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button></div></div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" && playbackReady ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section>${actors.length ? `<section class="section detail-cast"><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}</div>`;
+    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell${frame ? " has-backdrop" : ""}"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}</div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"}</div><h1>${escapeHtml(item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">${uiIcon("star")}</span><strong>${ratingKinopoisk}</strong><small>${item.source === "tmdb" ? "TMDB" : "КиноПоиск"}</small></div>${item.source === "tmdb" && !Number(item.imdbRating || 0) ? "" : `<div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div>`}<div class="detail-status-card"><span class="detail-status-dot ${playbackReady && hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${!playbackReady ? "Проверяю, где смотреть…" : hasPlayableSource(item) || requiresRefresh || kinopoiskId > 0 || lampacWatchable ? "Можно смотреть" : "Видео пока нет"}</strong><small>${item.kind === "series" ? countWord(titleSeasonList(item).length, "сезон", "сезона", "сезонов") : formatRuntime(item.runtime)}</small></div></div>${(() => {
+      // As in Lampa: when the next episode comes out, or when a film is released.
+      const today = new Date().toISOString().slice(0, 10);
+      if (item.kind === "series" && item.nextEpisode?.airDate >= today) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Новая серия ${escapeHtml(airDateLabel(item.nextEpisode.airDate))}</span><small>${item.nextEpisode.season} сезон, ${item.nextEpisode.episode} серия${item.nextEpisode.name && !/^(Эпизод|Серия|Episode)\s*\d+$/i.test(item.nextEpisode.name) ? ` · ${escapeHtml(item.nextEpisode.name)}` : ""}</small></p>`;
+      if (item.kind === "movie" && item.source === "tmdb" && String(item.premiere || "") > today) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Премьера ${escapeHtml(airDateLabel(item.premiere))}</span></p>`;
+      return "";
+    })()}<div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${refreshAction}${detailWatch}${alternativePlayerAction}${!upcoming || item.trailerUrl ? `<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button">${uiIcon("play")}<span>Трейлер</span></button>` : ""}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button></div></div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" && playbackReady ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section>${actors.length ? `<section class="section detail-cast"><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}</div>`;
     progressiveBackground($(".detail-shell"), "--detail-backdrop", backdropUrl);
     if (awaitingPlayback) {
       const status = page.querySelector('.detail-status-card strong');
@@ -8167,29 +8201,38 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   const EPISODE_MAP_MIN_RATED = 6;
   // A TMDB series: names, stills and per-episode ratings of every season, from TMDB, as Lampa shows them.
   async function loadTmdbEpisodeAssets(item, assetState) {
+    if (!item.detailed || !(item.seasons || []).length) {
+      // The seasons are not known yet (a short copy from a list): wait for the full card.
+      delete episodeAssetStates[item.id];
+      return;
+    }
     try {
       const count = (item.seasons || []).length;
       const results = await Promise.all(Array.from({ length: count }, (_, index) => cvTmdb(`tv/${item.tmdbId}/season/${index + 1}?language=ru-RU`).catch(() => null)));
       const titles = {};
       const posters = {};
+      const airDates = {};
       const ratings = [];
       results.forEach((data, index) => {
         if (!data) return;
         const season = String(index + 1);
         titles[season] = {};
         posters[season] = {};
+        airDates[season] = {};
         const rated = [];
         (data.episodes || []).forEach((episode) => {
           const number = String(episode.episode_number);
           const name = String(episode.name || "").replace(/^(Эпизод|Серия|Episode)\s*\d+$/i, "").trim();
           if (name) titles[season][number] = name;
           if (episode.still_path) posters[season][number] = tmdbImage(episode.still_path, "w300");
+          if (episode.air_date) airDates[season][number] = episode.air_date;
           if (Number(episode.vote_count || 0) >= 3 && Number(episode.vote_average || 0) > 0) rated.push({ episode: episode.episode_number, rating: Math.round(episode.vote_average * 10) / 10, votes: episode.vote_count });
         });
         if (rated.length) ratings.push({ season: index + 1, episodes: rated });
       });
       item.episodeTitles = titles;
       item.episodePosterUrls = posters;
+      item.episodeAirDates = airDates;
       if (ratings.reduce((sum, season) => sum + season.episodes.length, 0) >= EPISODE_MAP_MIN_RATED) episodeRatingsCache.set(item.id, ratings);
       assetState.loaded = true;
     } catch {
@@ -8279,7 +8322,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       const poster = episodePosterMarkup(item, selectedSeason, episode, title, episodePlayable);
       const rated = episodeRatingFor(item, selectedSeason, episode);
       const hasStill = Boolean(item.episodePosterUrls?.[String(selectedSeason)]?.[String(episode)]);
-      return `<article class="episode-card${hasStill ? " has-still" : ""}${current ? " is-now" : ""}${seen ? " is-seen" : ""}">${ratio > 0 ? `<span class="episode-card-progress" style="--progress:${ratio}%" aria-hidden="true"></span>` : ""}${poster}<div class="episode-card-copy"><div class="episode-card-kicker">Сезон ${selectedSeason} · серия ${episode}${rated ? ` <span class="episode-rating is-r${ratingStep(rated.rating)}" title="Оценка IMDb">${rated.rating.toFixed(1)}</span>` : ""}</div><h3>${escapeHtml(title)}</h3>${episodeVoiceMarkup(item, selectedSeason, episode, title)}${progressText ? `<p>${escapeHtml(progressText)}</p>` : ""}</div></article>`;
+      return `<article class="episode-card${hasStill ? " has-still" : ""}${current ? " is-now" : ""}${seen ? " is-seen" : ""}">${ratio > 0 ? `<span class="episode-card-progress" style="--progress:${ratio}%" aria-hidden="true"></span>` : ""}${poster}<div class="episode-card-copy"><div class="episode-card-kicker">Сезон ${selectedSeason} · серия ${episode}${rated ? ` <span class="episode-rating is-r${ratingStep(rated.rating)}" title="${item.source === "tmdb" ? "Оценка TMDB" : "Оценка IMDb"}">${rated.rating.toFixed(1)}</span>` : ""}${(() => { const airDate = episodeAirDate(item, selectedSeason, episode); return airDate && airDate > new Date().toISOString().slice(0, 10) ? ` <span class="episode-air">Выйдет ${escapeHtml(airDateLabel(airDate))}</span>` : ""; })()}</div><h3>${escapeHtml(title)}</h3>${episodeVoiceMarkup(item, selectedSeason, episode, title)}${progressText ? `<p>${escapeHtml(progressText)}</p>` : ""}</div></article>`;
     }).join("");
     const loadingNote = assetsLoading ? `<div class="episode-loading-note" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю список серий…</div>` : isImportedSeries && episodeImagesLoading ? `<div class="episode-loading-note" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю серии сезона…</div>` : assetsError ? `<div class="episode-loading-note is-error" role="status">${escapeHtml(assetsError)} Показываю доступные данные.</div>` : "";
     return `<section class="section"><div class="section-header"><div><h2>Сезоны и серии</h2><span>${countWord(seasonCount, "сезон", "сезона", "сезонов")} · ${countWord(seasonList.reduce((sum, season) => sum + season.episodes.length, 0), "серия", "серии", "серий")}</span></div>${sourceAction}</div><div class="season-tabs">${seasonList.map((season) => `<button class="filter-button ${selectedSeason === season.number ? "is-active" : ""}" data-season="${season.number}" type="button">Сезон ${season.number}</button>`).join("")}</div>${loadingNote}<div class="episode-list is-season-entering">${episodeRows}</div></section>${episodeMapMarkup(item)}`;

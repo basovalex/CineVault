@@ -1366,3 +1366,9 @@ span.studio-sort-button::after { display: none; }
 }
 .home-rows-loading { display: flex; align-items: center; gap: 10px; padding: var(--sp-6) var(--gutter); color: var(--muted); }
 .home-more { height: 1px; }
+/* When the next episode or the premiere comes, as in Lampa. */
+.detail-next-air { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: var(--sp-3) 0 0; padding: 8px 14px; border-radius: 12px; background: var(--glass); backdrop-filter: blur(10px); font-size: var(--s0); }
+.detail-next-air .ui-icon { width: 18px; height: 18px; color: var(--accent); }
+.detail-next-air span { font-weight: 600; }
+.detail-next-air small { color: var(--text-2); font-size: var(--s-1); }
+.episode-air { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: var(--glass); color: var(--text); font-size: 12px; font-weight: 600; }
