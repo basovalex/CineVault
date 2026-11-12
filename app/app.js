@@ -5121,7 +5121,7 @@
     const pending = awaitingPremierePlayback(item);
     return {
       main: Boolean(item) && (hasPlayableSource(item) || shouldRefreshKinopoiskPlayback(item)),
-      alternative: !pending && Number(item?.kinopoiskId || item?.kinopoisk_id || 0) > 0,
+      alternative: !pending && (Number(item?.kinopoiskId || item?.kinopoisk_id || 0) > 0 || Boolean(item?.source === "tmdb" && lampacOrigin())),
     };
   }
   function openProvider(item, provider, { resume = false, season = null, episode = null } = {}) {
@@ -6494,6 +6494,15 @@
   let frozenFeatureIds = null;
   let homeShelvesReleased = false;
   function homeFeaturePicks(count = 5) {
+    if (lampacOrigin() && tmdbHome) {
+      // As in Lampa: the day's trends with a frame and a description, unwatched first.
+      const trends = (tmdbHome.find((row) => row.key === "trend-day")?.items || []).filter((item) => item.backdropImage && String(item.description || "").length >= 60);
+      const unseen = trends.filter((item) => !hasSharedHistory(item));
+      const pool = (unseen.length >= count ? unseen : trends).slice(0, 12);
+      const seed = new Date().toISOString().slice(0, 10);
+      const daily = [...pool].sort((left, right) => stableHash(`${seed}:${left.id}`) - stableHash(`${seed}:${right.id}`)).slice(0, count);
+      if (daily.length) return daily;
+    }
     if (frozenFeatureIds) {
       const kept = frozenFeatureIds.map((id) => getTitle(id)).filter(Boolean);
       if (kept.length === frozenFeatureIds.length) return kept;
@@ -6730,7 +6739,9 @@
       discoveryShelf({ id: "evening", eyebrow: "", title: "На один вечер", description: "Фильмы, которые удобно включить сегодня.", items: collectionItems("evening", 12) }),
       discoveryShelf({ id: "anime", eyebrow: "", title: "Аниме", description: "Сериалы и фильмы с жанром «аниме».", items: collectionItems("anime", 12) }),
     ].filter(Boolean).join("");
-    page.innerHTML = `${homeFeatureMarkup(picks)}<div class="home-shelves">${shelves}</div>`;
+    const lampaShelves = lampacOrigin() ? tmdbHomeShelves(continueShelf) : null;
+    page.innerHTML = `${homeFeatureMarkup(picks)}<div class="home-shelves">${lampaShelves ?? shelves}</div>`;
+    if (lampaShelves !== null) bindTmdbHomeMore();
     const feature = $(".home-feature");
     // The shelves wait (at most 2.5 s) until the hero frame is in, so their posters do not
     // share the first seconds of a slow connection with it.
@@ -7723,6 +7734,91 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   }
 
   const similarTitlesCache = new Map();
+  // ---- Home as in Lampa (src/core/api/sources/tmdb.js main()): fixed TMDB rows, then genre
+  // rows without end while scrolling.
+  let tmdbHome = null;
+  let tmdbHomeLoading = null;
+  let tmdbHomeGenreCursor = 0;
+  const tmdbHomeGenreRows = [];
+  const TMDB_HOME_GENRES = [[28, "Боевики"], [35, "Комедии"], [18, "Драмы"], [878, "Фантастика"], [53, "Триллеры"], [16, "Мультфильмы"], [27, "Ужасы"], [10749, "Мелодрамы"], [80, "Криминал"], [12, "Приключения"], [14, "Фэнтези"], [9648, "Детективы"], [10751, "Семейные"], [36, "Исторические"], [10752, "Военные"], [99, "Документальные"], [37, "Вестерны"], [10402, "Музыкальные"]];
+  function tmdbDay(offsetDays = 0) {
+    return new Date(Date.now() + offsetDays * 864e5).toISOString().slice(0, 10);
+  }
+  function loadTmdbHome() {
+    if (tmdbHome) return Promise.resolve(tmdbHome);
+    if (tmdbHomeLoading) return tmdbHomeLoading;
+    const rows = [
+      ["now", "Сейчас смотрят", "Вышли в цифре за последние три месяца — не экранки", `discover/movie?with_release_type=4%7C5%7C6&release_date.lte=${tmdbDay()}&release_date.gte=${tmdbDay(-90)}&sort_by=popularity.desc&vote_count.gte=10`, "movie"],
+      ["trend-day", "Тренды дня", "", "trending/all/day", ""],
+      ["trend-week", "Тренды недели", "", "trending/movie/week", "movie"],
+      ["upcoming", "Скоро", "Премьеры ближайших двух месяцев", `discover/movie?primary_release_date.gte=${tmdbDay(1)}&primary_release_date.lte=${tmdbDay(60)}&sort_by=popularity.desc`, "movie"],
+      ["popular-movies", "Популярные фильмы", "", "movie/popular", "movie"],
+      ["popular-tv", "Популярные сериалы", "", "trending/tv/week", "tv"],
+      ["top-movies", "Топ фильмов", "", "movie/top_rated", "movie"],
+      ["top-tv", "Топ сериалов", "", "tv/top_rated", "tv"],
+    ];
+    const today = tmdbDay();
+    tmdbHomeLoading = Promise.all(rows.map(([key, title, description, path, kind]) => cvTmdb(`${path}${path.includes("?") ? "&" : "?"}language=ru-RU`)
+      .then((json) => {
+        let items = tmdbListItems(json, kind);
+        if (key === "upcoming") items = items.filter((item) => !item.premiere || item.premiere >= today);
+        return { key, title, description, items };
+      })
+      .catch(() => ({ key, title, description, items: [] }))))
+      .then((list) => {
+        tmdbHome = list.filter((row) => row.items.length);
+        rememberLooseTitles(tmdbHome.flatMap((row) => row.items));
+        return tmdbHome;
+      })
+      .finally(() => { tmdbHomeLoading = null; });
+    return tmdbHomeLoading;
+  }
+  function tmdbHomeRowMarkup(row) {
+    if (!row.items.length) return "";
+    return `<section class="discovery-shelf" data-tmdb-row="${escapeHtml(row.key)}"><div class="section-header discovery-shelf-header"><div><h2>${escapeHtml(row.title)}</h2>${row.description ? `<p>${escapeHtml(row.description)}</p>` : ""}</div></div><div class="discovery-rail">${row.items.map((candidate) => poster(candidate)).join("")}</div></section>`;
+  }
+  function tmdbHomeShelves(continueShelf) {
+    if (!tmdbHome) {
+      loadTmdbHome().then(() => { if (state.view === "home" && readRouteFromLocation().type === "view" && readRouteFromLocation().view === "home") { renderHome(); hydrateLazyPosters(); } }).catch(() => {});
+      return `${continueShelf || ""}<div class="home-rows-loading" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю подборки…</div>`;
+    }
+    return `${continueShelf || ""}${tmdbHome.map(tmdbHomeRowMarkup).join("")}${tmdbHomeGenreRows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-tmdb-home-more aria-hidden="true"></div>`;
+  }
+  let tmdbHomeObserver = null;
+  let tmdbHomeMoreBusy = false;
+  function bindTmdbHomeMore() {
+    tmdbHomeObserver?.disconnect();
+    const sentinel = page.querySelector("[data-tmdb-home-more]");
+    if (!sentinel || !("IntersectionObserver" in window)) return;
+    tmdbHomeObserver = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) loadNextTmdbGenreRow();
+    }, { rootMargin: "800px 0px" });
+    tmdbHomeObserver.observe(sentinel);
+  }
+  async function loadNextTmdbGenreRow() {
+    if (tmdbHomeMoreBusy) return;
+    if (tmdbHomeGenreCursor >= TMDB_HOME_GENRES.length * 2) return;
+    tmdbHomeMoreBusy = true;
+    try {
+      const index = tmdbHomeGenreCursor++;
+      const [genreId, name] = TMDB_HOME_GENRES[index % TMDB_HOME_GENRES.length];
+      // First lap: popular films of the genre; second lap: the best rated ones.
+      const second = index >= TMDB_HOME_GENRES.length;
+      const path = `discover/movie?with_genres=${genreId}&sort_by=${second ? "vote_average.desc&vote_count.gte=1500" : "popularity.desc&vote_count.gte=50"}&language=ru-RU`;
+      const items = tmdbListItems(await cvTmdb(path).catch(() => null), "movie");
+      const row = { key: `genre-${index}`, title: second ? `${name}: лучшие` : name, description: "", items };
+      if (!items.length) return;
+      tmdbHomeGenreRows.push(row);
+      rememberLooseTitles(items);
+      const sentinel = page.querySelector("[data-tmdb-home-more]");
+      if (sentinel) { sentinel.insertAdjacentHTML("beforebegin", tmdbHomeRowMarkup(row)); hydrateLazyPosters(); }
+    } finally {
+      tmdbHomeMoreBusy = false;
+      const sentinel = page.querySelector("[data-tmdb-home-more]");
+      if (sentinel && sentinel.getBoundingClientRect().top < window.innerHeight + 800) window.setTimeout(loadNextTmdbGenreRow, 50);
+    }
+  }
+
   // Under a TMDB card, as in Lampa: the cast with photos, then TMDB's recommendations and similar titles.
   const tmdbExtrasCache = new Map();
   function personCardMarkup(person) {

@@ -1364,3 +1364,5 @@ span.studio-sort-button::after { display: none; }
   .person-card { width: 92px; }
   .person-card-photo { width: 80px; height: 80px; }
 }
+.home-rows-loading { display: flex; align-items: center; gap: 10px; padding: var(--sp-6) var(--gutter); color: var(--muted); }
+.home-more { height: 1px; }
