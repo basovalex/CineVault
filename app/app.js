@@ -5328,6 +5328,7 @@
     let roomSync = null;
     let currentRoom = "";
     rememberHistory(item.id);
+    const episodes = list.map((entry, position) => ({ label: entry.label, note: entry.title || entry.note || "", name: entry.title || "", still: entry.still || "", s: entry.s, e: entry.e, current: position === index, startAt: lampacSavedPosition(item, entry.s, entry.e) }));
     const player = window.CineVaultPlayer.open({
       title: item.title,
       voice,
@@ -5339,7 +5340,7 @@
       listTitle: isMovie ? "Озвучка" : "Серии",
       keepPosition: isMovie,
       autoNext: !isMovie,
-      episodes: list.map((entry, position) => ({ label: entry.label, note: entry.title || entry.note || "", name: entry.title || "", still: entry.still || "", s: entry.s, e: entry.e, current: position === index, startAt: lampacSavedPosition(item, entry.s, entry.e) })),
+      episodes,
       resolve: async (position) => {
         const entry = list[position];
         const next = await lampacStream(entry.entry);
@@ -5379,6 +5380,23 @@
         if (activeTitleId === item.id) renderDetails(getTitleFromPage());
       },
     });
+    // Names and stills for the episode list and the next-episode card, like Lampa; they may
+    // arrive after the player has opened, the player reads them when it shows them.
+    if (!isMovie) {
+      cvTmdbShow(item).then((show) => {
+        if (!show) return;
+        [...new Set(episodes.map((entry) => entry.s).filter(Boolean))].forEach((seasonNumber) => {
+          cvTmdbEpisodes(show.id, seasonNumber).then((names) => {
+            episodes.forEach((entry) => {
+              const info = entry.s === seasonNumber ? names?.[entry.e] : null;
+              if (!info) return;
+              if (info.name && !entry.name) { entry.name = info.name; entry.note = info.name; }
+              if (info.still && !entry.still) entry.still = info.still;
+            });
+          }).catch(() => {});
+        });
+      }).catch(() => {});
+    }
     const onPlay = () => { if (roomSync && !roomSync.isApplying()) roomSync.publish({ playing: true }); };
     const onPause = () => { if (roomSync && !roomSync.isApplying() && !player.video.seeking) roomSync.publish({ position: Number(player.video.currentTime || 0), playing: false }); };
     // Sent when the seek starts: waiting for "seeked" let the room pull the host back first.
@@ -5641,7 +5659,7 @@
         return;
       }
       const startRecord = start >= 0 ? state.progress[progressKey(list[start].s, list[start].e)] : null;
-      if (start >= 0 && startRecord?.completed && list[start + 1]) start += 1;
+      if (!picked && start >= 0 && startRecord?.completed && list[start + 1]) start += 1;
       const resuming = start >= 0 && Boolean(resumeNote(list[start].s, list[start].e));
       if (start < 0) start = 0;
       const startNote = resumeNote(list[start].s, list[start].e);
@@ -5755,7 +5773,15 @@
       const resumeS = Number(progress?.seasonNumber || 0);
       const resumeE = Number(progress?.episodeNumber || 0);
       const resumeRecord = resumeS && resumeE ? state.progress[progressKey(resumeS, resumeE)] : null;
-      const resume = resumeS && resumeE && !resumeRecord?.completed ? `<button class="primary-button lampac-start" type="button" data-lampac-pick="${resumeS}:${resumeE}">${playerIcon("play")}<span>Продолжить · ${resumeS} сезон, ${resumeE} серия</span>${resumeNote(resumeS, resumeE) ? `<small>${escapeHtml(resumeNote(resumeS, resumeE))}</small>` : ""}</button>` : "";
+      let resume = "";
+      if (resumeS && resumeE && !resumeRecord?.completed) {
+        resume = `<button class="primary-button lampac-start" type="button" data-lampac-pick="${resumeS}:${resumeE}">${playerIcon("play")}<span>Продолжить · ${resumeS} сезон, ${resumeE} серия</span>${resumeNote(resumeS, resumeE) ? `<small>${escapeHtml(resumeNote(resumeS, resumeE))}</small>` : ""}</button>`;
+      } else if (resumeS && resumeE) {
+        const inSeason = Number(seasonsList.find((one) => one.season_number === resumeS)?.episode_count || 0);
+        const nextSeason = seasonsList.find((one) => one.season_number > resumeS);
+        const [nextS, nextE] = resumeE < inSeason ? [resumeS, resumeE + 1] : nextSeason ? [nextSeason.season_number, 1] : [0, 0];
+        if (nextS) resume = `<button class="primary-button lampac-start" type="button" data-lampac-pick="${nextS}:${nextE}">${playerIcon("play")}<span>Дальше · ${nextS} сезон, ${nextE} серия</span><small>${resumeS} сезон, ${resumeE} серия просмотрена</small></button>`;
+      }
       const tabs = seasonsList.length > 1 ? `<div class="lampac-label">Сезон</div><div class="lampac-season-row">${seasonsList.map((one) => `<button class="filter-button${one.season_number === current ? " is-active" : ""}" type="button" data-lampac-step-season="${one.season_number}">${one.season_number} сезон</button>`).join("")}</div>` : "";
       const count = Number(seasonsList.find((one) => one.season_number === current)?.episode_count || 0);
       const cells = (names = {}) => Array.from({ length: count }, (unused, position) => {

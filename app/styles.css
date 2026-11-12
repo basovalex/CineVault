@@ -1365,6 +1365,28 @@ span.studio-sort-button::after { display: none; }
 .lampac-voice-copy small { color: var(--muted); font-size: var(--s-1); }
 .lampac-voice .player-choice-badge { position: static; justify-self: end; background: var(--surface-3); color: var(--text-2); white-space: nowrap; }
 .cv-player-skip { gap: 14px; padding: 10px 16px 10px 10px; max-width: min(460px, calc(100% - 32px)); background: rgba(20,22,26,.92); color: #fff; text-align: left; border: 1px solid rgba(255,255,255,.12); }
+/* Следующая серия, как в Lampa: карточка с кадром появляется на титрах и не пропадает сама. */
+.cv-player-next { position: absolute; right: clamp(16px, 3vw, 40px); bottom: 150px; z-index: 3; max-width: min(520px, calc(100% - 32px)); animation: cv-panel .25s ease both; }
+.cv-player-next .cv-player-skip { position: static; max-width: none; width: 100%; padding: 10px 44px 10px 10px; }
+.cv-player-skip-thumb { position: relative; flex: none; display: block; }
+.cv-player-skip-thumb .cv-player-skip-still { width: clamp(150px, 16vw, 220px); }
+.cv-player-skip-play { position: absolute; inset: 0; display: grid; place-items: center; }
+.cv-player-skip-play svg { width: 40px; height: 40px; padding: 10px; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; }
+.cv-player-skip:hover .cv-player-skip-play svg, .cv-player-skip:focus-visible .cv-player-skip-play svg { background: var(--accent); }
+.cv-player-skip-copy strong { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.cv-player-skip-close { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 50%; background: transparent; color: rgba(255,255,255,.75); cursor: pointer; }
+.cv-player-skip-close:hover, .cv-player-skip-close:focus-visible { background: rgba(255,255,255,.12); color: #fff; outline: none; }
+.cv-player-skip-close svg { width: 18px; height: 18px; }
+.cv-player-option.has-thumb { justify-content: flex-start; gap: 14px; padding-block: 10px; }
+.cv-player-option.has-thumb > span:not(.cv-player-option-thumb) { flex: 1; min-width: 0; }
+.cv-player-option.has-thumb > svg { margin-left: auto; }
+.cv-player-option-thumb { flex: none; width: 128px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; background: rgba(255,255,255,.08); }
+.cv-player-option.is-active .cv-player-option-thumb { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (max-width: 720px) {
+  .cv-player-next { bottom: 190px; left: 16px; right: 16px; max-width: none; }
+  .cv-player-skip-thumb .cv-player-skip-still { width: 120px; }
+  .cv-player-option-thumb { width: 96px; }
+}
 .cv-player-skip:hover, .cv-player-skip:focus-visible { background: rgba(40,42,48,.95); outline: none; }
 .cv-player-skip-still { flex: none; width: 128px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; background: #222; }
 .cv-player-skip-icon { display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: rgba(255,255,255,.12); }
@@ -1501,3 +1523,4 @@ span.studio-sort-button::after { display: none; }
   .page.is-entering, .discovery-rail > *, .poster-grid > *, .detail-shell, .modal-backdrop, .modal-backdrop > .modal { animation: none; }
 }
 .lampac-qualities { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+.cv-player.has-panel .cv-player-next { display: none; }

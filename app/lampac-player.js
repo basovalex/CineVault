@@ -25,6 +25,7 @@
     subs: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 13h4M13 13h4M7 16h10"/>',
     next: '<path d="M6 6l9 6-9 6V6z" fill="currentColor" stroke="none"/><path d="M18 6v12"/>',
     check: '<path d="M5 12l5 5 9-10"/>',
+    close: '<path d="M6 6l12 12M18 6L6 18"/>',
     together: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0113 0"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.2a5 5 0 016.5 4.8"/>',
   };
   const icon = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || ""}</svg>`;
@@ -106,7 +107,7 @@
         </div>
         <div class="cv-player-clock"><strong></strong><small></small></div>
       </div>
-      <button class="cv-player-skip" data-act="next" type="button" hidden></button>
+      <div class="cv-player-next" hidden><button class="cv-player-skip" data-act="next" type="button"></button><button class="cv-player-skip-close" data-act="next-hide" type="button" aria-label="Скрыть следующую серию">${icon("close")}</button></div>
       <div class="cv-player-bottom">
         <div class="cv-player-times"><span class="cv-player-pos">00:00:00</span><span class="cv-player-rest"></span></div>
         <div class="cv-player-bar" role="slider" tabindex="0" aria-label="Позиция">
@@ -338,28 +339,30 @@
         fail("Не удалось открыть эту серию. Попробуйте ещё раз или выберите другую озвучку.");
       }
     };
+    // Like Lampa: the next-episode card with its still comes up on the end credits and stays;
+    // it counts down only over the last seconds, and the episode's end plays the next one.
+    let nextHiddenFor = -1;
+    const nextBox = () => $(".cv-player-next");
     const cancelNext = () => {
       window.clearInterval(nextTimer);
       nextTimer = 0;
-      $(".cv-player-skip").hidden = true;
+      nextBox().hidden = true;
     };
-    const offerNext = () => {
+    const offerNext = (rest) => {
       const target = index + 1;
-      if (!episodes[target] || nextTimer) return;
-      nextLeft = NEXT_COUNTDOWN;
-      const button = $(".cv-player-skip");
       const next = episodes[target];
-      const render = () => {
-        button.innerHTML = `${next.still ? `<img class="cv-player-skip-still" src="${esc(next.still)}" alt="" loading="lazy">` : `<span class="cv-player-skip-icon">${icon("next")}</span>`}<span class="cv-player-skip-copy"><small>Следующая серия · через ${nextLeft} с</small><strong>${esc(next.name || next.label)}</strong>${next.name ? `<em>${esc(next.label)}</em>` : ""}</span>`;
-      };
-      render();
-      button.hidden = false;
-      nextTimer = window.setInterval(() => {
-        nextLeft -= 1;
-        if (nextLeft <= 0) { goTo(target); return; }
-        render();
-      }, 1000);
+      if (!next || nextHiddenFor === index) return;
+      const left = Math.max(0, Math.ceil(rest));
+      const lead = left <= NEXT_COUNTDOWN ? `Следующая серия · через ${left} с` : "Следующая серия";
+      const button = $(".cv-player-skip");
+      const key = `${target}|${next.still || ""}|${next.name || ""}|${lead}`;
+      if (button.dataset.key !== key) {
+        button.dataset.key = key;
+        button.innerHTML = `${next.still ? `<span class="cv-player-skip-thumb"><img class="cv-player-skip-still" src="${esc(next.still)}" alt="" loading="lazy"><span class="cv-player-skip-play">${icon("play")}</span></span>` : `<span class="cv-player-skip-icon">${icon("next")}</span>`}<span class="cv-player-skip-copy"><small>${lead}</small><strong>${esc(next.name || next.label)}</strong>${next.name ? `<em>${esc(next.label)}</em>` : ""}</span>`;
+      }
+      nextBox().hidden = false;
     };
+    const nextLead = (duration) => Math.min(90, Math.max(30, duration * 0.04));
 
     const openPanel = (kind) => {
       if (panelKind === kind) { closePanel(); return; }
@@ -414,7 +417,7 @@
         items = SPEEDS.map((speed) => ({ label: speed === 1 ? "Обычная" : `${speed}×`, active: video.playbackRate === speed, run: () => { video.playbackRate = speed; savePrefs({ speed }); } }));
       } else if (kind === "list") {
         title = options.listTitle || "Серии";
-        items = episodes.map((entry, entryIndex) => ({ label: entry.label, note: entry.note || "", active: entryIndex === index, run: () => { if (entryIndex !== index) goTo(entryIndex, options.keepPosition ? video.currentTime : entry.startAt || 0); } }));
+        items = episodes.map((entry, entryIndex) => ({ label: entry.name ? `${entry.e ? `${entry.e}. ` : ""}${entry.name}` : entry.label, note: entry.name ? entry.label : entry.note || "", still: options.autoNext !== false ? entry.still || "" : undefined, active: entryIndex === index, run: () => { if (entryIndex !== index) goTo(entryIndex, options.keepPosition ? video.currentTime : entry.startAt || 0); } }));
         if (options.onChooseSource) items.push({ label: "Другой источник или озвучка", note: "Вернуться к выбору", run: () => { const pick = options.onChooseSource; close(); pick(); } });
       }
       panelKind = kind;
@@ -422,7 +425,7 @@
       panel.querySelector("h3").innerHTML = `<button class="cv-player-back" type="button" aria-label="${parent ? "Назад к настройкам" : "Закрыть меню"}">${icon("back")}</button>${esc(title)}`;
       panel.querySelector(".cv-player-back").addEventListener("click", () => { if (parent) { panelKind = ""; openPanel(parent); } else closePanel(); });
       panel.querySelector(".cv-player-options").innerHTML = items.length
-        ? items.map((entry, itemIndex) => `<button type="button" class="cv-player-option${entry.active ? " is-active" : ""}" data-option="${itemIndex}"><span><strong>${esc(entry.label)}</strong>${entry.note ? `<small>${esc(entry.note)}</small>` : ""}</span>${entry.active ? icon("check") : ""}</button>`).join("")
+        ? items.map((entry, itemIndex) => `<button type="button" class="cv-player-option${entry.active ? " is-active" : ""}${entry.still !== undefined ? " has-thumb" : ""}" data-option="${itemIndex}">${entry.still !== undefined ? (entry.still ? `<img class="cv-player-option-thumb" src="${esc(entry.still)}" alt="" loading="lazy">` : `<span class="cv-player-option-thumb" aria-hidden="true"></span>`) : ""}<span><strong>${esc(entry.label)}</strong>${entry.note ? `<small>${esc(entry.note)}</small>` : ""}</span>${entry.active ? icon("check") : ""}</button>`).join("")
         : `<p class="cv-player-empty">Пока нечего выбрать.</p>`;
       panel.querySelectorAll("[data-option]").forEach((button) => button.addEventListener("click", () => {
         const entry = items[Number(button.dataset.option)];
@@ -474,7 +477,10 @@
       bar.setAttribute("aria-valuenow", String(Math.round(position)));
       bar.setAttribute("aria-valuetext", clock(position));
       if (Date.now() - lastSave > 5000) saveProgress(false);
-      if (options.autoNext !== false && episodes[index + 1] && duration - position < 25 && duration > 300) offerNext();
+      if (options.autoNext !== false && episodes[index + 1] && duration > 300) {
+        if (duration - position < nextLead(duration)) offerNext(duration - position);
+        else if (!nextBox().hidden) cancelNext();
+      }
     };
     const updateStats = () => {
       $(".cv-player-clock strong").textContent = hhmm(new Date());
@@ -539,6 +545,7 @@
       fullscreen: toggleFullscreen,
       pip: () => { if (document.pictureInPictureElement) document.exitPictureInPicture(); else video.requestPictureInPicture?.().catch(() => toast("Браузер не поддерживает")); },
       next: () => goTo(index + 1),
+      "next-hide": () => { nextHiddenFor = index; cancelNext(); },
       room: () => options.onRoom?.(),
       quality: () => openPanel("quality"),
       audio: () => openPanel("audio"),
