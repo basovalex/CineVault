@@ -1177,10 +1177,38 @@ span.studio-sort-button::after { display: none; }
 .lampac-sources .lampac-pending { display: inline-flex; align-items: center; gap: var(--sp-2); opacity: .55; cursor: default; }
 .lampac-sources .lampac-pending .loading-spinner { width: 12px; height: 12px; border-width: 2px; }
 .lampac-sources .filter-button.is-active { background: var(--accent-soft); color: var(--accent); }
+@media (max-width: 720px) {
+  .lampac-sources { flex-wrap: nowrap; overflow-x: auto; margin-right: -18px; padding-right: 18px; scrollbar-width: none; }
+  .lampac-sources::-webkit-scrollbar { display: none; }
+}
 .lampac-status { display: flex; align-items: center; gap: 10px; min-height: 24px; margin-bottom: var(--sp-2); color: var(--muted); font-size: var(--s-1); }
 .lampac-progress { flex: 1; max-width: 160px; height: 4px; margin-left: auto; overflow: hidden; border-radius: var(--r-pill); background: var(--surface-2); }
 .lampac-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .4s var(--ease); }
 .lampac-label { margin: var(--sp-4) 0 var(--sp-2); color: var(--muted); font-size: var(--s-1); }
+/* Загрузка в окне «Где смотреть»: видно, что именно грузится, и нельзя натыкать лишнего. */
+.lampac-status.is-busy { position: sticky; top: 0; z-index: 2; flex-wrap: wrap; margin: 0 0 var(--sp-2); padding: 12px 14px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)); box-shadow: 0 8px 20px rgb(0 0 0 / 35%); color: var(--text); font-size: var(--s0); font-weight: 500; }
+.lampac-status.is-busy .loading-spinner { width: 18px; height: 18px; border-top-color: var(--accent); }
+.lampac-status.is-busy { flex-wrap: nowrap; align-items: flex-start; line-height: 1.35; }
+.lampac-status.is-busy > .loading-spinner { margin-top: 1px; }
+.lampac-status.is-busy > span:not(.loading-spinner):not(.lampac-progress) { flex: 1; min-width: 0; }
+.lampac-status.is-busy .lampac-progress { align-self: center; flex: none; width: 72px; }
+.lampac-status .lampac-slow { display: block; margin-top: 4px; color: var(--text-2); font-size: var(--s-1); font-style: normal; font-weight: 400; }
+.lampac-body { transition: opacity var(--t) var(--ease); }
+.lampac-body.is-loading { pointer-events: none; cursor: progress; }
+.lampac-body.is-loading :is(button, .lampac-label, .lampac-quality-pick):not(.is-loading) { opacity: .4; transition: opacity var(--t) var(--ease); }
+.lampac-body .is-loading { position: relative; color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
+.lampac-body .is-loading::after { content: ""; display: inline-block; flex: none; width: 14px; height: 14px; margin-left: 8px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -2px; animation: spin .8s linear infinite; }
+.lampac-body .lampac-start.is-loading { box-shadow: none; opacity: .9; }
+.lampac-body .lampac-start.is-loading::after { width: 18px; height: 18px; margin-left: 12px; }
+.lampac-skeletons { display: grid; gap: var(--sp-3); padding-top: var(--sp-2); }
+.lampac-skeleton-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.lampac-skeleton { display: block; border-radius: 10px; background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%); background-size: 200% 100%; animation: lampac-shimmer 1.3s linear infinite; }
+.lampac-skeleton.is-start { height: 56px; border-radius: var(--r-lg); }
+.lampac-skeleton.is-label { width: 90px; height: 12px; margin-top: var(--sp-2); }
+.lampac-skeleton.is-chip { width: 96px; height: 38px; border-radius: var(--r-pill); }
+.lampac-skeleton-row .is-chip:nth-child(2n) { width: 130px; }
+@keyframes lampac-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .lampac-skeleton { animation: none; } }
 .lampac-body .player-choices { max-height: 46vh; }
 .lampac-tabs { margin-bottom: 0; }
 .lampac-tabs .filter-button { max-width: 100%; height: auto; min-height: 38px; padding-block: 8px; white-space: normal; line-height: 1.25; text-align: left; overflow-wrap: anywhere; }

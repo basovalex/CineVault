@@ -5481,6 +5481,11 @@
       });
     });
   }
+  function lampacSkeleton() {
+    const bar = (cls) => `<span class="lampac-skeleton ${cls}"></span>`;
+    return `<div class="lampac-skeletons" aria-hidden="true">${bar("is-start")}${bar("is-label")}<div class="lampac-skeleton-row">${bar("is-chip")}${bar("is-chip")}${bar("is-chip")}</div>${bar("is-label")}<div class="lampac-skeleton-row">${bar("is-chip")}${bar("is-chip")}${bar("is-chip")}${bar("is-chip")}</div></div>`;
+  }
+
   function openLampacChooser(item, { season = null, episode = null } = {}) {
     const saved = lampacChoice(item.id);
     const series = item.kind === "series";
@@ -5496,7 +5501,7 @@
     let token = 0;
     let closed = false;
     let finished = false;
-    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal player-choice-modal lampac-modal" role="dialog" aria-modal="true" aria-labelledby="lampac-title"><div class="modal-head"><div><div class="eyebrow">Где смотреть</div><h2 id="lampac-title">${escapeHtml(item.title)}</h2></div><button class="icon-button" id="lampac-close" type="button" aria-label="Закрыть">${uiIcon("close")}</button></div><div class="lampac-sources" id="lampac-sources" role="tablist" aria-label="Источники"></div><div class="lampac-status" id="lampac-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><span>Ищу источники…</span></div><div class="lampac-body" id="lampac-body"></div></section></div>`;
+    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal player-choice-modal lampac-modal" role="dialog" aria-modal="true" aria-labelledby="lampac-title"><div class="modal-head"><div><div class="eyebrow">Где смотреть</div><h2 id="lampac-title">${escapeHtml(item.title)}</h2></div><button class="icon-button" id="lampac-close" type="button" aria-label="Закрыть">${uiIcon("close")}</button></div><div class="lampac-sources" id="lampac-sources" role="tablist" aria-label="Источники"></div><div class="lampac-status is-busy" id="lampac-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><span>Ищу источники…</span></div><div class="lampac-body" id="lampac-body">${lampacSkeleton()}</div></section></div>`;
     const sourcesRoot = $("#lampac-sources");
     const statusRoot = $("#lampac-status");
     const body = $("#lampac-body");
@@ -5505,24 +5510,56 @@
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
     const setStatus = (text, { busy = false, share = null } = {}) => {
       statusRoot.hidden = !text;
+      statusRoot.classList.toggle("is-busy", Boolean(text && busy));
       statusRoot.innerHTML = text ? `${busy ? `<span class="loading-spinner" aria-hidden="true"></span>` : ""}<span>${text}</span>${share === null ? "" : `<span class="lampac-progress" aria-hidden="true"><i style="width:${Math.round(share * 100)}%"></i></span>`}` : "";
     };
+    // Something the viewer asked for is loading: the pressed button spins, the rest of the
+    // window is dimmed and locked, and after a while it says the source is just slow.
+    let busyDone = null;
+    const busy = (trigger, text) => {
+      busyDone?.();
+      body.classList.add("is-loading");
+      body.setAttribute("aria-busy", "true");
+      trigger?.classList.add("is-loading");
+      setStatus(text, { busy: true });
+      const slow = window.setTimeout(() => {
+        if (busyDone === done) setStatus(`${text} <em class="lampac-slow">Источник отвечает медленно. Можно подождать или выбрать другой источник выше.</em>`, { busy: true });
+      }, 7000);
+      const done = () => {
+        window.clearTimeout(slow);
+        body.classList.remove("is-loading");
+        body.removeAttribute("aria-busy");
+        trigger?.classList.remove("is-loading");
+        if (busyDone === done) busyDone = null;
+      };
+      busyDone = done;
+      return done;
+    };
     const renderSources = () => {
-      sourcesRoot.innerHTML = sources.map((source) => `<button class="filter-button${source.id === active ? " is-active" : ""}" type="button" role="tab" aria-selected="${source.id === active}" data-lampac-source="${escapeHtml(source.id)}">${escapeHtml(source.name)}${source.lines ? `<span class="lampac-quality" title="Лучшее качество у этого источника; у отдельных озвучек и серий может быть ниже">до ${lampacQualityLabel(source.lines)}</span>` : ""}</button>`).join("") + [...pending.values()].map((name) => `<span class="filter-button lampac-pending" aria-label="${escapeHtml(name)}: проверяю"><span class="loading-spinner" aria-hidden="true"></span>${escapeHtml(name)}</span>`).join("");
+      sourcesRoot.innerHTML = sources.map((source) => `<button class="filter-button${source.id === active ? " is-active" : ""}" type="button" role="tab" aria-selected="${source.id === active}" data-lampac-source="${escapeHtml(source.id)}">${escapeHtml(source.name)}${source.lines ? `<span class="lampac-quality" title="Лучшее качество у этого источника; у отдельных озвучек и серий может быть ниже">до ${lampacQualityLabel(source.lines)}</span>` : ""}</button>`).join("") + (pending.size ? `<span class="filter-button lampac-pending" title="${escapeHtml([...pending.values()].join(", "))}"><span class="loading-spinner" aria-hidden="true"></span>${sources.length ? "Проверяю ещё" : "Проверяю"} ${countWord(pending.size, "источник", "источника", "источников")}…</span>` : "");
+      const current = sourcesRoot.querySelector(".is-active");
+      if (current && sourcesRoot.scrollWidth > sourcesRoot.clientWidth) {
+        const left = current.offsetLeft - sourcesRoot.offsetLeft;
+        if (left < sourcesRoot.scrollLeft || left + current.offsetWidth > sourcesRoot.scrollLeft + sourcesRoot.clientWidth) sourcesRoot.scrollLeft = Math.max(0, left - 16);
+      }
     };
     const progressKey = (seasonNumber, episodeNumber) => lampacProgressKey(item, seasonNumber, episodeNumber);
-    const play = async (list, index, { voiceName = "", isMovie = false } = {}) => {
-      setStatus("Подключаю видео…", { busy: true });
+    const play = async (list, index, { voiceName = "", isMovie = false, trigger = null } = {}) => {
+      const mine = ++token;
+      const done = busy(trigger, `Открываю видео: ${escapeHtml(list[index].label)}${voiceName && !isMovie ? `, ${escapeHtml(voiceName)}` : ""}…`);
       try {
         const first = await lampacStream(list[index].entry);
-        if (closed) return;
+        if (closed || mine !== token) return;
+        done();
         if (!first.stream) throw new Error("источник не отдал ссылку");
         rememberLampacChoice({ source: active, voice: voiceName || "" }, item.id);
         modalRoot.innerHTML = "";
         closed = true;
         startLampacPlayer(item, list, index, first, { voiceName, isMovie, sourceId: active });
       } catch (error) {
-        if (!closed) setStatus(`Видео не открылось: ${escapeHtml(error.message || "ошибка")}. Попробуйте другую озвучку или источник.`);
+        if (closed || mine !== token) return;
+        done();
+        setStatus(`Видео не открылось: ${escapeHtml(error.message || "ошибка")}. Попробуйте другую озвучку или источник.`);
       }
     };
     const sourceName = () => sources.find((source) => source.id === active)?.name || "";
@@ -5546,7 +5583,7 @@
       const startLabel = () => `${resuming ? "Продолжить" : "Смотреть"} · ${escapeHtml(list[chosen].label)}`;
       body.innerHTML = `<button class="primary-button lampac-start" type="button" data-lampac-start>${playerIcon("play")}<span data-start-label>${startLabel()}</span><em>${escapeHtml(sourceName())}</em>${resuming ? `<small>${escapeHtml(resume)}</small>` : ""}</button>${qualityPickMarkup(sources.find((one) => one.id === active)?.lines)}<div class="lampac-label">Озвучка</div><div class="lampac-voices" role="radiogroup" aria-label="Озвучка">${list.map((entry, index) => `<button class="lampac-voice${index === chosen ? " is-active" : ""}" type="button" role="radio" aria-checked="${index === chosen}" data-lampac-voice-pick="${index}"><span class="lampac-voice-mark" aria-hidden="true"></span><span class="lampac-voice-copy"><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(entry.note || "Качество выбирается в плеере")}</small></span>${index === remembered ? `<span class="player-choice-badge">Вы выбирали</span>` : ""}</button>`).join("")}</div>`;
       const start = body.querySelector("[data-lampac-start]");
-      start.addEventListener("click", () => play(list, chosen, { voiceName: list[chosen].label, isMovie: true }));
+      start.addEventListener("click", () => play(list, chosen, { voiceName: list[chosen].label, isMovie: true, trigger: start }));
       body.querySelectorAll("[data-lampac-voice-pick]").forEach((button) => {
         button.addEventListener("click", () => {
           chosen = Number(button.dataset.lampacVoicePick);
@@ -5598,7 +5635,7 @@
         return `<button class="${classes}" type="button" data-lampac-episode="${index}" title="Смотреть: ${escapeHtml(entry.label)}"><span class="lampac-episode-play" aria-hidden="true">${playerIcon("play")}</span><span>${escapeHtml(entry.label)}</span>${share && !record.completed ? `<i style="width:${share.toFixed(1)}%"></i>` : ""}</button>`;
       }).join("");
       body.innerHTML = `${startButton}${voiceTabs}${seasonTabs}<div class="lampac-label">Серии — нажмите, чтобы смотреть</div><div class="lampac-episodes">${episodes}</div>`;
-      body.querySelector("[data-lampac-start]").addEventListener("click", () => play(list, start, { voiceName: activeVoice }));
+      body.querySelector("[data-lampac-start]").addEventListener("click", (event) => play(list, start, { voiceName: activeVoice, trigger: event.currentTarget }));
       // The source badge is its best; what this voice really gives is checked on its first episode.
       const qualityMark = body.querySelector("[data-voice-quality]");
       if (qualityMark && list[0]) {
@@ -5611,22 +5648,22 @@
       }
       body.querySelectorAll("[data-lampac-season]").forEach((button) => button.addEventListener("click", () => {
         const index = Number(button.dataset.lampacSeason);
-        loadNode(seasons[index].url, seasons, lampacNumber(seasons[index], index + 1));
+        loadNode(seasons[index].url, seasons, lampacNumber(seasons[index], index + 1), { trigger: button, text: `Загружаю серии: ${escapeHtml(button.textContent.trim())}…` });
       }));
       body.querySelectorAll("[data-lampac-voice]").forEach((button) => button.addEventListener("click", () => {
         const voice = voices[Number(button.dataset.lampacVoice)];
         rememberLampacChoice({ voice: voice.name }, item.id);
-        if (voice.url) loadNode(voice.url, seasons, seasonNumber);
+        if (voice.url) loadNode(voice.url, seasons, seasonNumber, { trigger: button, text: `Переключаю озвучку на «${escapeHtml(voice.name)}»…` });
       }));
       body.querySelectorAll("[data-lampac-episode]").forEach((button) => button.addEventListener("click", () => {
-        play(list, Number(button.dataset.lampacEpisode), { voiceName: activeVoice });
+        play(list, Number(button.dataset.lampacEpisode), { voiceName: activeVoice, trigger: button });
       }));
       body.querySelector("[data-lampac-start]").focus();
     };
     // A source's episode list opens on its default voice; switch once to the one chosen before.
-    const loadNode = async (url, seasons, seasonNumber, { preferSavedVoice = false } = {}) => {
+    const loadNode = async (url, seasons, seasonNumber, { preferSavedVoice = false, trigger = null, text = "Загружаю серии и озвучки…" } = {}) => {
       const mine = ++token;
-      setStatus("Загружаю…", { busy: true });
+      const done = busy(trigger, text);
       try {
         let node = await lampacJson(url);
         if (preferSavedVoice && node?.type === "episode" && saved.voice) {
@@ -5634,12 +5671,15 @@
           if (voice) node = await lampacJson(voice.url);
         }
         if (closed || mine !== token) return;
+        done();
         setStatus("");
         if (node?.type === "episode" && node.data?.length) return renderEpisodes(node, seasons, seasonNumber);
         if (node?.type === "season" && node.data?.length) return openSeasons(node);
         body.innerHTML = `<p class="player-choice-empty">Здесь пусто. Выберите другой источник.</p>`;
       } catch {
-        if (!closed && mine === token) setStatus("Источник не ответил. Выберите другой.");
+        if (closed || mine !== token) return;
+        done();
+        setStatus("Источник не ответил. Выберите другой источник выше или нажмите ещё раз.");
       }
     };
     const openSeasons = async (node) => {
@@ -5656,10 +5696,11 @@
       if (!source) return;
       active = id;
       token += 1;
+      busyDone?.();
       renderSources();
       setStatus(finished ? "" : `Ищу ещё источники… найдено ${sources.length}`, { busy: !finished });
       if (source.node.type === "movie") renderMovie(source.node);
-      else if (source.node.type === "season") openSeasons(source.node);
+      else if (source.node.type === "season") { body.innerHTML = lampacSkeleton(); busy(null, `Загружаю серии и озвучки: ${escapeHtml(source.name)}…`); openSeasons(source.node); }
       else renderEpisodes(source.node, [], wantSeason);
     };
     sourcesRoot.addEventListener("click", (event) => {
@@ -5667,7 +5708,7 @@
       if (button) select(button.dataset.lampacSource);
     });
     // While sources are being checked the viewer sees how far it got, not a frozen spinner.
-    const search = { done: 0, total: 0, over: false };
+    const search = { done: 0, total: 0, over: false, startedAt: Date.now() };
     const showSearch = () => {
       if (search.over || finished || closed) return;
       if (active && !statusRoot.textContent.startsWith("Ищу") && !statusRoot.textContent.startsWith("Проверяю") && !statusRoot.hidden) return;
@@ -5675,9 +5716,11 @@
       const counted = search.total ? `проверено ${search.done} из ${search.total}` : "";
       const text = sources.length
         ? `Ищу ещё источники… найдено ${sources.length}${counted ? `, ${counted}` : ""}`
-        : `Проверяю источники${counted ? `: ${search.done} из ${search.total}` : "…"}`;
-      setStatus(text, { busy: true, share });
+        : search.total && search.done >= search.total ? "Жду ответа от источников…" : `Проверяю источники${counted ? `: ${search.done} из ${search.total}` : "…"}`;
+      const slowNote = !sources.length && Date.now() - search.startedAt > 8000 ? ` <em class="lampac-slow">Источники иногда отвечают до полуминуты — окно не зависло.</em>` : "";
+      setStatus(text + slowNote, { busy: true, share });
     };
+    window.setTimeout(() => { if (!sources.length) showSearch(); }, 8500);
     (async () => {
       const lookups = [];
       const lookup = async (entry) => {
