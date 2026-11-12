@@ -7922,7 +7922,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   // ---- Feed and series subscriptions, as in Lampa. The feed is CUB's own (the same one
   // Lampa shows); subscriptions live in the account like favourites, and the bell is
   // worked out on the device from TMDB: which episodes came out since one subscribed.
-  const CUB_FEED_URLS = ["https://cub.red/api/feed/all", "/cub/api/feed/all"];
+  const CUB_FEED_URLS = ["/cub/api/feed/all", "https://cub.red/api/feed/all"];
   const SUBS_CACHE_KEY = "cinevault.subsCache.v1";
   const NOTIFY_SEEN_KEY = "cinevault.notifySeen.v1";
   const SUBS_FRESH_MS = 3 * 60 * 60 * 1000;
