@@ -97,7 +97,7 @@
     root.setAttribute("aria-label", options.title || "Плеер");
     root.innerHTML = `
       <video class="cv-player-video" playsinline preload="auto"></video>
-      <div class="cv-player-spinner" aria-hidden="true"></div>
+      <div class="cv-player-loading" role="status" aria-live="polite"><div class="cv-player-spinner" aria-hidden="true"></div><strong></strong><small></small><button class="cv-player-loading-other" data-act="choose-source" type="button" hidden>Выбрать другой источник</button></div>
       <div class="cv-player-error" role="alert" hidden></div>
       <div class="cv-player-top">
         <button class="cv-player-icon" data-act="close" type="button" aria-label="Закрыть">${icon("back")}</button>
@@ -175,6 +175,31 @@
       }).catch(() => {});
     };
 
+    // What the spinner says: connecting to a new video, or waiting for data mid-play; after a
+    // while it says the source is slow and offers another one instead of spinning silently.
+    let connecting = true;
+    let loadingTarget = -1;
+    let slowTimer = 0;
+    const paintLoading = () => {
+      const box = $(".cv-player-loading");
+      const entry = episodes[loadingTarget >= 0 ? loadingTarget : index] || {};
+      const what = [entry.e ? `${entry.s ? `${entry.s} сезон, ` : ""}${entry.label || `${entry.e} серия`}` : "", options.voice || ""].filter(Boolean).join(" · ");
+      box.querySelector("strong").textContent = connecting ? "Подключаю видео…" : "Загружаю…";
+      box.querySelector("small").textContent = connecting ? what : "";
+      box.querySelector("button").hidden = true;
+      window.clearTimeout(slowTimer);
+      slowTimer = window.setTimeout(() => {
+        if (!root.classList.contains("is-loading")) return;
+        box.querySelector("small").textContent = "Источник отвечает медленно. Можно подождать или выбрать другой.";
+        box.querySelector("button").hidden = !options.onChooseSource;
+      }, connecting ? 9000 : 12000);
+    };
+    new MutationObserver(() => {
+      const loading = root.classList.contains("is-loading");
+      if (loading && !root.dataset.loadingShown) { root.dataset.loadingShown = "1"; paintLoading(); }
+      if (!loading && root.dataset.loadingShown) { delete root.dataset.loadingShown; window.clearTimeout(slowTimer); }
+    }).observe(root, { attributes: true, attributeFilter: ["class"] });
+
     video.volume = Number.isFinite(pref.volume) ? pref.volume : 1;
     video.muted = Boolean(pref.muted);
     video.playbackRate = SPEEDS.includes(pref.speed) ? pref.speed : 1;
@@ -247,6 +272,7 @@
     let loadToken = 0;
     const load = async (stream, startAt = 0, autoplay = true) => {
       const mine = ++loadToken;
+      connecting = true;
       root.classList.add("is-loading");
       const hlsStream = await isHls(stream);
       if (closed || mine !== loadToken) return;
@@ -340,7 +366,11 @@
       cancelNext();
       saveProgress(false);
       video.pause();
+      connecting = true;
+      loadingTarget = target;
+      delete root.dataset.loadingShown;
       root.classList.add("is-loading");
+      paintLoading();
       try {
         const next = await options.resolve(target);
         if (closed) return;
@@ -595,6 +625,7 @@
       next: () => goTo(index + 1),
       "next-hide": () => { nextHiddenFor = index; cancelNext(); },
       segment: () => skipSegment(),
+      "choose-source": () => { if (!options.onChooseSource) return; const pick = options.onChooseSource; close(); pick(); },
       room: () => options.onRoom?.(),
       quality: () => openPanel("quality"),
       audio: () => openPanel("audio"),
@@ -643,7 +674,7 @@
     video.addEventListener("pause", syncPlayState);
     video.addEventListener("timeupdate", updateTime);
     video.addEventListener("waiting", () => root.classList.add("is-loading"));
-    video.addEventListener("playing", () => root.classList.remove("is-loading"));
+    video.addEventListener("playing", () => { connecting = false; loadingTarget = -1; root.classList.remove("is-loading"); });
     video.addEventListener("canplay", () => root.classList.remove("is-loading"));
     video.addEventListener("volumechange", () => { $('[data-act="mute"]').innerHTML = icon(video.muted || video.volume === 0 ? "muted" : "volume"); });
     video.addEventListener("ended", () => {

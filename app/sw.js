@@ -1,4 +1,4 @@
-const SHELL_CACHE = "cinevault-shell-v186";
+const SHELL_CACHE = "cinevault-shell-v188";
 const API_CACHE = "cinevault-api-v1";
 const MEDIA_CACHE = "cinevault-media-v1";
 const SHELL = ["/", "/index.html", "/boot.js", "/styles.css", "/config.local.js", "/app.js", "/lampac-player.js", "/watch-native.js", "/accounts.js", "/manifest.json", "/favicon.svg", "/assets/fonts/onest-cyrillic.woff2", "/assets/fonts/onest-latin.woff2", "/assets/fonts/geologica-cyrillic.woff2", "/assets/fonts/geologica-latin.woff2"];
@@ -30,7 +30,13 @@ async function trimCache(cache) {
 
 function freshOrSaved(event, cacheName, key, waitMs, fallback = () => Response.error()) {
   let copy = null;
-  const network = fetch(event.request).then((response) => {
+  const network = fetch(event.request).then(async (response) => {
+    // No password and no site cookie: the browser asks for the password only when the page
+    // itself gets the 401, never through a worker. Step aside and send the page to the network.
+    if (response.status === 401 && event.request.mode === "navigate") {
+      await self.registration.unregister();
+      return Response.redirect(event.request.url, 302);
+    }
     // Clone before returning: the browser may start consuming the body at once.
     if (response.ok) copy = response.clone();
     return response;

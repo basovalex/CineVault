@@ -140,6 +140,20 @@
     return early.answer.then((data) => data ? new Response(overrideCatalogBody(path, data.body), { status: data.status, headers: data.headers }) : null).catch(() => null);
   }
 
+  // The site password (Basic Auth) is forgotten when the browser restarts. Requests that go
+  // through the service worker then get 401 and the browser never asks for the password:
+  // drop the worker once and reload, so the page itself asks.
+  function recoverFromUnauthorized() {
+    try {
+      if (window.sessionStorage.getItem("cv-auth-recover")) return;
+      window.sessionStorage.setItem("cv-auth-recover", "1");
+    } catch { return; }
+    const reload = () => window.location.reload();
+    const workers = navigator.serviceWorker?.getRegistrations?.();
+    if (!workers) { reload(); return; }
+    workers.then((list) => Promise.all(list.map((one) => one.unregister()))).catch(() => {}).then(reload);
+  }
+
   async function apiFetch(path, options = {}) {
     const headers = new Headers(options.headers || {});
     if (viewerToken && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${viewerToken}`);
@@ -153,6 +167,7 @@
       else callerSignal?.addEventListener("abort", abort, { once: true });
       try {
         const response = await fetch(apiUrl(path), { ...options, headers, signal: controller.signal });
+        if (response.status === 401) recoverFromUnauthorized();
         if ([204, 205, 304].includes(response.status)) return response;
         // Read the body here so the timeout and the retry also cover a stall mid-transfer.
         const body = overrideCatalogBody(path, await response.arrayBuffer());

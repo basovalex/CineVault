@@ -1530,3 +1530,12 @@ span.studio-sort-button::after { display: none; }
 .cv-player-segment:hover, .cv-player-segment:focus-visible { background: #fff; color: #000; outline: none; }
 .cv-player.has-panel .cv-player-segment { display: none; }
 @media (max-width: 720px) { .cv-player-segment { bottom: 190px; } }
+/* Подключение к видео: не просто крутилка, а что происходит и что делать, если долго. */
+.cv-player-loading { position: absolute; top: 50%; left: 50%; z-index: 2; display: grid; justify-items: center; gap: 10px; width: min(420px, calc(100% - 40px)); text-align: center; transform: translate(-50%, -50%); opacity: 0; pointer-events: none; transition: opacity .2s ease; }
+.cv-player.is-loading .cv-player-loading { opacity: 1; pointer-events: auto; }
+.cv-player-loading .cv-player-spinner { position: static; margin: 0 0 6px; opacity: 1; }
+.cv-player-loading strong { font: 600 20px/1.2 var(--body); color: #fff; text-shadow: 0 2px 12px rgba(0,0,0,.8); }
+.cv-player-loading small { min-height: 1.3em; font: 400 15px/1.35 var(--body); color: rgba(255,255,255,.8); text-shadow: 0 2px 12px rgba(0,0,0,.8); }
+.cv-player-loading-other { margin-top: 6px; min-height: 44px; padding: 0 18px; border: 1px solid rgba(255,255,255,.3); border-radius: 12px; background: rgba(20,22,26,.85); color: #fff; font: 600 15px/1 var(--body); cursor: pointer; }
+.cv-player-loading-other:hover, .cv-player-loading-other:focus-visible { background: #fff; color: #000; outline: none; }
+.cv-player.is-loading .cv-player-segment { display: none; }
