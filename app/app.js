@@ -5216,7 +5216,7 @@
     if (!uid || !url) return url;
     try {
       const target = new URL(url, lampacOrigin());
-      if (target.origin !== new URL(lampacOrigin()).origin || !target.pathname.startsWith("/lite")) return url;
+      if (target.origin !== new URL(lampacOrigin()).origin || !/^\/(lite|lifeevents)/.test(target.pathname)) return url;
       if (!target.searchParams.has("uid")) target.searchParams.set("uid", uid);
       return target.href;
     } catch {
@@ -5266,6 +5266,43 @@
     if (item.imdbId) params.set("imdb_id", item.imdbId);
     if (item.tmdbId) params.set("id", item.tmdbId);
     return params;
+  }
+  // The list of sources, as Lampa gets it: "life" mode answers at once with a key, then
+  // /lifeevents is polled and every source is handed over the moment it is found, instead
+  // of waiting 7-10 s for the slowest one. Falls back to the one-shot list.
+  async function lampacSourceList(item, onEntries, isClosed = () => false) {
+    const query = lampacQuery(item);
+    const seen = new Set();
+    const hand = (entries) => {
+      const fresh = (entries || []).filter((entry) => {
+        const id = String(entry.balanser || entry.name || entry.url);
+        if (entry.show === false || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+      if (fresh.length) onEntries(fresh);
+    };
+    try {
+      const start = await lampacJson(`/lite/events?${query}&life=true`, 10000);
+      if (start?.memkey) {
+        const deadline = Date.now() + 25000;
+        for (let delay = 500; Date.now() < deadline && !isClosed(); delay = Math.min(1200, delay + 250)) {
+          await new Promise((resolve) => window.setTimeout(resolve, delay));
+          const answer = await lampacJson(`/lifeevents?memkey=${encodeURIComponent(start.memkey)}&${query}`, 10000).catch(() => null);
+          if (!answer) continue;
+          hand(Array.isArray(answer) ? answer : answer.online);
+          if (answer.ready) break;
+        }
+        if (seen.size || isClosed()) return seen.size;
+      } else if (start) {
+        hand(Array.isArray(start) ? start : start.online);
+        if (seen.size) return seen.size;
+      }
+    } catch {}
+    if (isClosed()) return seen.size;
+    const answer = await lampacJson(`/lite/events?${query}&life=false`, 30000).catch(() => null);
+    hand(Array.isArray(answer) ? answer : answer?.online);
+    return seen.size;
   }
   // A source either answers with the title itself or with a list of look-alikes;
   // a look-alike is taken only when its year matches, never guessed.
@@ -5784,9 +5821,10 @@
     modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal player-choice-modal" role="dialog" aria-modal="true" aria-label="Совместный просмотр"><div class="eyebrow">Совместный просмотр</div><h2>${escapeHtml(item.title)}</h2><div class="lampac-status" role="status"><span class="loading-spinner" aria-hidden="true"></span><span>Подключаю тот же источник и озвучку…</span></div></section></div>`;
     const fail = (text) => { modalRoot.innerHTML = ""; showWatchRoomEntryError(text); };
     try {
-      const answer = await lampacJson(`/lite/events?${lampacQuery(item)}&life=false`, 30000);
-      const sources = Array.isArray(answer) ? answer : (answer?.online || []);
-      const source = sources.find((entry) => String(entry.balanser || entry.name || entry.url) === sourceId);
+      let source = null;
+      await lampacSourceList(item, (entries) => {
+        source = source || entries.find((entry) => String(entry.balanser || entry.name || entry.url) === sourceId) || null;
+      }, () => Boolean(source));
       if (!source) return fail("Источника из комнаты сейчас нет в Lampac.");
       let node = await lampacResolve(lampacSourceUrl(source, item), item);
       if (!node) return fail("Источник из комнаты не нашёл этот фильм.");
@@ -6016,20 +6054,8 @@
       if (button) select(button.dataset.lampacSource);
     });
     (async () => {
-      let list = [];
-      try {
-        const answer = await lampacJson(`/lite/events?${lampacQuery(item)}&life=false`, 30000);
-        list = Array.isArray(answer) ? answer : (answer?.online || []);
-      } catch {}
-      if (closed) return;
-      if (!list.length) {
-        finished = true;
-        setStatus("Сервер с источниками не отвечает.");
-        body.innerHTML = `<button class="secondary-button" type="button" data-lampac-retry>Повторить</button>`;
-        body.querySelector("[data-lampac-retry]").addEventListener("click", () => { closed = true; openLampacChooser(item, { season, episode }); });
-        return;
-      }
-      await Promise.all(list.map(async (entry) => {
+      const lookups = [];
+      const lookup = async (entry) => {
         const id = String(entry.balanser || entry.name || entry.url);
         try {
           // The list gives bare source addresses; the title's ids go on top, as Lampa does.
@@ -6048,7 +6074,19 @@
           if (!active || (id === saved.source && !body.dataset.touched)) select(id);
           else setStatus(`Ищу ещё источники… найдено ${sources.length}`, { busy: true });
         } catch {}
-      }));
+      };
+      const listed = await lampacSourceList(item, (entries) => {
+        entries.forEach((entry) => lookups.push(lookup(entry)));
+      }, () => closed).catch(() => 0);
+      if (closed) return;
+      if (!listed) {
+        finished = true;
+        setStatus("Сервер с источниками не отвечает.");
+        body.innerHTML = `<button class="secondary-button" type="button" data-lampac-retry>Повторить</button>`;
+        body.querySelector("[data-lampac-retry]").addEventListener("click", () => { closed = true; openLampacChooser(item, { season, episode }); });
+        return;
+      }
+      await Promise.all(lookups);
       if (closed) return;
       finished = true;
       if (!sources.length) {
