@@ -5354,7 +5354,6 @@
       autoNext: !isMovie,
       episodes,
       segments: skipSegmentsFor,
-      autoSkip: state.skipSegments !== false,
       resolve: async (position) => {
         const entry = list[position];
         const next = await lampacStream(entry.entry);
