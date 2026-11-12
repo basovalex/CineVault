@@ -375,7 +375,7 @@ class Accounts:
 
 
 SITE_STATE_LIMIT = 768 * 1024
-SITE_MARK_LISTS = ('favorites', 'watchlist')
+SITE_MARK_LISTS = ('favorites', 'watchlist', 'subscriptions')
 
 
 def _stamp(value):

@@ -2448,8 +2448,8 @@
 }
   };
 
-  const defaultState = { view: "home", theme: "cinema", mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "now", catalogPage: 1, favorites: [], watchlist: [], progress: {}, ratings: {}, history: [], recommendationHistory: [], tasteMemory: [], offline: {}, voiceSelections: {}, playbackSelections: {}, playerVolume: 1, playerMuted: false, rutubeUrl: "", skipSegments: true };
-  const ROUTE_PATHS = Object.freeze({ home: "/", catalog: "/catalog/", upcoming: "/upcoming/", movies: "/movies/", series: "/series/", library: "/library/", favorites: "/favorites/", evening: "/evening/", history: "/history/", settings: "/settings/", about: "/about/" });
+  const defaultState = { view: "home", theme: "cinema", mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "now", catalogPage: 1, favorites: [], watchlist: [], subscriptions: [], progress: {}, ratings: {}, history: [], recommendationHistory: [], tasteMemory: [], offline: {}, voiceSelections: {}, playbackSelections: {}, playerVolume: 1, playerMuted: false, rutubeUrl: "", skipSegments: true };
+  const ROUTE_PATHS = Object.freeze({ home: "/", feed: "/feed/", catalog: "/catalog/", upcoming: "/upcoming/", movies: "/movies/", series: "/series/", library: "/library/", favorites: "/favorites/", evening: "/evening/", history: "/history/", settings: "/settings/", about: "/about/" });
   const ROUTE_VIEWS = Object.freeze(Object.fromEntries(Object.entries(ROUTE_PATHS).map(([view, path]) => [path, view])));
   let state = loadState();
   // One dark theme; older builds stored a theme choice that is no longer read.
@@ -3260,7 +3260,7 @@
         state.catalogPage = pageNumber;
         remoteCatalogLoading = false;
         if (!append && (initial || state.view !== "home")) render();
-        else if (append) render();
+        // A next page is appended by loadMoreCatalog in portions; a full render would rebuild every card.
         return;
       }
       if (lampacOrigin() && state.query && !savedIds) {
@@ -3280,7 +3280,7 @@
         state.catalogPage = remoteCatalog.page;
         remoteCatalogLoading = false;
         if (!append && (initial || state.view !== "home")) render();
-        else if (append) render();
+        // A next page is appended by loadMoreCatalog in portions; a full render would rebuild every card.
         return;
       }
       const params = new URLSearchParams({ page: String(pageNumber), limit: "50", sort: state.catalogSort === "year" ? "fresh" : state.catalogSort || "now" });
@@ -3470,22 +3470,23 @@
     const now = Date.now();
     const marks = state.savedMarks && typeof state.savedMarks === "object" ? state.savedMarks : {};
     const payload = { history: {}, progress: state.progress || {} };
-    ["favorites", "watchlist"].forEach((name) => {
+    ["favorites", "watchlist", "subscriptions"].forEach((name) => {
       const current = new Set((state[name] || []).map(String));
       const list = { ...(marks[name] || {}) };
       current.forEach((id) => { if (!list[id]?.on) list[id] = { on: true, at: now }; });
       Object.keys(list).forEach((id) => { if (list[id].on && !current.has(id)) list[id] = { on: false, at: now }; });
       payload[name] = list;
     });
-    state.savedMarks = { favorites: payload.favorites, watchlist: payload.watchlist };
+    state.savedMarks = { favorites: payload.favorites, watchlist: payload.watchlist, subscriptions: payload.subscriptions };
     const seen = state.historyAt && typeof state.historyAt === "object" ? state.historyAt : {};
     (state.history || []).forEach((id, index, list) => { payload.history[id] = Number(seen[id]) || list.length - index; });
     return payload;
   }
   function applyAccountState(merged) {
     const ordered = (marks) => Object.entries(marks || {}).filter(([, mark]) => mark?.on).sort((a, b) => a[1].at - b[1].at).map(([id]) => id);
-    state.savedMarks = { favorites: merged.favorites || {}, watchlist: merged.watchlist || {} };
+    state.savedMarks = { favorites: merged.favorites || {}, watchlist: merged.watchlist || {}, subscriptions: merged.subscriptions || {} };
     state.favorites = ordered(merged.favorites);
+    state.subscriptions = ordered(merged.subscriptions);
     state.watchlist = ordered(merged.watchlist);
     state.historyAt = merged.history || {};
     state.history = Object.entries(state.historyAt).sort((a, b) => b[1] - a[1]).map(([id]) => id).slice(0, 100);
@@ -3515,7 +3516,7 @@
     try {
       // Another account used this browser before: its list must not leak into this one.
       const foreign = state.syncedAccount && state.syncedAccount !== user.id;
-      if (foreign) { state.favorites = []; state.watchlist = []; state.history = []; state.historyAt = {}; state.progress = {}; state.savedMarks = {}; }
+      if (foreign) { state.favorites = []; state.watchlist = []; state.subscriptions = []; state.history = []; state.historyAt = {}; state.progress = {}; state.savedMarks = {}; }
       await importAccountProgress(accounts);
       const { state: merged } = await accounts.api("site-state", { state: accountSyncPayload() });
       applyAccountState(merged);
@@ -4093,6 +4094,7 @@
     const paths = {
       play: '<path d="M8 5.5v13l10-6.5L8 5.5Z" fill="currentColor" stroke="none"/>',
       plus: '<path d="M12 5v14M5 12h14"/>',
+      bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15L6 16Z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
       check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
       heart: '<path d="M20.8 8.7c0 5-8.8 10.3-8.8 10.3S3.2 13.7 3.2 8.7A4.6 4.6 0 0 1 12 6.2a4.6 4.6 0 0 1 8.8 2.5Z"/>',
       "heart-filled": '<path d="M20.8 8.7c0 5-8.8 10.3-8.8 10.3S3.2 13.7 3.2 8.7A4.6 4.6 0 0 1 12 6.2a4.6 4.6 0 0 1 8.8 2.5Z" fill="currentColor"/>',
@@ -6852,6 +6854,7 @@
       enteringTimer = window.setTimeout(() => page.classList.remove("is-entering"), 1200);
     }
     if (state.view === "home") renderHome();
+    else if (state.view === "feed") renderFeedPage();
     else if (["catalog", "upcoming", "movies", "series", "favorites", "evening", "history"].includes(state.view)) renderCatalogView();
     else if (state.view === "library") { if (isAdminMode()) renderLibraryView(); else renderMissingPage(); }
     else if (state.view === "settings") renderSettings();
@@ -8201,7 +8204,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       if (item.kind === "series" && item.nextEpisode?.airDate >= today) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Новая серия ${escapeHtml(airDateLabel(item.nextEpisode.airDate))}</span><small>${item.nextEpisode.season} сезон, ${item.nextEpisode.episode} серия${item.nextEpisode.name && !/^(Эпизод|Серия|Episode)\s*\d+$/i.test(item.nextEpisode.name) ? ` · ${escapeHtml(item.nextEpisode.name)}` : ""}</small></p>`;
       if (item.kind === "movie" && item.source === "tmdb" && String(item.premiere || "") > today && !upcomingPremiere(item)) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Премьера ${escapeHtml(airDateLabel(item.premiere))}</span></p>`;
       return "";
-    })()}<div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${refreshAction}${detailWatch}${alternativePlayerAction}${!upcoming || item.trailerUrl ? `<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button">${uiIcon("play")}<span>Трейлер</span></button>` : ""}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button></div></div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" && playbackReady ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section>${actors.length ? `<section class="section detail-cast"><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}</div>`;
+    })()}<div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${refreshAction}${detailWatch}${alternativePlayerAction}${!upcoming || item.trailerUrl ? `<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button">${uiIcon("play")}<span>Трейлер</span></button>` : ""}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button>${parseTmdbItemId(item.id) && (item.kind === "series" || String(item.premiere || "") > new Date().toISOString().slice(0, 10) || isSubscribed(item.id)) ? subscribeButtonMarkup(item.id) : ""}</div></div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" && playbackReady ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section>${actors.length ? `<section class="section detail-cast"><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}</div>`;
     progressiveBackground($(".detail-shell"), "--detail-backdrop", backdropUrl);
     if (awaitingPlayback) {
       const status = page.querySelector('.detail-status-card strong');
@@ -8349,12 +8352,332 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
         if (!entry) return `<span class="ep-map-empty" aria-hidden="true"></span>`;
         const name = episodeTitle(item, season.season, episode);
         const label = `${season.season} сезон, ${episode} серия «${name}»: ${entry.rating.toFixed(1)}, ${countWord(entry.votes, "оценка", "оценки", "оценок")}`;
-        return `<button class="ep-map-cell is-r${ratingStep(entry.rating)}${entry.votes < fewVotes ? " is-few" : ""}" data-map-season="${season.season}" data-map-episode="${episode}" type="button" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${entry.rating.toFixed(1)}</button>`;
+        return `<button class="ep-map-cell is-r${ratingStep(entry.rating)}" data-map-season="${season.season}" data-map-episode="${episode}" type="button" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${entry.rating.toFixed(1)}</button>`;
       }).join("");
       return `<span class="ep-map-episode">${episode}</span>${cells}`;
     }).join("");
     const legend = RATING_STEP_NAMES.map((name, step) => `<span><i class="is-r${step}" aria-hidden="true"></i>${name}</span>`).reverse().join("");
-    return `<section class="section ep-map-section" aria-labelledby="ep-map-title"><div class="section-header"><div><h2 id="ep-map-title">Оценки серий</h2><span>по оценкам зрителей ${item.source === "tmdb" ? "TMDB" : "IMDb"}</span></div></div><p class="ep-map-facts">${escapeHtml(facts)}.</p><div class="ep-map-scroll"><div class="ep-map" style="--seasons:${seasons.length}">${head}${body}</div></div><div class="ep-map-legend">${legend}${all.some((entry) => entry.votes < fewVotes) ? `<span class="ep-map-few-note">бледные — мало оценок</span>` : ""}</div></section>`;
+    return `<section class="section ep-map-section" aria-labelledby="ep-map-title"><div class="section-header"><div><h2 id="ep-map-title">Оценки серий</h2><span>по оценкам зрителей ${item.source === "tmdb" ? "TMDB" : "IMDb"}</span></div></div><p class="ep-map-facts">${escapeHtml(facts)}.</p><div class="ep-map-scroll"><div class="ep-map" style="--seasons:${seasons.length}">${head}${body}</div></div><div class="ep-map-legend">${legend}</div></section>`;
+  }
+
+  // ---- Feed and series subscriptions, as in Lampa. The feed is CUB's own (the same one
+  // Lampa shows); subscriptions live in the account like favourites, and the bell is
+  // worked out on the device from TMDB: which episodes came out since one subscribed.
+  const CUB_FEED_URLS = ["https://cub.red/api/feed/all", "/cub/api/feed/all"];
+  const SUBS_CACHE_KEY = "cinevault.subsCache.v1";
+  const NOTIFY_SEEN_KEY = "cinevault.notifySeen.v1";
+  const SUBS_FRESH_MS = 3 * 60 * 60 * 1000;
+  const FEED_FILTERS = [["all", "Всё"], ["subs", "Подписки"], ["episode", "Новые серии"], ["uhd", "В высоком качестве"], ["now", "Новинки"], ["now_playing", "Сейчас смотрят"]];
+  let cubFeed = null;
+  let cubFeedLoading = null;
+  let feedFilter = "all";
+  let subsLoading = null;
+  let notifyPanelOpen = false;
+
+  function readJson(key, fallback) {
+    try { return JSON.parse(localStorage.getItem(key) || "null") ?? fallback; } catch { return fallback; }
+  }
+  function writeJson(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  }
+  function announceLive(text) {
+    let toast = document.getElementById("site-toast");
+    if (!toast) { toast = document.createElement("div"); toast.id = "site-toast"; toast.className = "site-toast"; toast.setAttribute("role", "status"); document.body.append(toast); }
+    toast.textContent = text;
+    toast.classList.add("is-shown");
+    window.clearTimeout(announceLive.timer);
+    announceLive.timer = window.setTimeout(() => toast.classList.remove("is-shown"), 2600);
+  }
+  function isSubscribed(id) { return (state.subscriptions || []).includes(id); }
+  function toggleSubscription(id) {
+    const adding = !isSubscribed(id);
+    state.subscriptions = adding ? [...(state.subscriptions || []), id] : (state.subscriptions || []).filter((entry) => entry !== id);
+    saveState();
+    if (adding) refreshSubscriptions({ only: id }).then(updateNotifyBadge);
+    else updateNotifyBadge();
+    return adding;
+  }
+  function subscriptionSince(id) {
+    const at = Number(state.savedMarks?.subscriptions?.[id]?.at || 0);
+    return new Date(at || Date.now()).toISOString().slice(0, 10);
+  }
+  function feedDateLabel(date) {
+    if (!date) return "";
+    const today = new Date().toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+    if (date === today) return "сегодня";
+    if (date === yesterday) return "вчера";
+    return airDateLabel(date);
+  }
+  function timeAgo(ms) {
+    const minutes = Math.max(1, Math.round((Date.now() - Number(ms || 0)) / 60000));
+    if (minutes < 60) return `${minutes} мин назад`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `${hours} ч назад`;
+    const days = Math.round(hours / 24);
+    return days === 1 ? "вчера" : `${days} дн назад`;
+  }
+  function tmdbStill(path, size = "w780") { return path ? tmdbImage(path, size) : ""; }
+
+  // What a subscribed series has: the episodes out since the subscription, and the next one.
+  async function refreshSubscriptions({ force = false, only = "" } = {}) {
+    if (subsLoading && !only) return subsLoading;
+    const run = async () => {
+      const cache = readJson(SUBS_CACHE_KEY, {});
+      const ids = (only ? [only] : state.subscriptions || []).filter((id) => parseTmdbItemId(id)).slice(0, 60);
+      await Promise.all(ids.map(async (id) => {
+        const known = cache[id];
+        if (!force && known && Date.now() - known.fetchedAt < SUBS_FRESH_MS) return;
+        const { tmdbId, kind } = parseTmdbItemId(id);
+        try {
+          if (kind === "movie") {
+            // A film: one notice on its release day (digital release when TMDB knows it).
+            const movie = await cvTmdb(`movie/${tmdbId}?language=ru-RU&append_to_response=release_dates`, 10000);
+            const today = new Date().toISOString().slice(0, 10);
+            const dates = (movie.release_dates?.results || []).flatMap((country) => country.release_dates || []);
+            const digital = dates.filter((entry) => [4, 5, 6].includes(entry.type)).map((entry) => String(entry.release_date || "").slice(0, 10)).sort()[0] || "";
+            const release = String(movie.release_date || "");
+            const out = [digital, release].filter((date) => date && date <= today && date >= subscriptionSince(id)).sort()[0] || "";
+            const next = [release, digital].filter((date) => date && date > today).sort()[0] || "";
+            cache[id] = {
+              fetchedAt: Date.now(), kind: "movie", title: movie.title || "", poster: movie.poster_path || "", backdrop: movie.backdrop_path || "",
+              fresh: out ? [{ season: 0, episode: 0, name: out === digital ? "Вышел в цифре" : "Премьера", airDate: out, still: "" }] : [],
+              next: next ? { season: 0, episode: 0, name: next === digital ? "в цифре" : "премьера", airDate: next } : null,
+            };
+            return;
+          }
+          const show = await cvTmdb(`tv/${tmdbId}?language=ru-RU`, 10000);
+          const last = show.last_episode_to_air;
+          const since = subscriptionSince(id);
+          const today = new Date().toISOString().slice(0, 10);
+          let fresh = [];
+          if (last?.air_date && last.air_date >= since) {
+            const season = await cvTmdb(`tv/${tmdbId}/season/${last.season_number}?language=ru-RU`, 10000).catch(() => null);
+            fresh = (season?.episodes || [last])
+              .filter((episode) => episode.air_date && episode.air_date >= since && episode.air_date <= today)
+              .slice(-6)
+              .map((episode) => ({ season: episode.season_number, episode: episode.episode_number, name: cleanEpisodeName(episode.name), airDate: episode.air_date, still: episode.still_path || "" }));
+          }
+          const next = show.next_episode_to_air;
+          cache[id] = {
+            fetchedAt: Date.now(),
+            title: show.name || "",
+            poster: show.poster_path || "",
+            backdrop: show.backdrop_path || "",
+            fresh,
+            next: next?.air_date ? { season: next.season_number, episode: next.episode_number, name: cleanEpisodeName(next.name), airDate: next.air_date } : null,
+          };
+        } catch {}
+      }));
+      Object.keys(cache).forEach((id) => { if (!(state.subscriptions || []).includes(id)) delete cache[id]; });
+      writeJson(SUBS_CACHE_KEY, cache);
+      return cache;
+    };
+    const job = run();
+    if (!only) subsLoading = job.finally(() => { subsLoading = null; });
+    return job;
+  }
+  function cleanEpisodeName(name) { return String(name || "").replace(/^(Эпизод|Серия|Episode)\s*\d+$/i, "").trim(); }
+  function subscriptionNotices() {
+    const cache = readJson(SUBS_CACHE_KEY, {});
+    return (state.subscriptions || []).flatMap((id) => (cache[id]?.fresh || []).map((entry) => ({ ...entry, id, title: cache[id].title, poster: cache[id].poster, backdrop: cache[id].backdrop, key: `${id}:${entry.season}:${entry.episode}` })))
+      .sort((a, b) => b.airDate.localeCompare(a.airDate) || b.episode - a.episode);
+  }
+  function upcomingSubscriptionEpisodes() {
+    const cache = readJson(SUBS_CACHE_KEY, {});
+    return (state.subscriptions || []).map((id) => cache[id]?.next ? { ...cache[id].next, id, title: cache[id].title, poster: cache[id].poster } : null).filter(Boolean)
+      .sort((a, b) => a.airDate.localeCompare(b.airDate));
+  }
+  function unreadNotices() {
+    const seen = new Set(readJson(NOTIFY_SEEN_KEY, []));
+    return subscriptionNotices().filter((entry) => !seen.has(entry.key));
+  }
+  function updateNotifyBadge() {
+    const badge = $("#notify-badge");
+    if (!badge) return;
+    const count = unreadNotices().length;
+    badge.hidden = !count;
+    badge.textContent = count > 9 ? "9+" : String(count);
+    $("#notify-button")?.setAttribute("aria-label", count ? `Уведомления: новых ${count}` : "Уведомления");
+    if (notifyPanelOpen) renderNotifyPanel();
+  }
+  function markNoticesSeen() {
+    const keys = subscriptionNotices().map((entry) => entry.key);
+    writeJson(NOTIFY_SEEN_KEY, [...new Set([...readJson(NOTIFY_SEEN_KEY, []), ...keys])].slice(-500));
+  }
+  function noticeMarkup(entry, { upcoming = false } = {}) {
+    const image = upcoming ? tmdbImage(entry.poster, "w185") : tmdbStill(entry.still, "w300") || tmdbImage(entry.backdrop || entry.poster, "w300");
+    const what = entry.season ? `${entry.season} сезон, ${entry.episode} серия${entry.name ? ` · ${escapeHtml(entry.name)}` : ""}` : escapeHtml(entry.name || "Фильм");
+    return `<a class="notify-item${upcoming ? " is-upcoming" : ""}" href="${routeForTitle(entry.id)}" data-notify-open="${escapeHtml(entry.id)}" data-notify-season="${entry.season}" data-notify-episode="${entry.episode}"><span class="notify-art${upcoming ? " is-poster" : ""}">${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy">` : ""}</span><span class="notify-copy"><b>${escapeHtml(entry.title)}</b><span>${what}</span><small>${upcoming ? `Выйдет ${escapeHtml(feedDateLabel(entry.airDate))}` : `${entry.season ? "Новая серия" : "Уже можно смотреть"} · ${escapeHtml(feedDateLabel(entry.airDate))}`}</small></span></a>`;
+  }
+  function renderNotifyPanel() {
+    const panel = $("#notify-panel");
+    if (!panel) return;
+    const notices = subscriptionNotices().slice(0, 20);
+    const unread = new Set(unreadNotices().map((entry) => entry.key));
+    const soon = upcomingSubscriptionEpisodes().slice(0, 6);
+    const subs = (state.subscriptions || []).length;
+    const body = !subs
+      ? `<p class="notify-empty">Нажмите «Напомнить» в карточке сериала или ещё не вышедшего фильма — здесь появятся новые серии и премьеры.</p>`
+      : notices.length || soon.length
+        ? `${notices.map((entry) => noticeMarkup(entry).replace('class="notify-item"', `class="notify-item${unread.has(entry.key) ? " is-new" : ""}"`)).join("")}${soon.length ? `<div class="notify-subhead">Скоро выйдут</div>${soon.map((entry) => noticeMarkup(entry, { upcoming: true })).join("")}` : ""}`
+        : subsLoading ? `<p class="notify-empty"><span class="loading-spinner" aria-hidden="true"></span> Проверяю новые серии…</p>` : `<p class="notify-empty">С момента подписки новых серий не выходило.</p>`;
+    panel.innerHTML = `<div class="notify-head"><b>Уведомления</b><a href="${routeForView("feed")}" data-view="feed" data-notify-close>Вся лента</a></div><div class="notify-list">${body}</div>`;
+  }
+  function toggleNotifyPanel(open = !notifyPanelOpen) {
+    const panel = $("#notify-panel");
+    if (!panel) return;
+    notifyPanelOpen = open;
+    panel.hidden = !open;
+    $("#notify-button")?.setAttribute("aria-expanded", String(open));
+    if (!open) return;
+    renderNotifyPanel();
+    refreshSubscriptions().then(() => { if (notifyPanelOpen) { renderNotifyPanel(); markNoticesSeen(); updateNotifyBadge(); } });
+    markNoticesSeen();
+    window.setTimeout(updateNotifyBadge, 1500);
+  }
+  function openTitleAtEpisode(id, season, episode, { watch = false } = {}) {
+    const go = (item) => {
+      if (!item) return;
+      rememberLooseTitles([item]);
+      openTitleRoute(item.id);
+      if (item.kind === "series" && season) { selectedSeason = Number(season); renderDetails(item.id); }
+      if (watch) openLampacChooser(item, item.kind === "series" && season ? { season: Number(season), episode: Number(episode) || null } : {});
+    };
+    const known = getTitle(id);
+    if (known?.detailed || !parseTmdbItemId(id)) go(known);
+    else loadTmdbTitle(id).then(go).catch(() => go(known));
+  }
+  function installNotifications() {
+    const button = $("#notify-button");
+    if (!button || button.dataset.ready) return;
+    button.dataset.ready = "1";
+    button.addEventListener("click", (event) => { event.stopPropagation(); toggleNotifyPanel(); });
+    document.addEventListener("click", (event) => {
+      const element = event.target instanceof Element ? event.target : null;
+      const open = element?.closest("[data-notify-open]");
+      if (open) {
+        event.preventDefault();
+        toggleNotifyPanel(false);
+        openTitleAtEpisode(open.dataset.notifyOpen, open.dataset.notifySeason, open.dataset.notifyEpisode);
+        return;
+      }
+      if (element?.closest("[data-notify-close]")) { toggleNotifyPanel(false); return; }
+      if (notifyPanelOpen && !element?.closest("#notify-panel")) toggleNotifyPanel(false);
+    });
+    document.addEventListener("keydown", (event) => { if (event.key === "Escape" && notifyPanelOpen) toggleNotifyPanel(false); });
+    updateNotifyBadge();
+    const check = () => refreshSubscriptions().then(updateNotifyBadge).catch(() => {});
+    window.setTimeout(check, 2500);
+    window.setInterval(check, 30 * 60 * 1000);
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") check(); });
+  }
+
+  // ---- The feed page.
+  async function loadCubFeed() {
+    if (cubFeed && Date.now() - cubFeed.at < 10 * 60 * 1000) return cubFeed.entries;
+    if (cubFeedLoading) return cubFeedLoading;
+    cubFeedLoading = (async () => {
+      for (const url of CUB_FEED_URLS) {
+        try {
+          const controller = new AbortController();
+          const timer = window.setTimeout(() => controller.abort(), 8000);
+          const response = await fetch(url, { signal: controller.signal, credentials: url.startsWith("/") ? "same-origin" : "omit" }).finally(() => window.clearTimeout(timer));
+          if (!response.ok) continue;
+          const json = await response.json();
+          const entries = (json.result || []).filter((entry) => entry?.data?.id && !entry.data.adult);
+          cubFeed = { at: Date.now(), entries };
+          return entries;
+        } catch {}
+      }
+      throw new Error("Лента сейчас недоступна");
+    })().finally(() => { cubFeedLoading = null; });
+    return cubFeedLoading;
+  }
+  // CUB writes the episode as a Python-style dict string; the numbers and the still are read out of it.
+  function cubEpisode(entry) {
+    const text = typeof entry.data.episode === "string" ? entry.data.episode : JSON.stringify(entry.data.episode || {});
+    const pick = (key) => text.match(new RegExp(`['"]${key}['"]:\\s*(?:'([^']*)'|"([^"]*)"|(\\d+))`))?.slice(1).find((value) => value !== undefined) || "";
+    const hash = String(entry.hash || "").match(/s(\d+);e(\d+)/);
+    return { season: Number(pick("season_number") || hash?.[1] || 0), episode: Number(pick("episode_number") || hash?.[2] || 0), name: cleanEpisodeName(pick("name")), still: pick("still_path"), airDate: pick("air_date") };
+  }
+  const QUALITY_NAMES = { "4k": "4K", webdl: "WEB-DL", webrip: "WEBRip", ts: "Экранка", camrip: "Экранка", bdrip: "BDRip", hdrip: "HDRip" };
+  function cubItem(entry) {
+    const raw = { ...entry.data, genres: undefined, media_type: entry.card_type === "tv" ? "tv" : "movie" };
+    return withTitleOverrides(tmdbToItem(raw, raw.media_type));
+  }
+  function feedEntryMarkup(entry) {
+    const item = cubItem(entry);
+    const isTv = entry.card_type === "tv";
+    const episode = entry.type === "episode" ? cubEpisode(entry) : null;
+    const label = { episode: "Новая серия", uhd: "В высоком качестве", now: "Новинка", now_playing: "Сейчас смотрят" }[entry.type] || "Новое";
+    const quality = QUALITY_NAMES[String(entry.data.release_quality || "").toLowerCase()] || "";
+    const year = String(entry.data.release_date || entry.data.first_air_date || "").slice(0, 4);
+    const genres = (Array.isArray(entry.data.genres) ? entry.data.genres : []).slice(0, 3).join(", ");
+    const sub = episode?.season ? `Сезон ${episode.season} · Серия ${episode.episode}${episode.name ? ` · ${episode.name}` : ""}` : [year, genres].filter(Boolean).join(" · ");
+    const image = episode?.still ? tmdbStill(episode.still, "w780") : tmdbImage(entry.data.backdrop_path || entry.data.poster_path, "w780");
+    const overview = String(entry.data.overview || "");
+    return `<article class="feed-entry is-${escapeHtml(entry.type)}"><div class="feed-copy"><div class="feed-meta"><span class="feed-label">${label}</span>${quality ? `<span class="feed-quality${quality === "Экранка" ? " is-cam" : ""}">${quality}</span>` : ""}<time>${escapeHtml(timeAgo(entry.time))}</time></div><h3><a href="${routeForTitle(item.id)}" data-feed-open="${escapeHtml(item.id)}"${episode?.season ? ` data-feed-season="${episode.season}"` : ""}>${escapeHtml(item.title)}</a></h3>${sub ? `<p class="feed-sub">${escapeHtml(sub)}</p>` : ""}${overview ? `<p class="feed-overview">${escapeHtml(overview)}</p>` : ""}<div class="feed-actions"><button class="primary-button" data-feed-watch="${escapeHtml(item.id)}"${episode?.season ? ` data-feed-season="${episode.season}" data-feed-episode="${episode.episode}"` : ""} type="button">${uiIcon("play")}<span>Смотреть</span></button>${isTv ? subscribeButtonMarkup(item.id) : ""}</div></div><a class="feed-art" href="${routeForTitle(item.id)}" data-feed-open="${escapeHtml(item.id)}"${episode?.season ? ` data-feed-season="${episode.season}"` : ""} tabindex="-1" aria-hidden="true">${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy" decoding="async">` : ""}</a></article>`;
+  }
+  function subscriptionFeedMarkup(entry) {
+    const image = tmdbStill(entry.still, "w780") || tmdbImage(entry.backdrop || entry.poster, "w780");
+    return `<article class="feed-entry is-subscription"><div class="feed-copy"><div class="feed-meta"><span class="feed-label">Ваша подписка</span><time>${escapeHtml(feedDateLabel(entry.airDate))}</time></div><h3><a href="${routeForTitle(entry.id)}" data-feed-open="${escapeHtml(entry.id)}" data-feed-season="${entry.season}">${escapeHtml(entry.title)}</a></h3><p class="feed-sub">${entry.season ? `Сезон ${entry.season} · Серия ${entry.episode}${entry.name ? ` · ${escapeHtml(entry.name)}` : ""}` : escapeHtml(entry.name || "")}</p><div class="feed-actions"><button class="primary-button" data-feed-watch="${escapeHtml(entry.id)}" data-feed-season="${entry.season}" data-feed-episode="${entry.episode}" type="button">${uiIcon("play")}<span>Смотреть</span></button></div></div><a class="feed-art" href="${routeForTitle(entry.id)}" data-feed-open="${escapeHtml(entry.id)}" data-feed-season="${entry.season}" tabindex="-1" aria-hidden="true">${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy" decoding="async">` : ""}</a></article>`;
+  }
+  function subscribeButtonMarkup(id) {
+    const on = isSubscribed(id);
+    return `<button class="secondary-button subscribe-button${on ? " is-on" : ""}" data-subscribe="${escapeHtml(id)}" type="button" aria-pressed="${on}">${uiIcon("bell")}<span>${on ? "Напомню" : "Напомнить"}</span></button>`;
+  }
+  function renderFeedPage() {
+    const filters = `<div class="feed-filters" role="group" aria-label="Что показать">${FEED_FILTERS.map(([value, label]) => `<button class="genre-pill${feedFilter === value ? " is-active" : ""}" data-feed-filter="${value}" type="button" aria-pressed="${feedFilter === value}">${label}</button>`).join("")}</div>`;
+    const subs = subscriptionNotices();
+    const soon = upcomingSubscriptionEpisodes();
+    const draw = (entries, error = "") => {
+      if (state.view !== "feed") return;
+      const fromCub = feedFilter === "subs" ? [] : (entries || []).filter((entry) => feedFilter === "all" || entry.type === feedFilter);
+      const mine = feedFilter === "all" || feedFilter === "subs" ? subs.slice(0, feedFilter === "subs" ? 60 : 6) : [];
+      const soonMarkup = feedFilter === "subs" && soon.length ? `<section class="feed-soon"><h2>Скоро выйдут</h2><div class="notify-list">${soon.map((entry) => noticeMarkup(entry, { upcoming: true })).join("")}</div></section>` : "";
+      const empty = feedFilter === "subs" && !mine.length
+        ? `<div class="empty-state"><h2>${(state.subscriptions || []).length ? "Новых серий пока нет" : "Подписок пока нет"}</h2><p>${(state.subscriptions || []).length ? "Как только у сериалов из подписок выйдут новые серии, они появятся здесь и в колокольчике." : "Откройте сериал или ещё не вышедший фильм и нажмите «Напомнить» — новые серии и премьеры будут появляться здесь и в колокольчике."}</p></div>`
+        : "";
+      const list = entries === null && !mine.length
+        ? `<div class="feed-loading" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю ленту…</div>`
+        : `${mine.map(subscriptionFeedMarkup).join("")}${fromCub.map(feedEntryMarkup).join("")}`;
+      page.innerHTML = `<div class="page-heading"><div><h1>Лента</h1><p class="muted">Новые серии, релизы в высоком качестве и новинки — как в Lampa.</p></div></div>${filters}${soonMarkup}${empty}<div class="feed-list">${list}</div>${error ? `<div class="empty-state"><p>${escapeHtml(error)}</p><button class="secondary-button" data-feed-retry type="button">Повторить</button></div>` : ""}`;
+      bindFeedPage();
+    };
+    draw(cubFeed?.entries || null);
+    loadCubFeed().then((entries) => draw(entries)).catch((error) => draw([], error.message));
+    if ((state.subscriptions || []).length) refreshSubscriptions().then(() => { if (state.view === "feed") draw(cubFeed?.entries || null); updateNotifyBadge(); });
+  }
+  function bindFeedPage() {
+    $$("[data-feed-filter]", page).forEach((button) => button.addEventListener("click", () => { feedFilter = button.dataset.feedFilter; renderFeedPage(); }));
+    $("[data-feed-retry]", page)?.addEventListener("click", () => { cubFeed = null; renderFeedPage(); });
+    $$("[data-feed-open]", page).forEach((link) => link.addEventListener("click", (event) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+      event.preventDefault();
+      rememberFeedTitles();
+      openTitleAtEpisode(link.dataset.feedOpen, link.dataset.feedSeason);
+    }));
+    $$("[data-feed-watch]", page).forEach((button) => button.addEventListener("click", () => {
+      rememberFeedTitles();
+      openTitleAtEpisode(button.dataset.feedWatch, button.dataset.feedSeason, button.dataset.feedEpisode, { watch: true });
+    }));
+    bindSubscribeButtons(page);
+  }
+  function rememberFeedTitles() { if (cubFeed?.entries) rememberLooseTitles(cubFeed.entries.map(cubItem)); }
+  function bindSubscribeButtons(root) {
+    $$("[data-subscribe]", root).forEach((button) => button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const on = toggleSubscription(button.dataset.subscribe);
+      const known = getTitle(button.dataset.subscribe);
+      announceLive(on ? (known?.kind === "movie" ? "Напомню, когда фильм выйдет" : "Напомню о каждой новой серии") : "Напоминание выключено");
+      $$(`[data-subscribe="${CSS.escape(button.dataset.subscribe)}"]`).forEach((other) => {
+        other.classList.toggle("is-on", on);
+        other.setAttribute("aria-pressed", String(on));
+        other.querySelector("span").textContent = on ? "Напомню" : "Напомнить";
+      });
+    }));
   }
 
   function renderSeasons(item) {
@@ -8386,7 +8709,9 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       const poster = episodePosterMarkup(item, selectedSeason, episode, title, episodePlayable);
       const rated = episodeRatingFor(item, selectedSeason, episode);
       const hasStill = Boolean(item.episodePosterUrls?.[String(selectedSeason)]?.[String(episode)]);
-      return `<article class="episode-card${hasStill ? " has-still" : ""}${current ? " is-now" : ""}${seen ? " is-seen" : ""}">${ratio > 0 ? `<span class="episode-card-progress" style="--progress:${ratio}%" aria-hidden="true"></span>` : ""}${poster}<div class="episode-card-copy"><div class="episode-card-kicker">Сезон ${selectedSeason} · серия ${episode}${rated ? ` <span class="episode-rating is-r${ratingStep(rated.rating)}" title="${item.source === "tmdb" ? "Оценка TMDB" : "Оценка IMDb"}">${rated.rating.toFixed(1)}</span>` : ""}${(() => { const airDate = episodeAirDate(item, selectedSeason, episode); return airDate && airDate > new Date().toISOString().slice(0, 10) ? ` <span class="episode-air">Выйдет ${escapeHtml(airDateLabel(airDate))}</span>` : ""; })()}</div><h3>${escapeHtml(title)}</h3>${episodeVoiceMarkup(item, selectedSeason, episode, title)}${progressText ? `<p>${escapeHtml(progressText)}</p>` : ""}</div></article>`;
+      const airDate = episodeAirDate(item, selectedSeason, episode);
+      const future = Boolean(airDate && airDate > new Date().toISOString().slice(0, 10));
+      return `<article class="episode-card${hasStill && !future ? " has-still" : ""}${future ? " is-future" : ""}${current ? " is-now" : ""}${seen ? " is-seen" : ""}">${ratio > 0 ? `<span class="episode-card-progress" style="--progress:${ratio}%" aria-hidden="true"></span>` : ""}${poster}<div class="episode-card-copy"><div class="episode-card-kicker">Сезон ${selectedSeason} · серия ${episode}${rated ? ` <span class="episode-rating is-r${ratingStep(rated.rating)}" title="${item.source === "tmdb" ? "Оценка TMDB" : "Оценка IMDb"}">${rated.rating.toFixed(1)}</span>` : ""}${(() => { const airDate = episodeAirDate(item, selectedSeason, episode); return airDate && airDate > new Date().toISOString().slice(0, 10) ? ` <span class="episode-air">Выйдет ${escapeHtml(airDateLabel(airDate))}</span>` : ""; })()}</div><h3>${escapeHtml(title)}</h3>${episodeVoiceMarkup(item, selectedSeason, episode, title)}${progressText ? `<p>${escapeHtml(progressText)}</p>` : ""}</div></article>`;
     }).join("");
     const loadingNote = assetsLoading ? `<div class="episode-loading-note" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю список серий…</div>` : isImportedSeries && episodeImagesLoading ? `<div class="episode-loading-note" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю серии сезона…</div>` : assetsError ? `<div class="episode-loading-note is-error" role="status">${escapeHtml(assetsError)} Показываю доступные данные.</div>` : "";
     return `<section class="section"><div class="section-header"><div><h2>Сезоны и серии</h2><span>${countWord(seasonCount, "сезон", "сезона", "сезонов")} · ${countWord(seasonList.reduce((sum, season) => sum + season.episodes.length, 0), "серия", "серии", "серий")}</span></div>${sourceAction}</div><div class="season-tabs">${seasonList.map((season) => `<button class="filter-button ${selectedSeason === season.number ? "is-active" : ""}" data-season="${season.number}" type="button">Сезон ${season.number}</button>`).join("")}</div>${loadingNote}<div class="episode-list is-season-entering">${episodeRows}</div></section>${episodeMapMarkup(item)}`;
@@ -9599,6 +9924,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       } catch (error) { feedback.textContent = error.message.includes("403") ? "Импорт доступен только администратору backend." : `JSON не импортирован: ${error.message}`; }
     });
     $$('[data-mood]').forEach((button) => button.addEventListener("click", () => { selectMood(button.dataset.mood); }));
+    bindSubscribeButtons(page);
     $$('[data-favorite]').forEach((button) => button.addEventListener("click", () => { const id = button.dataset.favorite; const adding = !state.favorites.includes(id); state.favorites = adding ? [...state.favorites, id] : withoutTitle(state.favorites, id); const tracked = Array.isArray(state.anticipatedPremieres) ? state.anticipatedPremieres : []; state.anticipatedPremieres = adding && upcomingPremiere(getTitle(id)) ? [...new Set([...tracked, id])] : adding ? tracked : tracked.filter((item) => item !== id); saveState(); renderDetails(id); }));
     $$('[data-watchlist]').forEach((button) => button.addEventListener("click", () => { const id = button.dataset.watchlist; state.watchlist = state.watchlist.includes(id) ? withoutTitle(state.watchlist, id) : [...state.watchlist, id]; saveState(); renderDetails(id); }));
     $$('[data-season]').forEach((button) => button.addEventListener("click", () => switchSeason(button.dataset.season)));
@@ -9864,6 +10190,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     loadLibraryData(false)
       .then(() => render())
       .catch(() => {});
+    installNotifications();
     Promise.all([importedCatalog, loadCatalogProgress()])
       .then(() => { if (state.view === "home" || state.view === "history") render(); })
       .catch(() => {});

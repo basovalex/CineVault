@@ -22,7 +22,7 @@
   <link rel="sitemap" type="application/xml" href="/sitemap.xml">
   <title>CineVault — кино для вас</title>
   <script src="/boot.js?v=20261112-api-2"></script>
-  <link rel="stylesheet" href="/styles.css?v=20261112-tmdb-21">
+  <link rel="stylesheet" href="/styles.css?v=20261112-tmdb-22">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -30,6 +30,7 @@
       <a class="brand" href="/" data-view="home" aria-label="CineVault, на главную" title="На главную"><span class="brand-mark" aria-hidden="true"></span><span>CineVault</span></a>
       <nav class="nav-list">
         <a class="nav-item is-active" href="/" data-view="home" aria-label="Для вас" title="Для вас"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 10 8-6 8 6v9a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg><span class="nav-label-wide">Для вас</span><span class="nav-label-short">Главная</span></a>
+        <a class="nav-item" href="/feed/" data-view="feed" aria-label="Лента" title="Лента"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14M5 10h14M5 15h9M5 20h6"/></svg><span>Лента</span></a>
         <a class="nav-item is-wide-only" href="/movies/" data-view="movies" aria-label="Фильмы" title="Фильмы"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v13H4z"/><path d="M4 7h16l-2-3H6zM8 4l2 3m3-3 2 3m3-3 2 3"/></svg><span>Фильмы</span></a>
         <a class="nav-item is-wide-only" href="/series/" data-view="series" aria-label="Сериалы" title="Сериалы"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="13" rx="2"/><path d="M8 6V4m4 2V4m4 2V4M9 11h6m-6 4h6"/></svg><span>Сериалы</span></a>
         <a class="nav-item" href="/catalog/" data-view="catalog" data-section="movies series upcoming" aria-label="Каталог" title="Каталог"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg><span>Каталог</span></a>
@@ -51,6 +52,8 @@
           <kbd>/</kbd>
         </label>
         <div id="search-suggestions" class="search-suggestions" aria-label="Быстрые результаты поиска" hidden></div>
+        <button id="notify-button" class="icon-button notify-button" type="button" aria-label="Уведомления" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15L6 16Z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg><span id="notify-badge" class="notify-badge" hidden></span></button>
+        <div id="notify-panel" class="notify-panel" role="dialog" aria-label="Уведомления" hidden></div>
       </header>
 
       <div id="page" class="page" tabindex="-1"></div>
@@ -62,8 +65,8 @@
   <script src="/config.local.js" defer></script>
   <script src="/accounts.js?v=20261102-iframe-release-3" defer></script>
   <script src="/watch-together.js?v=20261112-api-2" defer></script>
-  <script src="/watch-native.js?v=20261112-tmdb-21" defer></script>
-  <script src="/lampac-player.js?v=20261112-tmdb-21" defer></script>
-  <script src="/app.js?v=20261112-tmdb-21" defer></script>
+  <script src="/watch-native.js?v=20261112-tmdb-22" defer></script>
+  <script src="/lampac-player.js?v=20261112-tmdb-22" defer></script>
+  <script src="/app.js?v=20261112-tmdb-22" defer></script>
 </body>
 </html>
