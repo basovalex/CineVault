@@ -1113,7 +1113,7 @@ span.studio-sort-button::after { display: none; }
   .nav-list .nav-item { flex-direction: column; justify-content: center; gap: 3px; min-height: 58px; padding: 0 2px; border-radius: 0; color: var(--muted); font-size: var(--s-tab); }
   .nav-list .nav-item:is(.is-active, .is-section) { background: none; color: var(--accent); font-weight: 700; }
   .nav-list .is-wide-only, .nav-label-wide { display: none; }
-  .nav-list .nav-search-tab, .nav-label-short { display: flex; }
+  .nav-label-short { display: flex; }
   .nav-label-short { display: inline; }
   .section-switch { display: flex; gap: var(--sp-2); margin: calc(var(--sp-2) - var(--sp-6)) calc(var(--gutter) * -1) var(--sp-5) 0; padding-right: var(--gutter); overflow-x: auto; scrollbar-width: none; }
   .section-switch::-webkit-scrollbar { display: none; }

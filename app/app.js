@@ -2449,7 +2449,7 @@
   };
 
   const defaultState = { view: "home", theme: "cinema", mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "now", catalogPage: 1, favorites: [], watchlist: [], subscriptions: [], progress: {}, ratings: {}, history: [], recommendationHistory: [], tasteMemory: [], offline: {}, voiceSelections: {}, playbackSelections: {}, playerVolume: 1, playerMuted: false, rutubeUrl: "", skipSegments: true };
-  const ROUTE_PATHS = Object.freeze({ home: "/", feed: "/feed/", catalog: "/catalog/", upcoming: "/upcoming/", movies: "/movies/", series: "/series/", library: "/library/", favorites: "/favorites/", evening: "/evening/", history: "/history/", settings: "/settings/", about: "/about/" });
+  const ROUTE_PATHS = Object.freeze({ home: "/", feed: "/feed/", catalog: "/catalog/", upcoming: "/upcoming/", movies: "/movies/", series: "/series/", cartoons: "/cartoons/", library: "/library/", favorites: "/favorites/", evening: "/evening/", history: "/history/", settings: "/settings/", about: "/about/" });
   const ROUTE_VIEWS = Object.freeze(Object.fromEntries(Object.entries(ROUTE_PATHS).map(([view, path]) => [path, view])));
   let state = loadState();
   // One dark theme; older builds stored a theme choice that is no longer read.
@@ -6844,7 +6844,7 @@
       button.classList.toggle("is-active", button.dataset.view === state.view);
       button.classList.toggle("is-section", String(button.dataset.section || "").split(" ").includes(state.view));
     });
-    if (catalogHydrating && ["home", "catalog", "upcoming", "movies", "series", "favorites", "evening", "history"].includes(state.view)) {
+    if (catalogHydrating && ["home", "catalog", "upcoming", "movies", "series", "favorites", "evening", "history"].includes(state.view) && !(SECTION_PAGES[state.view] && lampacOrigin())) {
       renderCatalogLoading();
       return;
     }
@@ -6859,6 +6859,7 @@
     }
     if (state.view === "home") renderHome();
     else if (state.view === "feed") renderFeedPage();
+    else if (SECTION_PAGES[state.view] && lampacOrigin()) renderSectionPage(state.view);
     else if (["catalog", "upcoming", "movies", "series", "favorites", "evening", "history"].includes(state.view)) renderCatalogView();
     else if (state.view === "library") { if (isAdminMode()) renderLibraryView(); else renderMissingPage(); }
     else if (state.view === "settings") renderSettings();
@@ -7709,7 +7710,7 @@
     const mine = ["favorites", "history", "settings"].includes(state.view);
     const views = mine
       ? [["favorites", "Избранное"], ["history", "История"], ["settings", "Настройки"]]
-      : [["catalog", "Всё"], ["movies", "Фильмы"], ["series", "Сериалы"], ["upcoming", "Скоро"]];
+      : [["catalog", "Всё"], ["movies", "Фильмы"], ["series", "Сериалы"], ["cartoons", "Мультфильмы"], ["upcoming", "Скоро"]];
     return `<nav class="section-switch" aria-label="Разделы">${views.map(([view, label]) => `<a class="genre-pill${state.view === view ? " is-active" : ""}" href="${routeForView(view)}" data-view="${view}"${state.view === view ? ' aria-current="page"' : ""}>${label}</a>`).join("")}</nav>`;
   }
 
@@ -7948,6 +7949,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       ["upcoming", "Скоро", "Премьеры ближайших двух месяцев", `discover/movie?primary_release_date.gte=${tmdbDay(1)}&primary_release_date.lte=${tmdbDay(60)}&sort_by=popularity.desc`, "movie"],
       ["popular-movies", "Популярные фильмы", "", "movie/popular", "movie"],
       ["popular-tv", "Популярные сериалы", "", "trending/tv/week", "tv"],
+      ["ru-movies", "Российские фильмы", "", "discover/movie?with_origin_country=RU&sort_by=popularity.desc&vote_count.gte=20", "movie"],
       ["top-movies", "Топ фильмов", "", "movie/top_rated", "movie"],
       ["top-tv", "Топ сериалов", "", "tv/top_rated", "tv"],
     ];
@@ -8010,6 +8012,118 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       tmdbHomeMoreBusy = false;
       const sentinel = page.querySelector("[data-tmdb-home-more]");
       if (sentinel && sentinel.getBoundingClientRect().top < window.innerHeight + 800) window.setTimeout(loadNextTmdbGenreRow, 50);
+    }
+  }
+
+  // ---- Sections as in Lampa: «Фильмы», «Сериалы», «Мультфильмы» are pages of themed rows
+  // (now watching, this year, last year, Russian, top rated, worth rewatching…) followed by
+  // endless genre rows. «Каталог» stays the grid with filters.
+  const SECTION_PAGES = {
+    movies: { title: "Фильмы", note: "Подборки как в Lampa: новинки в цифре, этого и прошлого года, российские, лучшие и жанры." },
+    series: { title: "Сериалы", note: "Что выходит сейчас, новинки, российские сериалы, лучшие и жанры." },
+    cartoons: { title: "Мультфильмы", note: "Мультфильмы и мультсериалы: новинки, популярное, российские, лучшие и жанры." },
+  };
+  const SECTION_GENRES = {
+    movies: [[28, "Боевики"], [35, "Комедии"], [18, "Драмы"], [878, "Фантастика"], [53, "Триллеры"], [27, "Ужасы"], [10749, "Мелодрамы"], [80, "Криминал"], [12, "Приключения"], [14, "Фэнтези"], [9648, "Детективы"], [10751, "Семейные"], [36, "Исторические"], [10752, "Военные"], [99, "Документальные"], [37, "Вестерны"], [10402, "Музыкальные"]],
+    series: [[18, "Драмы"], [35, "Комедии"], [80, "Криминал"], [10765, "Фантастика и фэнтези"], [10759, "Боевики и приключения"], [9648, "Детективы"], [10751, "Семейные"], [99, "Документальные"], [10768, "Военные"], [10764, "Реалити-шоу"], [37, "Вестерны"]],
+    cartoons: [[10751, "Семейные"], [35, "Комедии"], [12, "Приключения"], [14, "Фэнтези"], [878, "Фантастика"], [10402, "Музыкальные"], [28, "Боевики"]],
+  };
+  const sectionCache = new Map();
+  const sectionGenreState = new Map();
+  let sectionObserver = null;
+  function sectionRows(view) {
+    const year = new Date().getFullYear();
+    const today = tmdbDay();
+    const movie = (query) => [`discover/movie?${query}`, "movie"];
+    const tv = (query) => [`discover/tv?${query}`, "tv"];
+    if (view === "series") return [
+      ["on-air", "Сейчас выходят", "Новые серии на этой неделе", ...tv(`air_date.gte=${tmdbDay(-7)}&air_date.lte=${today}&sort_by=popularity.desc&vote_count.gte=30`)],
+      ["popular", "Популярные", "", "trending/tv/week", "tv"],
+      ["this-year", `Новинки ${year} года`, "", ...tv(`first_air_date_year=${year}&sort_by=popularity.desc&vote_count.gte=10`)],
+      ["ru", "Российские сериалы", "", ...tv("with_origin_country=RU&sort_by=popularity.desc&vote_count.gte=5")],
+      ["last-year", `Сериалы ${year - 1} года`, "", ...tv(`first_air_date_year=${year - 1}&sort_by=popularity.desc&vote_count.gte=30`)],
+      ["top", "Высокий рейтинг", "", ...tv("vote_average.gte=8&vote_count.gte=500&sort_by=vote_average.desc")],
+      ["rewatch", "Стоит пересмотреть", "Лучшее из 2000–2015", ...tv("first_air_date.gte=2000-01-01&first_air_date.lte=2015-12-31&vote_count.gte=800&sort_by=vote_average.desc")],
+    ];
+    if (view === "cartoons") return [
+      ["now", "Сейчас смотрят", "Вышли в цифре за три месяца", ...movie(`with_genres=16&with_release_type=4%7C5%7C6&release_date.lte=${today}&release_date.gte=${tmdbDay(-90)}&sort_by=popularity.desc`)],
+      ["popular", "Популярные мультфильмы", "", ...movie("with_genres=16&sort_by=popularity.desc&vote_count.gte=50")],
+      ["this-year", `Новинки ${year} года`, "", ...movie(`with_genres=16&primary_release_year=${year}&sort_by=popularity.desc`)],
+      ["series", "Мультсериалы", "", ...tv("with_genres=16&sort_by=popularity.desc&vote_count.gte=100&without_genres=10767%2C10764")],
+      ["ru", "Российские мультфильмы", "", ...movie("with_genres=16&with_origin_country=RU&sort_by=popularity.desc")],
+      ["anime", "Аниме", "", ...movie("with_genres=16&with_original_language=ja&sort_by=popularity.desc&vote_count.gte=100")],
+      ["last-year", `Мультфильмы ${year - 1} года`, "", ...movie(`with_genres=16&primary_release_year=${year - 1}&sort_by=popularity.desc`)],
+      ["top", "Высокий рейтинг", "", ...movie("with_genres=16&vote_average.gte=7.8&vote_count.gte=800&sort_by=vote_average.desc")],
+      ["rewatch", "Стоит пересмотреть", "Классика 1990–2015", ...movie("with_genres=16&primary_release_date.gte=1990-01-01&primary_release_date.lte=2015-12-31&vote_count.gte=1500&sort_by=vote_average.desc")],
+    ];
+    return [
+      ["now", "Сейчас смотрят", "Вышли в цифре за три месяца — не экранки", ...movie(`with_release_type=4%7C5%7C6&release_date.lte=${today}&release_date.gte=${tmdbDay(-90)}&sort_by=popularity.desc&without_genres=16`)],
+      ["popular", "Популярные", "", "movie/popular", "movie"],
+      ["this-year", `Новинки ${year} года`, "", ...movie(`primary_release_year=${year}&primary_release_date.lte=${today}&sort_by=popularity.desc&without_genres=16`)],
+      ["ru", "Российские фильмы", "", ...movie("with_origin_country=RU&sort_by=popularity.desc&without_genres=16&vote_count.gte=20")],
+      ["last-year", `Фильмы ${year - 1} года`, "", ...movie(`primary_release_year=${year - 1}&sort_by=popularity.desc&vote_count.gte=100&without_genres=16`)],
+      ["top", "Высокий рейтинг", "", ...movie("vote_average.gte=8&vote_count.gte=2000&sort_by=vote_average.desc&without_genres=16")],
+      ["rewatch", "Стоит пересмотреть", "Лучшее из 1995–2015", ...movie("primary_release_date.gte=1995-01-01&primary_release_date.lte=2015-12-31&vote_count.gte=3000&sort_by=vote_average.desc")],
+      ["ru-classic", "Российская классика", "", ...movie("with_origin_country=RU%7CSU&primary_release_date.lte=2005-12-31&vote_count.gte=50&sort_by=vote_average.desc")],
+    ];
+  }
+  function loadSectionRows(view) {
+    if (sectionCache.has(view)) return sectionCache.get(view);
+    const job = Promise.all(sectionRows(view).map(([key, title, description, path, kind]) => cvTmdb(`${path}${path.includes("?") ? "&" : "?"}language=ru-RU`)
+      .then((json) => ({ key: `${view}-${key}`, title, description, items: tmdbListItems(json, kind) }))
+      .catch(() => ({ key: `${view}-${key}`, title, description, items: [] }))))
+      .then((rows) => {
+        const ready = rows.filter((row) => row.items.length);
+        rememberLooseTitles(ready.flatMap((row) => row.items));
+        if (!ready.length) sectionCache.delete(view);
+        return ready;
+      });
+    sectionCache.set(view, job);
+    return job;
+  }
+  function renderSectionPage(view) {
+    const meta = SECTION_PAGES[view];
+    const genres = sectionGenreState.get(view) || { cursor: 0, rows: [] };
+    sectionGenreState.set(view, genres);
+    const head = `<div class="page-heading"><div><h1>${meta.title}</h1><p class="muted">${meta.note}</p></div></div>${sectionSwitchMarkup()}`;
+    page.innerHTML = `${head}<div class="home-rows-loading" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю подборки…</div>`;
+    loadSectionRows(view).then((rows) => {
+      if (state.view !== view) return;
+      page.innerHTML = `${head}${rows.map(tmdbHomeRowMarkup).join("")}${genres.rows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-section-more aria-hidden="true"></div>`;
+      hydrateLazyPosters();
+      bindSectionMore(view);
+    });
+  }
+  function bindSectionMore(view) {
+    sectionObserver?.disconnect();
+    const sentinel = page.querySelector("[data-section-more]");
+    if (!sentinel || !("IntersectionObserver" in window)) return;
+    sectionObserver = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) loadNextSectionGenreRow(view); }, { rootMargin: "800px 0px" });
+    sectionObserver.observe(sentinel);
+  }
+  async function loadNextSectionGenreRow(view) {
+    const genres = sectionGenreState.get(view);
+    const list = SECTION_GENRES[view];
+    if (!genres || genres.busy || genres.cursor >= list.length * 2) return;
+    genres.busy = true;
+    try {
+      const index = genres.cursor++;
+      const [genreId, name] = list[index % list.length];
+      const second = index >= list.length;
+      const kind = view === "series" ? "tv" : "movie";
+      const base = view === "cartoons" ? `with_genres=16%2C${genreId}` : `with_genres=${genreId}${view === "movies" ? "&without_genres=16" : ""}`;
+      const sort = second ? `vote_average.desc&vote_count.gte=${view === "movies" ? 1500 : 300}` : "popularity.desc&vote_count.gte=50";
+      const items = tmdbListItems(await cvTmdb(`discover/${kind}?${base}&sort_by=${sort}&language=ru-RU`).catch(() => null), kind);
+      if (!items.length || state.view !== view) return;
+      const row = { key: `${view}-genre-${index}`, title: second ? `${name}: лучшие` : name, description: "", items };
+      genres.rows.push(row);
+      rememberLooseTitles(items);
+      page.querySelector("[data-section-more]")?.insertAdjacentHTML("beforebegin", tmdbHomeRowMarkup(row));
+      hydrateLazyPosters();
+    } finally {
+      genres.busy = false;
+      const sentinel = page.querySelector("[data-section-more]");
+      if (sentinel && state.view === view && sentinel.getBoundingClientRect().top < window.innerHeight + 800) window.setTimeout(() => loadNextSectionGenreRow(view), 50);
     }
   }
 

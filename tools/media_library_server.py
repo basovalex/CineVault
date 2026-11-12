@@ -109,7 +109,7 @@ SITEMAP_TITLE_ID_BY_KINOPOISK_ID = {
     412344: "the-mentalist",
 }
 APP_ROUTE_RE = re.compile(
-    r"^/(?:title/[^/]+/?|person/\d+/?|feed/?|catalog/?|upcoming/?|movies/?|series/?|library/?|favorites/?|evening/?|history/?|settings/?|about/?)$"
+    r"^/(?:title/[^/]+/?|person/\d+/?|feed/?|catalog/?|upcoming/?|movies/?|series/?|cartoons/?|library/?|favorites/?|evening/?|history/?|settings/?|about/?)$"
 )
 DEFAULT_KINOPOISK_UPDATE_DELAY_SECONDS = 2
 DEFAULT_KINOPOISK_UPDATE_TIMEOUT_SECONDS = 5 * 60
