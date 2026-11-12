@@ -5063,15 +5063,36 @@
   const LAMPAC_ORIGIN_KEY = "cinevault.lampacOrigin";
   const LAMPAC_CHOICE_KEY = "cinevault.lampacChoice";
   const LAMPAC_PROBE_TIMEOUT_MS = 15000;
+  // Order: a per-browser override, then the server's /config.local.js (production),
+  // then a Lampac on port 9118 of the same machine for local and home-network runs.
   function lampacOrigin() {
     try {
       const saved = localStorage.getItem(LAMPAC_ORIGIN_KEY);
       if (saved === "off") return "";
       if (saved) return saved.replace(/\/+$/, "");
     } catch {}
+    const configured = String(window.CINEVAULT_CONFIG?.lampacOrigin || "").trim();
+    if (configured) return configured.replace(/\/+$/, "");
     const host = location.hostname;
     const home = host === "localhost" || host === "127.0.0.1" || /^(192\.168|10)\.|^172\.(1[6-9]|2\d|3[01])\./.test(host);
     return home ? `${location.protocol}//${host}:9118` : "";
+  }
+  // The public Lampac lets in only known device ids (accsdb); the site has its own,
+  // given by the server, never written into the code.
+  function lampacUid() {
+    return String(window.CINEVAULT_CONFIG?.lampacUid || "").trim();
+  }
+  function withLampacUid(url) {
+    const uid = lampacUid();
+    if (!uid || !url) return url;
+    try {
+      const target = new URL(url, lampacOrigin());
+      if (target.origin !== new URL(lampacOrigin()).origin || !target.pathname.startsWith("/lite")) return url;
+      if (!target.searchParams.has("uid")) target.searchParams.set("uid", uid);
+      return target.href;
+    } catch {
+      return url;
+    }
   }
   function lampacChoice() {
     try { return JSON.parse(localStorage.getItem(LAMPAC_CHOICE_KEY) || "{}") || {}; } catch { return {}; }
@@ -5083,7 +5104,7 @@
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), timeout);
     try {
-      const target = new URL(url, lampacOrigin());
+      const target = new URL(withLampacUid(new URL(url, lampacOrigin()).href));
       target.searchParams.set("rjson", "true");
       const response = await fetch(target, { signal: controller.signal, cache: "no-store" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -5121,8 +5142,8 @@
   // quality and the subtitles, as Lampa does. Its ready "stream" is the fallback.
   async function lampacStream(entry) {
     const pack = (source) => ({
-      stream: source?.url || "",
-      qualities: source?.quality && typeof source.quality === "object" ? source.quality : {},
+      stream: withLampacUid(source?.url || ""),
+      qualities: source?.quality && typeof source.quality === "object" ? Object.fromEntries(Object.entries(source.quality).map(([label, link]) => [label, withLampacUid(link)])) : {},
       subtitles: Array.isArray(source?.subtitles) ? source.subtitles.filter((sub) => sub?.url).map((sub) => ({ label: sub.label || sub.name || "", url: sub.url })) : [],
     });
     if (entry.method === "play") return pack(entry);
@@ -5130,7 +5151,7 @@
       const answer = await lampacJson(entry.url);
       if (answer?.url) return pack(answer);
     } catch {}
-    return { stream: entry.stream || "", qualities: {}, subtitles: [] };
+    return { stream: withLampacUid(entry.stream || ""), qualities: {}, subtitles: [] };
   }
   function lampacNumber(entry, fallback) {
     const value = Number(entry?.s ?? entry?.id ?? String(entry?.name || "").match(/\d+/)?.[0]);
@@ -5340,9 +5361,8 @@
   // Every way into the old players (history, "continue", resume cards) comes here first:
   // when Lampac is on, the title opens in the Lampac window instead. Own library files,
   // watch-together rooms and the explicit "previous sources" button keep the old players.
-  let lampacBypassUntil = 0;
   function routeToLampac(item, season = null, episode = null, roomId = "") {
-    if (!item || roomId || Date.now() < lampacBypassUntil || !lampacOrigin()) return false;
+    if (!item || roomId || !lampacOrigin()) return false;
     if (hasOwnEpisodeSources(item) || libraryEpisodeFor(item)) return false;
     if (!(Number(item.kinopoiskId || item.kinopoisk_id || 0) || item.imdbId || item.tmdbId)) return false;
     openLampacChooser(item, { season, episode });
@@ -5394,13 +5414,15 @@
       const record = state.progress[progressKey(seasonNumber, episodeNumber)];
       if (!record?.duration) return "";
       if (record.completed) return "Просмотрено";
+      // A few seconds in is not a real stop: the film was only opened.
+      if (Number(record.position || 0) < 15) return "";
       return `Остановились на ${formatTime(record.position)}`;
     };
     // A film: pick a voice (the one chosen before is preselected), then one "Смотреть"
     // button starts it. Picking only selects, so the button is the single way to play.
     const renderMovie = (node) => {
       const voices = node.data;
-      const list = voices.map((entry, index) => ({ entry, label: entry.translate || entry.title || `Вариант ${index + 1}`, note: [entry.maxquality, entry.voice_name].filter(Boolean).join(" · ") }));
+      const list = voices.map((entry, index) => ({ entry, label: entry.translate || entry.title || `Вариант ${index + 1}`, note: [...new Set([entry.maxquality, entry.voice_name].filter(Boolean))].join(" · ") }));
       const remembered = list.findIndex((entry) => saved.voice && entry.label === saved.voice);
       let chosen = Math.max(0, remembered);
       const resume = resumeNote(null, null);
@@ -5511,9 +5533,9 @@
       if (closed) return;
       if (!list.length) {
         finished = true;
-        setStatus("Lampac не отвечает.");
-        body.innerHTML = `<button class="secondary-button" type="button" data-lampac-fallback>Открыть прежние источники</button>`;
-        body.querySelector("[data-lampac-fallback]").addEventListener("click", () => { closed = true; modalRoot.innerHTML = ""; openWatchChooser(item, { season, episode, skipLampac: true }); });
+        setStatus("Сервер с источниками не отвечает.");
+        body.innerHTML = `<button class="secondary-button" type="button" data-lampac-retry>Повторить</button>`;
+        body.querySelector("[data-lampac-retry]").addEventListener("click", () => { closed = true; openLampacChooser(item, { season, episode }); });
         return;
       }
       await Promise.all(list.map(async (entry) => {
@@ -5540,8 +5562,8 @@
       finished = true;
       if (!sources.length) {
         setStatus("");
-        body.innerHTML = `<p class="player-choice-empty">Ни один источник не нашёл «${escapeHtml(item.title)}».</p><button class="secondary-button" type="button" data-lampac-fallback>Открыть прежние источники</button>`;
-        body.querySelector("[data-lampac-fallback]").addEventListener("click", () => { closed = true; modalRoot.innerHTML = ""; openWatchChooser(item, { season, episode, skipLampac: true }); });
+        body.innerHTML = `<p class="player-choice-empty">Ни один источник пока не нашёл «${escapeHtml(item.title)}». Новинки обычно появляются в течение нескольких дней.</p><button class="secondary-button" type="button" data-lampac-retry>Повторить</button>`;
+        body.querySelector("[data-lampac-retry]").addEventListener("click", () => { closed = true; openLampacChooser(item, { season, episode }); });
       } else if (statusRoot.textContent.startsWith("Ищу ещё")) {
         setStatus("");
       }
@@ -5551,14 +5573,13 @@
   }
 
   // One "Смотреть" button: list every player that has the title.
-  function openWatchChooser(item, { episode = null, season = null, skipLampac = false } = {}) {
+  function openWatchChooser(item, { episode = null, season = null } = {}) {
     if (!item) return;
     const main = Boolean(item) && (hasPlayableSource(item) || shouldRefreshKinopoiskPlayback(item));
     // In the showcase only our own player and trailers are shown.
     if (isShowcase()) return main ? openItemPlayer(item, episode, season) : openTrailer(item);
     const hasKinopoisk = Number(item?.kinopoiskId || item?.kinopoisk_id || 0) > 0;
-    if (!skipLampac && lampacOrigin() && (hasKinopoisk || item.imdbId || item.tmdbId)) return openLampacChooser(item, { season, episode });
-    if (skipLampac) lampacBypassUntil = Date.now() + 5000;
+    if (lampacOrigin() && (hasKinopoisk || item.imdbId || item.tmdbId)) return openLampacChooser(item, { season, episode });
     if (!hasKinopoisk) return openItemPlayer(item, episode, season);
     // Alloha when it has the title (95% of those with 50 000+ votes, 11.11.2026), our own
     // CineVault player when it does not, the trailer when neither does. The chooser below is
@@ -7334,7 +7355,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     stopDetailPrebuffer();
     const enteringTitle = activeTitleId !== id;
     // Look the players up while the viewer reads the page, so "Смотреть" is instant.
-    if (enteringTitle && !awaitingPremierePlayback(item)) { loadPlayerOptions(item).catch(() => {}); loadAllohaEpisodes(item); warmPlayerConnection(); }
+    if (enteringTitle && !awaitingPremierePlayback(item) && !lampacOrigin()) { loadPlayerOptions(item).catch(() => {}); loadAllohaEpisodes(item); warmPlayerConnection(); }
     if (enteringTitle && Number(item.catalogId || 0) === 2205 && !item.episodePosterUrls && !episodeAssetsLoading) loadEpisodeAssets();
     if (item.kind === "series" && !episodeRatingsCache.has(item.id)) loadEpisodeRatings(item);
     // Loading metadata and episodes finishes after the page is already open.
@@ -8974,7 +8995,8 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
 
   // Card images fade in once loaded; until then a shimmer placeholder shows.
   document.addEventListener("load", (event) => { if (event.target instanceof HTMLImageElement) event.target.classList.add("is-loaded"); }, true);
-  window.setTimeout(offerAdFilter, AD_FILTER_OFFER_DELAY_MS);
+  // With Lampac the video plays in our own player, so there are no third-party ads to filter.
+  if (!lampacOrigin()) window.setTimeout(offerAdFilter, AD_FILTER_OFFER_DELAY_MS);
   // Solid top bar once the page scrolls past the hero's top edge.
   const syncScrolledHeader = () => app.classList.toggle("is-scrolled", window.scrollY > 24);
   window.addEventListener("scroll", syncScrolledHeader, { passive: true });

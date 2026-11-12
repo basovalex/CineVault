@@ -1321,3 +1321,4 @@ span.studio-sort-button::after { display: none; }
 .lampac-voice.is-active .lampac-voice-mark { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 45%, transparent 50%); }
 .lampac-voice-copy { display: grid; gap: 3px; }
 .lampac-voice-copy small { color: var(--muted); font-size: var(--s-1); }
+.lampac-voice .player-choice-badge { position: static; justify-self: end; background: var(--surface-3); color: var(--text-2); white-space: nowrap; }

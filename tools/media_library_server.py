@@ -3352,6 +3352,13 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
             browser_tmdb_token = os.environ.get("CINEVAULT_TMDB_BROWSER_TOKEN", "").strip()
             if browser_tmdb_token:
                 config["tmdbApiKey"] = browser_tmdb_token
+            # Lampac (sources and streams): its public address and the site's device id.
+            lampac_origin = os.environ.get("CINEVAULT_LAMPAC_ORIGIN", "").strip()
+            if lampac_origin:
+                config["lampacOrigin"] = lampac_origin
+                lampac_uid = os.environ.get("CINEVAULT_LAMPAC_UID", "").strip()
+                if lampac_uid:
+                    config["lampacUid"] = lampac_uid
             body = f"window.CINEVAULT_CONFIG = {json.dumps(config, ensure_ascii=False)};".encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/javascript; charset=utf-8")
