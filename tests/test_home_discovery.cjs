@@ -58,12 +58,10 @@ test('next catalog page waits for scrolling and never cancels a filter that is l
   vm.runInContext('progressiveCatalogNext = 50;', shown);
   assert.equal(shown.catalogCardsAllShown(), true);
 });
-test('seasons follow Alloha numbers unless the title has its own episode sources', () => {
-  const alloha = [{number: 4, episodes: [1, 2, 13]}];
-  const context = functions('hasOwnEpisodeSources(item)', '  function loadAllohaEpisodes', {allohaEpisodeLists: new Map([[7, alloha]])});
-  assert.deepEqual(JSON.parse(JSON.stringify(context.titleSeasonList({kinopoiskId: 7, seasons: [2]}))), alloha);
-  assert.deepEqual(JSON.parse(JSON.stringify(context.titleSeasonList({kinopoiskId: 8, seasons: [2]}))), [{number: 1, episodes: [1, 2]}]);
-  assert.deepEqual(JSON.parse(JSON.stringify(context.titleSeasonList({kinopoiskId: 7, seasons: [2], libraryEpisodes: [{}]}))), [{number: 1, episodes: [1, 2]}]);
+test('seasons come from the catalog counts', () => {
+  const context = functions('hasOwnEpisodeSources(item)', '  function lampacOrigin', {});
+  assert.deepEqual(JSON.parse(JSON.stringify(context.titleSeasonList({kinopoiskId: 7, seasons: [2]}))), [{number: 1, episodes: [1, 2]}]);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.titleSeasonList({seasons: [1, 3]}))), [{number: 1, episodes: [1]}, {number: 2, episodes: [1, 2, 3]}]);
 });
 test('last year collection opens newest first and leaving it restores the default order', () => {
   const {sortForCatalogCollection} = functions('sortForCatalogCollection(collectionId, currentSort)', '  function openCatalogCollection', {});
