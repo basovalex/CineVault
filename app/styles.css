@@ -1185,6 +1185,36 @@ span.studio-sort-button::after { display: none; }
 .lampac-progress { flex: 1; max-width: 160px; height: 4px; margin-left: auto; overflow: hidden; border-radius: var(--r-pill); background: var(--surface-2); }
 .lampac-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .4s var(--ease); }
 .lampac-label { margin: var(--sp-4) 0 var(--sp-2); color: var(--muted); font-size: var(--s-1); }
+/* Сериал: шаг 1 — сезон и серия, шаг 2 — источник и озвучка. */
+.lampac-modal.is-episode-step :is(#lampac-sources, #lampac-status, #lampac-body, .lampac-sources-label) { display: none; }
+.lampac-sources-label { margin-top: 0; }
+.lampac-sources-label:has(+ .lampac-sources:empty) { display: none; }
+.lampac-step-head { display: grid; gap: 2px; margin: var(--sp-2) 0 var(--sp-3); }
+.lampac-step-head small, .lampac-picked small { color: var(--accent); font-size: var(--s-1); font-weight: 600; }
+.lampac-step-head strong { font: 600 var(--s2, 22px)/1.2 var(--display); }
+.lampac-season-row { display: flex; gap: var(--sp-1); margin-right: -18px; padding: 2px 18px 6px 2px; overflow-x: auto; scrollbar-width: thin; }
+.lampac-season-row .filter-button { flex: none; background: var(--surface); }
+.lampac-season-row .filter-button.is-active { background: var(--accent-soft); color: var(--accent); }
+.lampac-step-episodes { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sp-2); max-height: 46vh; overflow-y: auto; padding: 2px; }
+.lampac-step-episode { position: relative; display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 14px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); color: var(--text-2); font: inherit; text-align: left; cursor: pointer; transition: border-color var(--t) var(--ease), background-color var(--t) var(--ease); }
+.lampac-step-episode b { flex: none; min-width: 26px; color: var(--text); font-size: var(--s1, 18px); font-weight: 700; }
+.lampac-step-episode span { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.3; font-size: var(--s-1); }
+.lampac-step-episode:hover, .lampac-step-episode:focus-visible { border-color: var(--accent); background: var(--surface-3); color: var(--text); outline: none; }
+.lampac-step-episode.is-current { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.lampac-step-episode.is-watched { opacity: .6; }
+.lampac-step-episode i { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--accent); }
+.lampac-bg-note { display: flex; align-items: center; gap: 10px; margin: var(--sp-4) 0 0; color: var(--muted); font-size: var(--s-1); }
+.lampac-bg-note .loading-spinner { width: 14px; height: 14px; }
+.lampac-bg-ready { color: var(--accent); font-weight: 700; }
+.lampac-picked { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin: 0 0 var(--sp-3); padding: 12px 14px; border-radius: 12px; background: var(--surface-2); }
+.lampac-picked[hidden] { display: none; }
+.lampac-picked > div { display: grid; gap: 2px; min-width: 0; }
+.lampac-picked strong { font-weight: 600; line-height: 1.3; }
+.lampac-change { flex: none; min-height: 38px; padding: 0 14px; }
+@media (max-width: 720px) {
+  .lampac-step-episodes { grid-template-columns: 1fr; max-height: none; }
+  .lampac-picked { flex-wrap: wrap; }
+}
 /* Загрузка в окне «Где смотреть»: видно, что именно грузится, и нельзя натыкать лишнего. */
 .lampac-status.is-busy { position: sticky; top: 0; z-index: 2; flex-wrap: wrap; margin: 0 0 var(--sp-2); padding: 12px 14px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)); box-shadow: 0 8px 20px rgb(0 0 0 / 35%); color: var(--text); font-size: var(--s0); font-weight: 500; }
 .lampac-status.is-busy .loading-spinner { width: 18px; height: 18px; border-top-color: var(--accent); }

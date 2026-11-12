@@ -5490,8 +5490,12 @@
     const saved = lampacChoice(item.id);
     const series = item.kind === "series";
     const progress = progressForTitle(item);
-    const wantSeason = Number(season || progress?.seasonNumber || 1);
-    const wantEpisode = Number(episode || progress?.episodeNumber || 0);
+    let wantSeason = Number(season || progress?.seasonNumber || 1);
+    let wantEpisode = Number(episode || progress?.episodeNumber || 0);
+    // A series opens in two steps: first season and episode (from TMDB, instant), then source
+    // and voice. Sources are searched in the background while the episode is being picked.
+    // Coming from a specific episode on the page skips straight to the second step.
+    let step = series && !episode ? "episode" : "source";
     // Real seasons and episode names come from TMDB, looked up while sources are searched.
     const tmdbShow = series ? cvTmdbShow(item).catch(() => null) : Promise.resolve(null);
     const tmdbShowSoon = () => Promise.race([tmdbShow, new Promise((resolve) => window.setTimeout(() => resolve(null), 4000))]);
@@ -5501,8 +5505,11 @@
     let token = 0;
     let closed = false;
     let finished = false;
-    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal player-choice-modal lampac-modal" role="dialog" aria-modal="true" aria-labelledby="lampac-title"><div class="modal-head"><div><div class="eyebrow">Где смотреть</div><h2 id="lampac-title">${escapeHtml(item.title)}</h2></div><button class="icon-button" id="lampac-close" type="button" aria-label="Закрыть">${uiIcon("close")}</button></div><div class="lampac-sources" id="lampac-sources" role="tablist" aria-label="Источники"></div><div class="lampac-status is-busy" id="lampac-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><span>Ищу источники…</span></div><div class="lampac-body" id="lampac-body">${lampacSkeleton()}</div></section></div>`;
+    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal player-choice-modal lampac-modal" role="dialog" aria-modal="true" aria-labelledby="lampac-title"><div class="modal-head"><div><div class="eyebrow">Где смотреть</div><h2 id="lampac-title">${escapeHtml(item.title)}</h2></div><button class="icon-button" id="lampac-close" type="button" aria-label="Закрыть">${uiIcon("close")}</button></div><div class="lampac-step" id="lampac-step" hidden></div><div class="lampac-picked" id="lampac-picked" hidden></div><div class="lampac-label lampac-sources-label">Источник</div><div class="lampac-sources" id="lampac-sources" role="tablist" aria-label="Источники"></div><div class="lampac-status is-busy" id="lampac-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><span>Ищу источники…</span></div><div class="lampac-body" id="lampac-body">${lampacSkeleton()}</div></section></div>`;
     const sourcesRoot = $("#lampac-sources");
+    const stepRoot = $("#lampac-step");
+    const pickedRoot = $("#lampac-picked");
+    const modalBox = $(".lampac-modal");
     const statusRoot = $("#lampac-status");
     const body = $("#lampac-body");
     const close = () => { closed = true; modalRoot.innerHTML = ""; };
@@ -5537,6 +5544,8 @@
     };
     const renderSources = () => {
       sourcesRoot.innerHTML = sources.map((source) => `<button class="filter-button${source.id === active ? " is-active" : ""}" type="button" role="tab" aria-selected="${source.id === active}" data-lampac-source="${escapeHtml(source.id)}">${escapeHtml(source.name)}${source.lines ? `<span class="lampac-quality" title="Лучшее качество у этого источника; у отдельных озвучек и серий может быть ниже">до ${lampacQualityLabel(source.lines)}</span>` : ""}</button>`).join("") + (pending.size ? `<span class="filter-button lampac-pending" title="${escapeHtml([...pending.values()].join(", "))}"><span class="loading-spinner" aria-hidden="true"></span>${sources.length ? "Проверяю ещё" : "Проверяю"} ${countWord(pending.size, "источник", "источника", "источников")}…</span>` : "");
+      const note = stepRoot.querySelector("[data-lampac-bg]");
+      if (note) note.innerHTML = lampacBackgroundNote();
       const current = sourcesRoot.querySelector(".is-active");
       if (current && sourcesRoot.scrollWidth > sourcesRoot.clientWidth) {
         const left = current.offsetLeft - sourcesRoot.offsetLeft;
@@ -5619,7 +5628,18 @@
         });
       }).catch(() => {});
       // Where to start: the episode stopped on (or the next after a finished one), else the first.
+      const picked = series && step === "source" && wantEpisode > 0;
       let start = list.findIndex((entry) => entry.s === wantSeason && entry.e === wantEpisode);
+      if (picked && start < 0) {
+        const voiceTabsMissing = voices.length > 1 ? `<div class="lampac-label">Другие озвучки этого источника</div><div class="season-tabs lampac-tabs">${voices.map((voice, index) => `<button class="filter-button${voice.active ? " is-active" : ""}" type="button" data-lampac-voice="${index}">${escapeHtml(voice.name)}</button>`).join("")}</div>` : "";
+        body.innerHTML = `<p class="player-choice-empty">В этом источнике${activeVoice ? ` с озвучкой «${escapeHtml(activeVoice)}»` : ""} нет ${wantEpisode} серии ${wantSeason} сезона. Выберите другую озвучку или источник выше.</p>${voiceTabsMissing}`;
+        body.querySelectorAll("[data-lampac-voice]").forEach((button) => button.addEventListener("click", () => {
+          const voice = voices[Number(button.dataset.lampacVoice)];
+          rememberLampacChoice({ voice: voice.name }, item.id);
+          if (voice.url) loadNode(voice.url, seasons, seasonNumber, { trigger: button, text: `Переключаю озвучку на «${escapeHtml(voice.name)}»…` });
+        }));
+        return;
+      }
       const startRecord = start >= 0 ? state.progress[progressKey(list[start].s, list[start].e)] : null;
       if (start >= 0 && startRecord?.completed && list[start + 1]) start += 1;
       const resuming = start >= 0 && Boolean(resumeNote(list[start].s, list[start].e));
@@ -5634,7 +5654,7 @@
         const classes = ["lampac-episode", index === start ? "is-current" : "", record?.completed ? "is-watched" : ""].filter(Boolean).join(" ");
         return `<button class="${classes}" type="button" data-lampac-episode="${index}" title="Смотреть: ${escapeHtml(entry.label)}"><span class="lampac-episode-play" aria-hidden="true">${playerIcon("play")}</span><span>${escapeHtml(entry.label)}</span>${share && !record.completed ? `<i style="width:${share.toFixed(1)}%"></i>` : ""}</button>`;
       }).join("");
-      body.innerHTML = `${startButton}${voiceTabs}${seasonTabs}<div class="lampac-label">Серии — нажмите, чтобы смотреть</div><div class="lampac-episodes">${episodes}</div>`;
+      body.innerHTML = picked ? `${startButton}${voiceTabs}` : `${startButton}${voiceTabs}${seasonTabs}<div class="lampac-label">Серии — нажмите, чтобы смотреть</div><div class="lampac-episodes">${episodes}</div>`;
       body.querySelector("[data-lampac-start]").addEventListener("click", (event) => play(list, start, { voiceName: activeVoice, trigger: event.currentTarget }));
       // The source badge is its best; what this voice really gives is checked on its first episode.
       const qualityMark = body.querySelector("[data-voice-quality]");
@@ -5656,6 +5676,7 @@
         if (voice.url) loadNode(voice.url, seasons, seasonNumber, { trigger: button, text: `Переключаю озвучку на «${escapeHtml(voice.name)}»…` });
       }));
       body.querySelectorAll("[data-lampac-episode]").forEach((button) => button.addEventListener("click", () => {
+        if (picked) return;
         play(list, Number(button.dataset.lampacEpisode), { voiceName: activeVoice, trigger: button });
       }));
       body.querySelector("[data-lampac-start]").focus();
@@ -5691,6 +5712,75 @@
       const index = Math.max(0, seasons.findIndex((entry, position) => lampacNumber(entry, position + 1) === wantSeason));
       loadNode(seasons[index].url, seasons, lampacNumber(seasons[index], index + 1), { preferSavedVoice: true });
     };
+    const lampacBackgroundNote = () => {
+      if (pending.size || !finished) return `<span class="loading-spinner" aria-hidden="true"></span><span>Пока выбираете — ищу источники и озвучки${sources.length ? `: уже ${countWord(sources.length, "источник", "источника", "источников")}` : "…"}</span>`;
+      return sources.length ? `<span class="lampac-bg-ready" aria-hidden="true">✓</span><span>Готово: ${countWord(sources.length, "источник", "источника", "источников")}</span>` : `<span>Источники не нашли этот сериал.</span>`;
+    };
+    const episodeLabel = (s, e, name = "") => `${s} сезон, ${e} серия${name ? ` «${escapeHtml(name)}»` : ""}`;
+    const showPicked = (s, e, name = "") => {
+      if (!series || !e) return;
+      pickedRoot.hidden = false;
+      pickedRoot.innerHTML = `<div><small>Шаг 2 из 2 · источник и озвучка</small><strong data-picked-label>${episodeLabel(s, e, name)}</strong></div><button class="secondary-button lampac-change" type="button" data-lampac-change>Сменить серию</button>`;
+      pickedRoot.querySelector("[data-lampac-change]").addEventListener("click", () => showEpisodeStep(s));
+      if (!name) tmdbShow.then((show) => (show ? cvTmdbEpisodes(show.id, s) : null)).then((names) => {
+        const label = pickedRoot.querySelector("[data-picked-label]");
+        if (names?.[e]?.name && label && wantSeason === s && wantEpisode === e) label.innerHTML = episodeLabel(s, e, names[e].name);
+      }).catch(() => {});
+    };
+    const goToSource = (s, e, name = "") => {
+      wantSeason = s;
+      wantEpisode = e;
+      step = "source";
+      stepRoot.hidden = true;
+      stepRoot.innerHTML = "";
+      modalBox.classList.remove("is-episode-step");
+      showPicked(s, e, name);
+      if (active) select(active);
+      else body.innerHTML = lampacSkeleton();
+      if (!active) setStatus(sources.length ? "" : "Ищу источники…", { busy: !sources.length });
+    };
+    const showEpisodeStep = async (seasonToShow = wantSeason) => {
+      step = "episode";
+      token += 1;
+      busyDone?.();
+      modalBox.classList.add("is-episode-step");
+      pickedRoot.hidden = true;
+      stepRoot.hidden = false;
+      stepRoot.innerHTML = `<div class="lampac-step-head"><small>Шаг 1 из 2</small><strong>Выберите серию</strong></div>${lampacSkeleton()}<p class="lampac-bg-note" data-lampac-bg>${lampacBackgroundNote()}</p>`;
+      const show = await tmdbShow;
+      if (closed || step !== "episode") return;
+      if (!show?.seasons?.length) { goToSource(wantSeason, wantEpisode || 0); return; }
+      const seasonsList = show.seasons;
+      const current = seasonsList.some((one) => one.season_number === seasonToShow) ? seasonToShow : seasonsList[0].season_number;
+      const resumeS = Number(progress?.seasonNumber || 0);
+      const resumeE = Number(progress?.episodeNumber || 0);
+      const resumeRecord = resumeS && resumeE ? state.progress[progressKey(resumeS, resumeE)] : null;
+      const resume = resumeS && resumeE && !resumeRecord?.completed ? `<button class="primary-button lampac-start" type="button" data-lampac-pick="${resumeS}:${resumeE}">${playerIcon("play")}<span>Продолжить · ${resumeS} сезон, ${resumeE} серия</span>${resumeNote(resumeS, resumeE) ? `<small>${escapeHtml(resumeNote(resumeS, resumeE))}</small>` : ""}</button>` : "";
+      const tabs = seasonsList.length > 1 ? `<div class="lampac-label">Сезон</div><div class="lampac-season-row">${seasonsList.map((one) => `<button class="filter-button${one.season_number === current ? " is-active" : ""}" type="button" data-lampac-step-season="${one.season_number}">${one.season_number} сезон</button>`).join("")}</div>` : "";
+      const count = Number(seasonsList.find((one) => one.season_number === current)?.episode_count || 0);
+      const cells = (names = {}) => Array.from({ length: count }, (unused, position) => {
+        const e = position + 1;
+        const record = state.progress[progressKey(current, e)];
+        const share = record?.duration ? Math.min(100, (record.position / record.duration) * 100) : 0;
+        const name = names[e]?.name || "";
+        const classes = ["lampac-step-episode", current === resumeS && e === resumeE ? "is-current" : "", record?.completed ? "is-watched" : ""].filter(Boolean).join(" ");
+        return `<button class="${classes}" type="button" data-lampac-pick="${current}:${e}" data-name="${escapeHtml(name)}"><b>${e}</b><span>${name ? escapeHtml(name) : `${e} серия`}</span>${share && !record.completed ? `<i style="width:${share.toFixed(1)}%"></i>` : ""}</button>`;
+      }).join("");
+      const paint = (names) => {
+        stepRoot.innerHTML = `<div class="lampac-step-head"><small>Шаг 1 из 2</small><strong>Выберите серию</strong></div>${resume}${tabs}<div class="lampac-label">${current} сезон · ${countWord(count, "серия", "серии", "серий")}</div><div class="lampac-step-episodes">${cells(names)}</div><p class="lampac-bg-note" data-lampac-bg>${lampacBackgroundNote()}</p>`;
+        const row = stepRoot.querySelector(".lampac-season-row");
+        const on = row?.querySelector(".is-active");
+        if (row && on) row.scrollLeft = Math.max(0, on.offsetLeft - row.offsetLeft - row.clientWidth / 2 + on.offsetWidth / 2);
+        stepRoot.querySelectorAll("[data-lampac-step-season]").forEach((button) => button.addEventListener("click", () => showEpisodeStep(Number(button.dataset.lampacStepSeason))));
+        stepRoot.querySelectorAll("[data-lampac-pick]").forEach((button) => button.addEventListener("click", () => {
+          const [s, e] = button.dataset.lampacPick.split(":").map(Number);
+          goToSource(s, e, button.dataset.name || "");
+        }));
+      };
+      paint({});
+      const names = await cvTmdbEpisodes(show.id, current).catch(() => null);
+      if (names && !closed && step === "episode" && stepRoot.querySelector(`[data-lampac-pick^="${current}:"]`)) paint(names);
+    };
     const select = (id) => {
       const source = sources.find((entry) => entry.id === id);
       if (!source) return;
@@ -5698,6 +5788,7 @@
       token += 1;
       busyDone?.();
       renderSources();
+      if (step === "episode") return;
       setStatus(finished ? "" : `Ищу ещё источники… найдено ${sources.length}`, { busy: !finished });
       if (source.node.type === "movie") renderMovie(source.node);
       else if (source.node.type === "season") { body.innerHTML = lampacSkeleton(); busy(null, `Загружаю серии и озвучки: ${escapeHtml(source.name)}…`); openSeasons(source.node); }
@@ -5707,6 +5798,8 @@
       const button = event.target.closest("[data-lampac-source]");
       if (button) select(button.dataset.lampacSource);
     });
+    if (step === "episode") showEpisodeStep();
+    else showPicked(wantSeason, wantEpisode);
     // While sources are being checked the viewer sees how far it got, not a frozen spinner.
     const search = { done: 0, total: 0, over: false, startedAt: Date.now() };
     const showSearch = () => {
@@ -5765,6 +5858,7 @@
       await Promise.all(lookups);
       if (closed) return;
       finished = true;
+      renderSources();
       if (!sources.length) {
         setStatus("");
         body.innerHTML = `<p class="player-choice-empty">Ни один источник пока не нашёл «${escapeHtml(item.title)}». Новинки обычно появляются в течение нескольких дней.</p><button class="secondary-button" type="button" data-lampac-retry>Повторить</button>`;
