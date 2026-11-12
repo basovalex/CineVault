@@ -2450,7 +2450,7 @@
   };
 
   const defaultState = { view: "home", theme: "cinema", mood: "уютно", query: "", catalogGenre: "", catalogCollection: "", catalogMoodOnly: false, catalogPlayableOnly: false, catalogSort: "now", catalogPage: 1, favorites: [], watchlist: [], subscriptions: [], progress: {}, ratings: {}, history: [], recommendationHistory: [], tasteMemory: [], offline: {}, voiceSelections: {}, playbackSelections: {}, playerVolume: 1, playerMuted: false, rutubeUrl: "", skipSegments: true };
-  const ROUTE_PATHS = Object.freeze({ home: "/", feed: "/feed/", catalog: "/catalog/", upcoming: "/upcoming/", movies: "/movies/", series: "/series/", cartoons: "/cartoons/", library: "/library/", favorites: "/favorites/", evening: "/evening/", history: "/history/", settings: "/settings/", about: "/about/" });
+  const ROUTE_PATHS = Object.freeze({ home: "/", feed: "/feed/", catalog: "/catalog/", upcoming: "/upcoming/", movies: "/movies/", series: "/series/", cartoons: "/cartoons/", anime: "/anime/", library: "/library/", favorites: "/favorites/", evening: "/evening/", history: "/history/", settings: "/settings/", about: "/about/" });
   const ROUTE_VIEWS = Object.freeze(Object.fromEntries(Object.entries(ROUTE_PATHS).map(([view, path]) => [path, view])));
   let state = loadState();
   // One dark theme; older builds stored a theme choice that is no longer read.
@@ -2725,7 +2725,7 @@
   }
 
   function updateDocumentRoute(route, item = null) {
-    const titles = { about: "О CineVault", missing: "Не найдено — CineVault", home: "CineVault — кино для вас", catalog: "Каталог — CineVault", upcoming: "Скоро — CineVault", movies: "Фильмы — CineVault", series: "Сериалы — CineVault", library: "Моя медиатека — CineVault", favorites: "Избранное — CineVault", evening: "Наш вечер — CineVault", history: "История просмотра — CineVault", settings: "Настройки — CineVault" };
+    const titles = { about: "О CineVault", missing: "Не найдено — CineVault", home: "CineVault — кино для вас", catalog: "Каталог — CineVault", anime: "Аниме — CineVault", cartoons: "Мультфильмы — CineVault", upcoming: "Скоро — CineVault", movies: "Фильмы — CineVault", series: "Сериалы — CineVault", library: "Моя медиатека — CineVault", favorites: "Избранное — CineVault", evening: "Наш вечер — CineVault", history: "История просмотра — CineVault", settings: "Настройки — CineVault" };
     document.title = item ? `${item.title} — CineVault` : (titles[route.view] || "CineVault — кино для вас");
     const canonical = document.querySelector('link[rel="canonical"]');
     if (canonical) {
@@ -3264,7 +3264,7 @@
         remoteCatalogLoading = true;
         remoteCatalogError = false;
         if (!initial && !quiet && catalog.length) renderCatalogView();
-        const json = await cvTmdb(`search/multi?query=${encodeURIComponent(state.query)}&language=ru-RU&include_adult=false&page=${pageNumber}`, 12000);
+        const json = await tmdbSearchMulti(state.query, pageNumber, 12000);
         if (requestId !== remoteCatalogRequest) return;
         const wanted = state.view === "movies" ? "movie" : state.view === "series" ? "series" : "";
         const found = tmdbListItems(json).filter((entry) => !wanted || entry.kind === wanted);
@@ -5109,6 +5109,29 @@
     if (number) return String(number);
     return { G: "0", PG: "6", "PG-13": "12", R: "18", "NC-17": "18", "TV-Y": "0", "TV-Y7": "6", "TV-G": "0", "TV-PG": "12", "TV-14": "16", "TV-MA": "18" }[raw16] || "";
   }
+  var tmdbRussianTitleCache = null;
+  function tmdbRussianTitles() {
+    if (tmdbRussianTitleCache) return tmdbRussianTitleCache;
+    try { tmdbRussianTitleCache = JSON.parse(localStorage.getItem("cinevault.ruTitles.v1") || "{}") || {}; } catch { tmdbRussianTitleCache = {}; }
+    return tmdbRussianTitleCache;
+  }
+  function rememberTmdbRussianTitle(id, title) {
+    const titles = tmdbRussianTitles();
+    if (titles[id] === title) return;
+    titles[id] = title;
+    const keys = Object.keys(titles);
+    if (keys.length > 2000) keys.slice(0, keys.length - 2000).forEach((key) => delete titles[key]);
+    try { localStorage.setItem("cinevault.ruTitles.v1", JSON.stringify(titles)); } catch {}
+  }
+  // «Бегущие по краю 2», «Ведьмак 3 сезон»: TMDB finds the show, not its season, so a query
+  // that finds nothing is asked again without the trailing number.
+  async function tmdbSearchMulti(query, pageNumber = 1, timeout = 8000) {
+    const ask = (text) => cvTmdb(`search/multi?query=${encodeURIComponent(text)}&language=ru-RU&include_adult=false&page=${pageNumber}`, timeout);
+    const json = await ask(query);
+    const bare = String(query).replace(/[\s:,.-]+(\d{1,2}(\s*(сезон|season|часть|part))?|(сезон|season|часть|part)\s*\d{1,2})\s*$/i, "").trim();
+    if (Number(json?.total_results || 0) > 0 || !bare || bare === String(query).trim()) return json;
+    return ask(bare);
+  }
   function tmdbToItem(raw, kindHint = "") {
     const type = raw.media_type || kindHint;
     const kind = type === "tv" || type === "series" || (!type && raw.first_air_date !== undefined) ? "series" : "movie";
@@ -5121,6 +5144,7 @@
       kind,
       title: raw.title || raw.name || raw.original_title || raw.original_name || "",
       originalTitle: raw.original_title || raw.original_name || "",
+      originalLanguage: String(raw.original_language || ""),
       year: Number(date.slice(0, 4)) || 0,
       premiere: date,
       description: raw.overview || "",
@@ -5131,6 +5155,16 @@
       votes: Number(raw.vote_count || 0),
       popularity: Number(raw.popularity || 0),
     };
+    // TMDB often has no Russian name for anime and new shows, only a Russian alternative
+    // title (Кинопоиск's one). Use it and remember it for list cards that come without it.
+    if (!/[а-яё]/i.test(item.title)) {
+      const alternatives = [...(raw.alternative_titles?.results || []), ...(raw.alternative_titles?.titles || [])].filter((entry) => entry.iso_3166_1 === "RU" && /[а-яё]/i.test(entry.title || ""));
+      const russian = (alternatives.find((entry) => !entry.type) || alternatives[0])?.title || tmdbRussianTitles()[item.id] || "";
+      if (russian) {
+        item.title = russian;
+        if (alternatives.length) rememberTmdbRussianTitle(item.id, russian);
+      }
+    }
     if (raw.runtime) item.runtime = raw.runtime;
     else if (raw.episode_run_time?.length) item.runtime = raw.episode_run_time[0];
     if (Array.isArray(raw.seasons)) item.seasons = raw.seasons.filter((season) => season.season_number > 0 && season.episode_count > 0).map((season) => season.episode_count);
@@ -5158,7 +5192,7 @@
     if (!parsed) return Promise.resolve(null);
     if (tmdbTitleLoads.has(id)) return tmdbTitleLoads.get(id);
     const kindPath = parsed.kind === "series" ? "tv" : "movie";
-    const extra = parsed.kind === "series" ? "credits,external_ids,content_ratings" : "credits,external_ids,release_dates";
+    const extra = parsed.kind === "series" ? "credits,external_ids,content_ratings,alternative_titles" : "credits,external_ids,release_dates,alternative_titles";
     const request = cvTmdb(`${kindPath}/${parsed.tmdbId}?language=ru-RU&append_to_response=${extra}`, 10000)
       .then((raw) => {
         const item = withTitleOverrides(tmdbToItem(raw, parsed.kind));
@@ -6427,7 +6461,7 @@
     const navList = $(".sidebar .nav-list");
     const topbar = $(".topbar");
     if (!sidebar || !navList || !topbar) return;
-    const hideOrder = ["history", "upcoming", "cartoons", "feed", "series", "movies", "catalog"];
+    const hideOrder = ["history", "upcoming", "anime", "cartoons", "feed", "series", "movies", "catalog"];
     const items = hideOrder.map((view) => navList.querySelector(`:scope > .nav-item[data-view="${view}"]`)).filter(Boolean);
     const moreWrap = document.createElement("div");
     moreWrap.className = "nav-more";
@@ -7368,7 +7402,7 @@
     const mine = ["favorites", "history", "settings"].includes(state.view);
     const views = mine
       ? [["favorites", "Избранное"], ["history", "История"], ["settings", "Настройки"]]
-      : [["catalog", "Всё"], ["movies", "Фильмы"], ["series", "Сериалы"], ["cartoons", "Мультфильмы"], ["upcoming", "Скоро"]];
+      : [["catalog", "Всё"], ["movies", "Фильмы"], ["series", "Сериалы"], ["cartoons", "Мультфильмы"], ["anime", "Аниме"], ["upcoming", "Скоро"]];
     return `<nav class="section-switch" aria-label="Разделы">${views.map(([view, label]) => `<a class="genre-pill${state.view === view ? " is-active" : ""}" href="${routeForView(view)}" data-view="${view}"${state.view === view ? ' aria-current="page"' : ""}>${label}</a>`).join("")}</nav>`;
   }
 
@@ -7679,12 +7713,14 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   const SECTION_PAGES = {
     movies: { title: "Фильмы", note: "Подборки как в Lampa: новинки в цифре, этого и прошлого года, российские, лучшие и жанры." },
     series: { title: "Сериалы", note: "Что выходит сейчас, новинки, российские сериалы, лучшие и жанры." },
-    cartoons: { title: "Мультфильмы", note: "Мультфильмы и мультсериалы: новинки, популярное, российские, лучшие и жанры." },
+    cartoons: { title: "Мультфильмы", note: "Мультфильмы и мультсериалы: новинки, популярное, российские, лучшие и жанры. Аниме — в своём разделе." },
+    anime: { title: "Аниме", note: "Японская анимация: что выходит сейчас, новинки, популярное, лучшее и жанры." },
   };
   const SECTION_GENRES = {
     movies: [[28, "Боевики"], [35, "Комедии"], [18, "Драмы"], [878, "Фантастика"], [53, "Триллеры"], [27, "Ужасы"], [10749, "Мелодрамы"], [80, "Криминал"], [12, "Приключения"], [14, "Фэнтези"], [9648, "Детективы"], [10751, "Семейные"], [36, "Исторические"], [10752, "Военные"], [99, "Документальные"], [37, "Вестерны"], [10402, "Музыкальные"]],
     series: [[18, "Драмы"], [35, "Комедии"], [80, "Криминал"], [10765, "Фантастика и фэнтези"], [10759, "Боевики и приключения"], [9648, "Детективы"], [10751, "Семейные"], [99, "Документальные"], [10768, "Военные"], [10764, "Реалити-шоу"], [37, "Вестерны"]],
     cartoons: [[10751, "Семейные"], [35, "Комедии"], [12, "Приключения"], [14, "Фэнтези"], [878, "Фантастика"], [10402, "Музыкальные"], [28, "Боевики"]],
+    anime: [[10759, "Экшен и приключения"], [10765, "Фантастика и фэнтези"], [35, "Комедии"], [18, "Драмы"], [9648, "Детективы"], [10762, "Для детей"], [80, "Криминал"]],
   };
   const sectionCache = new Map();
   const sectionGenreState = new Map();
@@ -7703,13 +7739,22 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       ["top", "Высокий рейтинг", "", ...tv("vote_average.gte=8&vote_count.gte=500&sort_by=vote_average.desc")],
       ["rewatch", "Стоит пересмотреть", "Лучшее из 2000–2015", ...tv("first_air_date.gte=2000-01-01&first_air_date.lte=2015-12-31&vote_count.gte=800&sort_by=vote_average.desc")],
     ];
+    const ja = "with_genres=16&with_original_language=ja";
+    if (view === "anime") return [
+      ["on-air", "Сейчас выходят", "Новые серии на этой неделе", ...tv(`${ja}&air_date.gte=${tmdbDay(-7)}&air_date.lte=${today}&sort_by=popularity.desc`)],
+      ["popular", "Популярное аниме", "", ...tv(`${ja}&sort_by=popularity.desc&vote_count.gte=50`)],
+      ["this-year", `Новинки ${year} года`, "", ...tv(`${ja}&first_air_date_year=${year}&sort_by=popularity.desc`)],
+      ["movies", "Аниме-фильмы", "", ...movie(`${ja}&sort_by=popularity.desc&vote_count.gte=100`)],
+      ["last-year", `Аниме ${year - 1} года`, "", ...tv(`${ja}&first_air_date_year=${year - 1}&sort_by=popularity.desc&vote_count.gte=20`)],
+      ["top", "Высокий рейтинг", "", ...tv(`${ja}&vote_average.gte=8&vote_count.gte=300&sort_by=vote_average.desc`)],
+      ["top-movies", "Лучшие аниме-фильмы", "", ...movie(`${ja}&vote_average.gte=7.8&vote_count.gte=500&sort_by=vote_average.desc`)],
+    ];
     if (view === "cartoons") return [
       ["now", "Сейчас смотрят", "Вышли в цифре за три месяца", ...movie(`with_genres=16&with_release_type=4%7C5%7C6&release_date.lte=${today}&release_date.gte=${tmdbDay(-90)}&sort_by=popularity.desc`)],
       ["popular", "Популярные мультфильмы", "", ...movie("with_genres=16&sort_by=popularity.desc&vote_count.gte=50")],
       ["this-year", `Новинки ${year} года`, "", ...movie(`with_genres=16&primary_release_year=${year}&sort_by=popularity.desc`)],
       ["series", "Мультсериалы", "", ...tv("with_genres=16&sort_by=popularity.desc&vote_count.gte=100&without_genres=10767%2C10764")],
       ["ru", "Российские мультфильмы", "", ...movie("with_genres=16&with_origin_country=RU&sort_by=popularity.desc")],
-      ["anime", "Аниме", "", ...movie("with_genres=16&with_original_language=ja&sort_by=popularity.desc&vote_count.gte=100")],
       ["last-year", `Мультфильмы ${year - 1} года`, "", ...movie(`with_genres=16&primary_release_year=${year - 1}&sort_by=popularity.desc`)],
       ["top", "Высокий рейтинг", "", ...movie("with_genres=16&vote_average.gte=7.8&vote_count.gte=800&sort_by=vote_average.desc")],
       ["rewatch", "Стоит пересмотреть", "Классика 1990–2015", ...movie("with_genres=16&primary_release_date.gte=1990-01-01&primary_release_date.lte=2015-12-31&vote_count.gte=1500&sort_by=vote_average.desc")],
@@ -7725,10 +7770,14 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       ["ru-classic", "Российская классика", "", ...movie("with_origin_country=RU%7CSU&primary_release_date.lte=2005-12-31&vote_count.gte=50&sort_by=vote_average.desc")],
     ];
   }
+  // «Мультфильмы» without anime: it has its own section.
+  function sectionItems(view, items) {
+    return view === "cartoons" ? items.filter((entry) => entry.originalLanguage !== "ja") : items;
+  }
   function loadSectionRows(view) {
     if (sectionCache.has(view)) return sectionCache.get(view);
     const job = Promise.all(sectionRows(view).map(([key, title, description, path, kind]) => cvTmdb(`${path}${path.includes("?") ? "&" : "?"}language=ru-RU`)
-      .then((json) => ({ key: `${view}-${key}`, title, description, items: tmdbListItems(json, kind) }))
+      .then((json) => ({ key: `${view}-${key}`, title, description, items: sectionItems(view, tmdbListItems(json, kind)) }))
       .catch(() => ({ key: `${view}-${key}`, title, description, items: [] }))))
       .then((rows) => {
         const ready = rows.filter((row) => row.items.length);
@@ -7768,10 +7817,10 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       const index = genres.cursor++;
       const [genreId, name] = list[index % list.length];
       const second = index >= list.length;
-      const kind = view === "series" ? "tv" : "movie";
-      const base = view === "cartoons" ? `with_genres=16%2C${genreId}` : `with_genres=${genreId}${view === "movies" ? "&without_genres=16" : ""}`;
+      const kind = view === "series" || view === "anime" ? "tv" : "movie";
+      const base = view === "anime" ? `with_genres=16%2C${genreId}&with_original_language=ja` : view === "cartoons" ? `with_genres=16%2C${genreId}` : `with_genres=${genreId}${view === "movies" ? "&without_genres=16" : ""}`;
       const sort = second ? `vote_average.desc&vote_count.gte=${view === "movies" ? 1500 : 300}` : "popularity.desc&vote_count.gte=50";
-      const items = tmdbListItems(await cvTmdb(`discover/${kind}?${base}&sort_by=${sort}&language=ru-RU`).catch(() => null), kind);
+      const items = sectionItems(view, tmdbListItems(await cvTmdb(`discover/${kind}?${base}&sort_by=${sort}&language=ru-RU`).catch(() => null), kind));
       if (!items.length || state.view !== view) return;
       const row = { key: `${view}-genre-${index}`, title: second ? `${name}: лучшие` : name, description: "", items };
       genres.rows.push(row);
@@ -9052,7 +9101,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
         let found;
         if (lampacOrigin()) {
           // As in Lampa: TMDB search over films and series, the most known first.
-          const json = await cvTmdb(`search/multi?query=${encodeURIComponent(query)}&language=ru-RU&include_adult=false`);
+          const json = await tmdbSearchMulti(query);
           found = tmdbListItems(json).sort((a, b) => b.popularity - a.popularity).slice(0, 6);
         } else {
           const params = new URLSearchParams({ search: query, limit: "6" });
