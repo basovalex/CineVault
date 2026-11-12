@@ -5,6 +5,19 @@
 @font-face { font-family: "Onest"; font-style: normal; font-weight: 400 700; font-display: swap; src: url("/assets/fonts/onest-latin.woff2") format("woff2"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
 
 :root {
+  /* Плеер и его подсказки поверх видео. */
+  --player-light: #fff;
+  --player-dark: #000;
+  --player-glass: rgba(20, 22, 26, .85);
+  --player-text-2: rgba(255, 255, 255, .8);
+  --player-text-3: rgba(255, 255, 255, .75);
+  --player-line: rgba(255, 255, 255, .25);
+  --player-line-strong: rgba(255, 255, 255, .3);
+  --player-hover: rgba(255, 255, 255, .12);
+  --player-placeholder: rgba(255, 255, 255, .08);
+  --player-scrim: rgba(0, 0, 0, .55);
+  --player-text-shadow: rgba(0, 0, 0, .8);
+  --player-shadow-color: rgba(0, 0, 0, .4);
   color-scheme: dark;
   --bg: #08090b;
   --surface: #121418;
@@ -1216,7 +1229,7 @@ span.studio-sort-button::after { display: none; }
   .lampac-picked { flex-wrap: wrap; }
 }
 /* Загрузка в окне «Где смотреть»: видно, что именно грузится, и нельзя натыкать лишнего. */
-.lampac-status.is-busy { position: sticky; top: 0; z-index: 2; flex-wrap: wrap; margin: 0 0 var(--sp-2); padding: 12px 14px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)); box-shadow: 0 8px 20px rgb(0 0 0 / 35%); color: var(--text); font-size: var(--s0); font-weight: 500; }
+.lampac-status.is-busy { position: sticky; top: 0; z-index: 2; flex-wrap: wrap; margin: 0 0 var(--sp-2); padding: 12px 14px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)); box-shadow: 0 8px 20px var(--player-shadow-color); color: var(--text); font-size: var(--s0); font-weight: 500; }
 .lampac-status.is-busy .loading-spinner { width: 18px; height: 18px; border-top-color: var(--accent); }
 .lampac-status.is-busy { flex-wrap: nowrap; align-items: flex-start; line-height: 1.35; }
 .lampac-status.is-busy > .loading-spinner { margin-top: 1px; }
@@ -1371,16 +1384,16 @@ span.studio-sort-button::after { display: none; }
 .cv-player-skip-thumb { position: relative; flex: none; display: block; }
 .cv-player-skip-thumb .cv-player-skip-still { width: clamp(150px, 16vw, 220px); }
 .cv-player-skip-play { position: absolute; inset: 0; display: grid; place-items: center; }
-.cv-player-skip-play svg { width: 40px; height: 40px; padding: 10px; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; }
+.cv-player-skip-play svg { width: 40px; height: 40px; padding: 10px; border-radius: 50%; background: var(--player-scrim); color: var(--player-light); }
 .cv-player-skip:hover .cv-player-skip-play svg, .cv-player-skip:focus-visible .cv-player-skip-play svg { background: var(--accent); }
 .cv-player-skip-copy strong { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.cv-player-skip-close { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 50%; background: transparent; color: rgba(255,255,255,.75); cursor: pointer; }
-.cv-player-skip-close:hover, .cv-player-skip-close:focus-visible { background: rgba(255,255,255,.12); color: #fff; outline: none; }
+.cv-player-skip-close { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 50%; background: transparent; color: var(--player-text-3); cursor: pointer; }
+.cv-player-skip-close:hover, .cv-player-skip-close:focus-visible { background: var(--player-hover); color: var(--player-light); outline: none; }
 .cv-player-skip-close svg { width: 18px; height: 18px; }
 .cv-player-option.has-thumb { justify-content: flex-start; gap: 14px; padding-block: 10px; }
 .cv-player-option.has-thumb > span:not(.cv-player-option-thumb) { flex: 1; min-width: 0; }
 .cv-player-option.has-thumb > svg { margin-left: auto; }
-.cv-player-option-thumb { flex: none; width: 128px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; background: rgba(255,255,255,.08); }
+.cv-player-option-thumb { flex: none; width: 128px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; background: var(--player-placeholder); }
 .cv-player-option.is-active .cv-player-option-thumb { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (max-width: 720px) {
   .cv-player-next { bottom: 190px; left: 16px; right: 16px; max-width: none; }
@@ -1525,17 +1538,17 @@ span.studio-sort-button::after { display: none; }
 .lampac-qualities { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-3); }
 .cv-player.has-panel .cv-player-next { display: none; }
 /* «Пропустить интро / пересказ / титры», как в Lampa: над панелью справа. */
-.cv-player-segment { position: absolute; right: clamp(16px, 3vw, 40px); bottom: 150px; z-index: 3; display: inline-flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 20px; border: 1px solid rgba(255,255,255,.25); border-radius: 12px; background: rgba(20,22,26,.85); color: #fff; font: 600 16px/1 var(--body); cursor: pointer; box-shadow: 0 10px 30px rgba(0,0,0,.4); animation: cv-panel .25s ease both; }
+.cv-player-segment { position: absolute; right: clamp(16px, 3vw, 40px); bottom: 150px; z-index: 3; display: inline-flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 20px; border: 1px solid var(--player-line); border-radius: 12px; background: var(--player-glass); color: var(--player-light); font: 600 16px/1 var(--body); cursor: pointer; box-shadow: 0 10px 30px var(--player-shadow-color); animation: cv-panel .25s ease both; }
 .cv-player-segment svg { width: 18px; height: 18px; }
-.cv-player-segment:hover, .cv-player-segment:focus-visible { background: #fff; color: #000; outline: none; }
+.cv-player-segment:hover, .cv-player-segment:focus-visible { background: var(--player-light); color: var(--player-dark); outline: none; }
 .cv-player.has-panel .cv-player-segment { display: none; }
 @media (max-width: 720px) { .cv-player-segment { bottom: 190px; } }
 /* Подключение к видео: не просто крутилка, а что происходит и что делать, если долго. */
 .cv-player-loading { position: absolute; top: 50%; left: 50%; z-index: 2; display: grid; justify-items: center; gap: 10px; width: min(420px, calc(100% - 40px)); text-align: center; transform: translate(-50%, -50%); opacity: 0; pointer-events: none; transition: opacity .2s ease; }
 .cv-player.is-loading .cv-player-loading { opacity: 1; pointer-events: auto; }
 .cv-player-loading .cv-player-spinner { position: static; margin: 0 0 6px; opacity: 1; }
-.cv-player-loading strong { font: 600 20px/1.2 var(--body); color: #fff; text-shadow: 0 2px 12px rgba(0,0,0,.8); }
-.cv-player-loading small { min-height: 1.3em; font: 400 15px/1.35 var(--body); color: rgba(255,255,255,.8); text-shadow: 0 2px 12px rgba(0,0,0,.8); }
-.cv-player-loading-other { margin-top: 6px; min-height: 44px; padding: 0 18px; border: 1px solid rgba(255,255,255,.3); border-radius: 12px; background: rgba(20,22,26,.85); color: #fff; font: 600 15px/1 var(--body); cursor: pointer; }
-.cv-player-loading-other:hover, .cv-player-loading-other:focus-visible { background: #fff; color: #000; outline: none; }
+.cv-player-loading strong { font: 600 20px/1.2 var(--body); color: var(--player-light); text-shadow: 0 2px 12px var(--player-text-shadow); }
+.cv-player-loading small { min-height: 1.3em; font: 400 15px/1.35 var(--body); color: var(--player-text-2); text-shadow: 0 2px 12px var(--player-text-shadow); }
+.cv-player-loading-other { margin-top: 6px; min-height: 44px; padding: 0 18px; border: 1px solid var(--player-line-strong); border-radius: 12px; background: var(--player-glass); color: var(--player-light); font: 600 15px/1 var(--body); cursor: pointer; }
+.cv-player-loading-other:hover, .cv-player-loading-other:focus-visible { background: var(--player-light); color: var(--player-dark); outline: none; }
 .cv-player.is-loading .cv-player-segment { display: none; }

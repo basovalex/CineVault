@@ -139,7 +139,7 @@ class AccountTests(unittest.TestCase):
 
     def test_site_state_ignores_junk_and_is_removed_with_the_account(self):
         state = self.store.save_site_state(self.sid, {'favorites': {'x': 'yes', '': {'on': True}}, 'history': [1], 'progress': {'k': 5}})['state']
-        self.assertEqual(state, {'favorites': {}, 'watchlist': {}, 'subscriptions': {}, 'history': {}, 'progress': {}})
+        self.assertEqual(state, {'favorites': {}, 'watchlist': {}, 'subscriptions': {}, 'history': {}, 'historyRemoved': {}, 'progress': {}})
         with self.assertRaises(AccountError):
             self.store.save_site_state(self.sid, ['not', 'a', 'dict'])
         self.store.save_site_state(self.sid, {'favorites': {'a': {'on': True, 'at': 1}}})

@@ -3456,7 +3456,7 @@
   function accountSyncPayload() {
     const now = Date.now();
     const marks = state.savedMarks && typeof state.savedMarks === "object" ? state.savedMarks : {};
-    const payload = { history: {}, progress: state.progress || {} };
+    const payload = { history: {}, progress: state.progress || {}, historyRemoved: state.historyRemoved || {} };
     ["favorites", "watchlist", "subscriptions"].forEach((name) => {
       const current = new Set((state[name] || []).map(String));
       const list = { ...(marks[name] || {}) };
@@ -3475,6 +3475,7 @@
     state.favorites = ordered(merged.favorites);
     state.subscriptions = ordered(merged.subscriptions);
     state.watchlist = ordered(merged.watchlist);
+    state.historyRemoved = merged.historyRemoved || state.historyRemoved || {};
     state.historyAt = merged.history || {};
     state.history = Object.entries(state.historyAt).sort((a, b) => b[1] - a[1]).map(([id]) => id).slice(0, 100);
     state.progress = merged.progress || {};
@@ -3488,6 +3489,7 @@
         const key = `${entry.title_id}-alt`;
         const at = Number(entry.updated_at || 0) * 1000;
         if ((state.progress[key]?.updatedAt || 0) >= at) return;
+        if (Number(state.historyRemoved?.[entry.title_id] || 0) >= at) return;
         state.progress[key] = { titleId: entry.title_id, providerId: entry.edition, player: "alternative", translationId: String(entry.edition).replace(/^alloha:/, ""),
           seasonNumber: entry.season || null, episodeNumber: entry.episode || null, position: Number(entry.position || 0), duration: Number(entry.duration || 0), completed: Boolean(entry.completed), updatedAt: at };
         state.history = [entry.title_id, ...state.history.filter((id) => id !== entry.title_id)].slice(0, 100);
@@ -3503,7 +3505,7 @@
     try {
       // Another account used this browser before: its list must not leak into this one.
       const foreign = state.syncedAccount && state.syncedAccount !== user.id;
-      if (foreign) { state.favorites = []; state.watchlist = []; state.subscriptions = []; state.history = []; state.historyAt = {}; state.progress = {}; state.savedMarks = {}; }
+      if (foreign) { state.favorites = []; state.watchlist = []; state.subscriptions = []; state.history = []; state.historyAt = {}; state.historyRemoved = {}; state.progress = {}; state.savedMarks = {}; }
       await importAccountProgress(accounts);
       const { state: merged } = await accounts.api("site-state", { state: accountSyncPayload() });
       applyAccountState(merged);
@@ -5287,7 +5289,7 @@
     };
     state.progress = copyObject(state.progress, (current, incoming) => Number(incoming?.updatedAt || 0) > Number(current?.updatedAt || 0));
     ["favorites", "watchlist", "history", "recommendationHistory"].forEach((name) => { state[name] = copyList(state[name]); });
-    ["historyAt", "ratings", "voiceSelections", "playbackSelections", "offline"].forEach((name) => { state[name] = copyObject(state[name]); });
+    ["historyAt", "historyRemoved", "ratings", "voiceSelections", "playbackSelections", "offline"].forEach((name) => { state[name] = copyObject(state[name]); });
     const choice = lampacChoiceStore();
     if (choice.titles?.[oldId] && !choice.titles[newId]) {
       choice.titles[newId] = { ...choice.titles[oldId] };
@@ -7214,7 +7216,11 @@
       delete state.progress[contentId];
     });
     state.history = state.history.filter((id) => id !== titleId);
+    if (state.historyAt) delete state.historyAt[titleId];
+    // The account keeps a removal mark, otherwise the next sync brings the title back.
+    state.historyRemoved = { ...(state.historyRemoved || {}), [titleId]: Date.now() };
     saveState();
+    pushAccountState();
     renderHistoryView();
   }
 

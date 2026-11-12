@@ -413,5 +413,19 @@ def merge_site_state(saved, incoming):
                 continue
             if str(key) not in progress or _stamp(record.get('updatedAt')) >= _stamp(progress[str(key)].get('updatedAt')):
                 progress[str(key)] = record
+    # A title removed from the history stays removed on every device: its history mark and
+    # progress older than the removal are dropped; watching it again later brings it back.
+    removed = {}
+    for source in (saved, incoming):
+        for key, at in ((source or {}).get('historyRemoved') or {}).items() if isinstance((source or {}).get('historyRemoved'), dict) else ():
+            if str(key).strip() and len(str(key)) <= 120:
+                removed[str(key)] = max(removed.get(str(key), 0.0), _stamp(at))
+    if removed:
+        result['history'] = {key: seen for key, seen in result['history'].items() if seen > removed.get(key, -1)}
+        def progress_title(key, record):
+            return str(record.get('titleId') or re.sub(r'-(?:s\d+e\d+|alt)$', '', key))
+        progress = {key: record for key, record in progress.items()
+                    if _stamp(record.get('updatedAt')) > removed.get(progress_title(key, record), -1)}
+    result['historyRemoved'] = dict(sorted(removed.items(), key=lambda item: item[1], reverse=True)[:500])
     result['progress'] = dict(sorted(progress.items(), key=lambda item: _stamp(item[1].get('updatedAt')), reverse=True)[:600])
     return result
