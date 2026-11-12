@@ -6230,8 +6230,76 @@
     return `<button class="poster-card" ${playbackAttr} ${episodeAttrs} type="button"><div class="poster-art"${posterAttrs}>${posterImage}${posterTitleArt(item)}<span class="progress-bar" style="--progress:${progressPct}%"><i></i></span></div><strong>${escapeHtml(item.title)}</strong><small>${item.kind === "series" ? episodeText || countWord(item.seasons.length, "сезон", "сезона", "сезонов") : `${item.year} · ${formatTime(progress.position)} из ${formatTime(progress.duration)}`}</small></button>`;
   }
 
+  // Пункты меню, которые не помещаются до поиска, уходят в «Ещё» (сначала самые редкие).
+  function setupHeaderNavFit() {
+    const sidebar = $(".sidebar");
+    const navList = $(".sidebar .nav-list");
+    const topbar = $(".topbar");
+    if (!sidebar || !navList || !topbar) return;
+    const hideOrder = ["history", "upcoming", "cartoons", "feed", "series", "movies", "catalog"];
+    const items = hideOrder.map((view) => navList.querySelector(`:scope > .nav-item[data-view="${view}"]`)).filter(Boolean);
+    const moreWrap = document.createElement("div");
+    moreWrap.className = "nav-more";
+    moreWrap.hidden = true;
+    moreWrap.innerHTML = `<button class="nav-item nav-more-button" type="button" aria-haspopup="true" aria-expanded="false"><span>Ещё</span><svg class="nav-more-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><div class="nav-more-menu" role="menu" hidden></div>`;
+    navList.append(moreWrap);
+    const moreButton = moreWrap.querySelector("button");
+    const menu = moreWrap.querySelector(".nav-more-menu");
+    const setOpen = (open) => {
+      menu.hidden = !open;
+      moreButton.setAttribute("aria-expanded", String(open));
+    };
+    moreButton.addEventListener("click", (event) => { event.stopPropagation(); setOpen(menu.hidden); });
+    menu.addEventListener("click", () => setOpen(false));
+    document.addEventListener("click", (event) => { if (!moreWrap.contains(event.target)) setOpen(false); });
+    document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !menu.hidden) { setOpen(false); moreButton.focus(); } });
+
+    const syncMenu = (hidden) => {
+      const views = new Set(hidden.map((item) => item.dataset.view));
+      menu.innerHTML = Array.from(navList.querySelectorAll(":scope > .nav-item[data-view]"))
+        .filter((item) => views.has(item.dataset.view))
+        .map((item) => `<a class="nav-more-link" role="menuitem" href="${escapeHtml(item.getAttribute("href") || "/")}" data-view="${escapeHtml(item.dataset.view)}">${escapeHtml((item.querySelector(".nav-label-wide") || item.querySelector("span"))?.textContent.trim() || item.getAttribute("aria-label") || "")}</a>`)
+        .join("");
+      moreWrap.hidden = hidden.length === 0;
+      moreWrap.dataset.views = Array.from(views).join(" ");
+      syncMoreActive();
+    };
+    const syncMoreActive = () => {
+      const views = String(moreWrap.dataset.views || "").split(" ");
+      moreButton.classList.toggle("is-active", views.includes(state.view));
+      menu.querySelectorAll("[data-view]").forEach((link) => link.classList.toggle("is-active", link.dataset.view === state.view));
+    };
+    let fitTimer = 0;
+    const fit = () => {
+      fitTimer = 0;
+      items.forEach((item) => item.classList.remove("is-overflow"));
+      const wide = window.matchMedia("(min-width: 1101px)").matches;
+      if (!wide) { setOpen(false); syncMenu([]); return; }
+      const limit = () => topbar.getBoundingClientRect().left - 16;
+      const navRight = () => navList.getBoundingClientRect().right;
+      moreWrap.hidden = true;
+      if (navRight() <= limit()) { syncMenu([]); return; }
+      moreWrap.hidden = false;
+      const hidden = [];
+      for (const item of items) {
+        if (navRight() <= limit()) break;
+        item.classList.add("is-overflow");
+        hidden.push(item);
+      }
+      syncMenu(hidden);
+    };
+    const schedule = () => { clearTimeout(fitTimer); fitTimer = setTimeout(fit, 30); };
+    if ("ResizeObserver" in window) { const observer = new ResizeObserver(schedule); observer.observe(topbar); observer.observe(sidebar); }
+    window.addEventListener("resize", schedule);
+    document.fonts?.ready.then(schedule);
+    headerNavSync = syncMoreActive;
+    fit();
+  }
+  var headerNavSync = null;
+
   function render() {
     activeTitleId = null;
+    headerNavSync?.();
     $("#search").value = searchDraft;
     $$(".nav-item[data-view]").forEach((button) => {
       button.classList.toggle("is-active", button.dataset.view === state.view);
@@ -8900,6 +8968,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   const syncScrolledHeader = () => app.classList.toggle("is-scrolled", window.scrollY > 24);
   window.addEventListener("scroll", syncScrolledHeader, { passive: true });
   syncScrolledHeader();
+  setupHeaderNavFit();
   if (window.CineVaultAccounts) window.CineVaultAccounts.onResume = async record => {
     try {
       const item = await ensureCatalogTitle(record.title_id);
