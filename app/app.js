@@ -3236,6 +3236,26 @@
         if (initial || state.view !== "home") render();
         return;
       }
+      if (lampacOrigin() && state.query && !savedIds) {
+        // Full search on TMDB, page by page, as Lampa does.
+        remoteCatalogLoading = true;
+        remoteCatalogError = false;
+        if (!initial && !quiet && catalog.length) renderCatalogView();
+        const json = await cvTmdb(`search/multi?query=${encodeURIComponent(state.query)}&language=ru-RU&include_adult=false&page=${pageNumber}`, 12000);
+        if (requestId !== remoteCatalogRequest) return;
+        const wanted = state.view === "movies" ? "movie" : state.view === "series" ? "series" : "";
+        const found = tmdbListItems(json).filter((entry) => !wanted || entry.kind === wanted);
+        rememberLooseTitles(found);
+        const base = append ? catalog : [];
+        catalog = [...new Map([...base, ...found].map((entry) => [entry.id, entry])).values()];
+        loadedCatalogKey = catalogListKey();
+        remoteCatalog = { page: Number(json.page || pageNumber), pages: Math.min(Number(json.total_pages || 1), 20), total: Number(json.total_results || found.length), facets: remoteCatalog.facets };
+        state.catalogPage = remoteCatalog.page;
+        remoteCatalogLoading = false;
+        if (!append && (initial || state.view !== "home")) render();
+        else if (append) render();
+        return;
+      }
       const params = new URLSearchParams({ page: String(pageNumber), limit: "50", sort: state.catalogSort === "year" ? "fresh" : state.catalogSort || "now" });
       if (state.query) params.set("search", state.query);
       if (savedIds) params.set("ids", savedIds.join(","));
@@ -9506,12 +9526,20 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       const controller = new AbortController();
       searchSuggestionRequest = controller;
       try {
-        const params = new URLSearchParams({ search: query, limit: "6" });
-        const response = await apiFetch(`/api/catalog?${params}`, { headers: { accept: "application/json" }, signal: controller.signal });
-        if (!response.ok) throw new Error(String(response.status));
-        const payload = await response.json();
+        let found;
+        if (lampacOrigin()) {
+          // As in Lampa: TMDB search over films and series, the most known first.
+          const json = await cvTmdb(`search/multi?query=${encodeURIComponent(query)}&language=ru-RU&include_adult=false`);
+          found = tmdbListItems(json).sort((a, b) => b.popularity - a.popularity).slice(0, 6);
+        } else {
+          const params = new URLSearchParams({ search: query, limit: "6" });
+          const response = await apiFetch(`/api/catalog?${params}`, { headers: { accept: "application/json" }, signal: controller.signal });
+          if (!response.ok) throw new Error(String(response.status));
+          const payload = await response.json();
+          found = Array.isArray(payload.items) ? payload.items.slice(0, 6) : [];
+        }
         if (controller.signal.aborted || searchDraft.trim() !== query) return;
-        searchSuggestionCatalog = Array.isArray(payload.items) ? payload.items.slice(0, 6) : [];
+        searchSuggestionCatalog = found;
         if (document.activeElement === $("#search")) renderSearchSuggestions(query, searchSuggestionCatalog);
       } catch (error) {
         if (error?.name !== "AbortError" && searchDraft.trim() === query && document.activeElement === $("#search")) renderSearchSuggestions(query, [], true);
