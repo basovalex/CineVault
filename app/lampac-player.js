@@ -404,7 +404,7 @@
         items = [
           { label: "Размер видео", note: fit, run: () => openPanel("fit"), keep: true },
           { label: "Скорость воспроизведения", note: speed, run: () => openPanel("speed"), keep: true },
-          { label: "Поделиться", note: "Ссылка на это место для другого устройства", run: shareHere },
+          { label: "На другом устройстве", note: "Ссылка откроется с этой же секунды, серии, озвучки и источника", run: shareHere },
         ];
       } else if (kind === "fit") {
         title = "Размер видео";
@@ -446,6 +446,8 @@
       const entry = episode();
       if (entry.s) url.searchParams.set("s", String(entry.s));
       if (entry.e) url.searchParams.set("e", String(entry.e));
+      if (options.handoff?.source) url.searchParams.set("src", options.handoff.source);
+      if (options.handoff?.voice) url.searchParams.set("voice", options.handoff.voice);
       try {
         if (navigator.share) await navigator.share({ title: options.title, url: url.href });
         else { await navigator.clipboard.writeText(url.href); toast("Ссылка скопирована"); }

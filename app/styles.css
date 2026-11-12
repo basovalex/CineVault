@@ -1461,3 +1461,4 @@ span.studio-sort-button::after { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .page.is-entering, .discovery-rail > *, .poster-grid > *, .detail-shell, .modal-backdrop, .modal-backdrop > .modal { animation: none; }
 }
+.lampac-qualities { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-3); }

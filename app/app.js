@@ -5748,6 +5748,7 @@
       qualities: first.qualities,
       subtitles: first.subtitles,
       startAt: roomId ? 0 : lampacSavedPosition(item, target.s, target.e),
+      handoff: { source: sourceId, voice: voiceName },
       listTitle: isMovie ? "Озвучка" : "Серии",
       keepPosition: isMovie,
       autoNext: !isMovie,
@@ -5873,6 +5874,36 @@
     return true;
   }
 
+  // Quality before the start, as in Lampa. The choice is the player's own memory
+  // ("cinevault.playerPrefs".lines): picked once here or in the player, kept for good.
+  const PLAYER_PREFS_KEY = "cinevault.playerPrefs";
+  const QUALITY_STEPS = [[2160, "4K"], [1440, "2K"], [1080, "1080p"], [720, "720p"], [480, "480p"]];
+  function wantedQualityLines() {
+    try { return Number(JSON.parse(localStorage.getItem(PLAYER_PREFS_KEY) || "{}").lines) || 0; } catch { return 0; }
+  }
+  function qualityPickMarkup(maxLines) {
+    const top = Number(maxLines) || 2160;
+    const steps = QUALITY_STEPS.filter(([lines]) => lines <= Math.max(top, 480));
+    const wanted = wantedQualityLines();
+    const chip = (lines, label) => `<button class="genre-pill${wanted === lines ? " is-active" : ""}" type="button" data-quality-pick="${lines}" aria-pressed="${wanted === lines}">${label}</button>`;
+    return `<div class="lampac-label">Качество</div><div class="lampac-qualities" role="group" aria-label="Качество">${chip(0, "Авто")}${steps.map(([lines, label]) => chip(lines, label)).join("")}</div>`;
+  }
+  function bindQualityPick(root) {
+    root.addEventListener("click", (event) => {
+      const button = event.target instanceof Element ? event.target.closest("[data-quality-pick]") : null;
+      if (!button) return;
+      const lines = Number(button.dataset.qualityPick) || null;
+      try {
+        const prefs = JSON.parse(localStorage.getItem(PLAYER_PREFS_KEY) || "{}") || {};
+        localStorage.setItem(PLAYER_PREFS_KEY, JSON.stringify({ ...prefs, lines }));
+      } catch {}
+      root.querySelectorAll("[data-quality-pick]").forEach((other) => {
+        const on = other === button;
+        other.classList.toggle("is-active", on);
+        other.setAttribute("aria-pressed", String(on));
+      });
+    });
+  }
   function openLampacChooser(item, { season = null, episode = null } = {}) {
     const saved = lampacChoice(item.id);
     const series = item.kind === "series";
@@ -5935,7 +5966,7 @@
       const resume = resumeNote(null, null);
       const resuming = resume && resume !== "Просмотрено";
       const startLabel = () => `${resuming ? "Продолжить" : "Смотреть"} · ${escapeHtml(list[chosen].label)}`;
-      body.innerHTML = `<button class="primary-button lampac-start" type="button" data-lampac-start>${playerIcon("play")}<span data-start-label>${startLabel()}</span><em>${escapeHtml(sourceName())}</em>${resuming ? `<small>${escapeHtml(resume)}</small>` : ""}</button><div class="lampac-label">Озвучка</div><div class="lampac-voices" role="radiogroup" aria-label="Озвучка">${list.map((entry, index) => `<button class="lampac-voice${index === chosen ? " is-active" : ""}" type="button" role="radio" aria-checked="${index === chosen}" data-lampac-voice-pick="${index}"><span class="lampac-voice-mark" aria-hidden="true"></span><span class="lampac-voice-copy"><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(entry.note || "Качество выбирается в плеере")}</small></span>${index === remembered ? `<span class="player-choice-badge">Вы выбирали</span>` : ""}</button>`).join("")}</div>`;
+      body.innerHTML = `<button class="primary-button lampac-start" type="button" data-lampac-start>${playerIcon("play")}<span data-start-label>${startLabel()}</span><em>${escapeHtml(sourceName())}</em>${resuming ? `<small>${escapeHtml(resume)}</small>` : ""}</button>${qualityPickMarkup(sources.find((one) => one.id === active)?.lines)}<div class="lampac-label">Озвучка</div><div class="lampac-voices" role="radiogroup" aria-label="Озвучка">${list.map((entry, index) => `<button class="lampac-voice${index === chosen ? " is-active" : ""}" type="button" role="radio" aria-checked="${index === chosen}" data-lampac-voice-pick="${index}"><span class="lampac-voice-mark" aria-hidden="true"></span><span class="lampac-voice-copy"><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(entry.note || "Качество выбирается в плеере")}</small></span>${index === remembered ? `<span class="player-choice-badge">Вы выбирали</span>` : ""}</button>`).join("")}</div>`;
       const start = body.querySelector("[data-lampac-start]");
       start.addEventListener("click", () => play(list, chosen, { voiceName: list[chosen].label, isMovie: true }));
       body.querySelectorAll("[data-lampac-voice-pick]").forEach((button) => {
@@ -5979,7 +6010,7 @@
       const resuming = start >= 0 && Boolean(resumeNote(list[start].s, list[start].e));
       if (start < 0) start = 0;
       const startNote = resumeNote(list[start].s, list[start].e);
-      const startButton = `<button class="primary-button lampac-start" type="button" data-lampac-start>${playerIcon("play")}<span>${resuming && startNote !== "Просмотрено" ? "Продолжить" : "Смотреть"} · ${seasons.length > 1 ? `${list[start].s} сезон, ` : ""}${escapeHtml(list[start].label)}${activeVoice ? `, ${escapeHtml(activeVoice)}` : ""}</span><em>${escapeHtml(sourceName())}</em>${startNote && startNote !== "Просмотрено" ? `<small>${escapeHtml(startNote)}</small>` : ""}</button>`;
+      const startButton = `<button class="primary-button lampac-start" type="button" data-lampac-start>${playerIcon("play")}<span>${resuming && startNote !== "Просмотрено" ? "Продолжить" : "Смотреть"} · ${seasons.length > 1 ? `${list[start].s} сезон, ` : ""}${escapeHtml(list[start].label)}${activeVoice ? `, ${escapeHtml(activeVoice)}` : ""}</span><em>${escapeHtml(sourceName())}</em>${startNote && startNote !== "Просмотрено" ? `<small>${escapeHtml(startNote)}</small>` : ""}</button>${qualityPickMarkup(sources.find((one) => one.id === active)?.lines)}`;
       const seasonTabs = seasons.length > 1 ? `<div class="lampac-label">Сезон</div><div class="season-tabs lampac-tabs">${seasons.map((entry, index) => `<button class="filter-button${lampacNumber(entry, index + 1) === seasonNumber ? " is-active" : ""}" type="button" data-lampac-season="${index}">${escapeHtml(entry.name || `${index + 1} сезон`)}</button>`).join("")}</div>` : "";
       const voiceTabs = voices.length ? `<div class="lampac-label">Озвучка</div><div class="season-tabs lampac-tabs">${voices.map((voice, index) => `<button class="filter-button${voice.active ? " is-active" : ""}" type="button" data-lampac-voice="${index}">${escapeHtml(voice.name)}${voice.active ? `<span class="lampac-quality" data-voice-quality hidden></span>` : ""}</button>`).join("")}</div>` : "";
       const episodes = list.map((entry, index) => {
@@ -6115,6 +6146,7 @@
       }
     })();
     body.addEventListener("click", () => { body.dataset.touched = "1"; });
+    bindQualityPick(body);
     sourcesRoot.addEventListener("click", () => { body.dataset.touched = "1"; });
   }
 
@@ -8804,6 +8836,31 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     if (known?.detailed || !parseTmdbItemId(id)) go(known);
     else loadTmdbTitle(id).then(go).catch(() => go(known));
   }
+  // A link from "На другом устройстве": the same title, episode, second, source and voice.
+  // The place is saved as this device's progress and the watch window opens on it.
+  function takeHandoff() {
+    const params = new URLSearchParams(window.location.search);
+    const at = Number(params.get("t") || 0);
+    const route = readRouteFromLocation();
+    if (!(at > 0) || route.type !== "title") return;
+    const season = Number(params.get("s") || 0) || null;
+    const episode = Number(params.get("e") || 0) || null;
+    const source = params.get("src") || "";
+    const voice = params.get("voice") || "";
+    const clean = new URL(window.location.href);
+    ["t", "s", "e", "src", "voice"].forEach((key) => clean.searchParams.delete(key));
+    window.history.replaceState(window.history.state, "", clean.pathname + clean.search + clean.hash);
+    const go = (item) => {
+      if (!item) return;
+      state.progress[lampacProgressKey(item, season, episode)] = { titleId: item.id, providerId: "lampac", ...(season ? { seasonNumber: season, episodeNumber: episode } : {}), position: at, duration: 0, completed: false, updatedAt: Date.now() };
+      if (source) rememberLampacChoice({ source, voice }, item.id);
+      saveState();
+      openLampacChooser(item, item.kind === "series" ? { season, episode } : {});
+    };
+    const known = getTitle(route.id);
+    if (known?.detailed || !parseTmdbItemId(route.id)) window.setTimeout(() => go(getTitle(route.id)), 800);
+    else loadTmdbTitle(route.id).then(go).catch(() => go(known));
+  }
   function installNotifications() {
     const wantedSeason = Number(new URLSearchParams(window.location.search).get("season") || 0);
     if (wantedSeason) selectedSeason = wantedSeason;
@@ -10449,6 +10506,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       .then(() => render())
       .catch(() => {});
     installNotifications();
+    window.setTimeout(takeHandoff, 300);
     Promise.all([importedCatalog, loadCatalogProgress()])
       .then(() => { if (state.view === "home" || state.view === "history") render(); })
       .catch(() => {});
