@@ -1439,3 +1439,25 @@ span.studio-sort-button::after { display: none; }
 .site-toast.is-shown { opacity: 1; transform: translate(-50%, 0); }
 .notify-push { display: flex; gap: var(--sp-3); align-items: center; justify-content: space-between; margin-top: var(--sp-2); padding: var(--sp-3) var(--sp-2) var(--sp-2); border-top: 1px solid var(--line); color: var(--muted); font-size: var(--s-1); line-height: 1.4; }
 .notify-push button { flex: none; }
+
+/* ---- Colour from the open title (set on :root by the site) and calmer motion. */
+:root { --tint: transparent; }
+.app-shell { background: radial-gradient(120% 70% at 50% -10%, var(--tint), transparent 60%) fixed, var(--bg); }
+.page.is-entering { animation: page-in .38s var(--ease) both; }
+@keyframes page-in { from { opacity: 0; transform: translateY(10px); } }
+.discovery-rail > *, .poster-grid > * { animation: card-in .45s var(--ease) both; }
+.discovery-rail > :nth-child(2), .poster-grid > :nth-child(2) { animation-delay: 30ms; }
+.discovery-rail > :nth-child(3), .poster-grid > :nth-child(3) { animation-delay: 60ms; }
+.discovery-rail > :nth-child(4), .poster-grid > :nth-child(4) { animation-delay: 90ms; }
+.discovery-rail > :nth-child(5), .poster-grid > :nth-child(5) { animation-delay: 120ms; }
+.discovery-rail > :nth-child(n+6), .poster-grid > :nth-child(n+6) { animation-delay: 150ms; }
+@keyframes card-in { from { opacity: 0; transform: translateY(6px) scale(.985); } }
+.detail-shell { animation: detail-in .5s var(--ease) both; }
+@keyframes detail-in { from { opacity: 0; transform: scale(.99); } }
+.modal-backdrop { animation: backdrop-in .25s var(--ease) both; }
+@keyframes backdrop-in { from { opacity: 0; } }
+.modal-backdrop > .modal { animation: modal-in .3s var(--ease) both; }
+@keyframes modal-in { from { opacity: 0; transform: translateY(14px) scale(.985); } }
+@media (prefers-reduced-motion: reduce) {
+  .page.is-entering, .discovery-rail > *, .poster-grid > *, .detail-shell, .modal-backdrop, .modal-backdrop > .modal { animation: none; }
+}

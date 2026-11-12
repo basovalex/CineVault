@@ -8236,6 +8236,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
 
   function renderDetails(id, { skipPlaybackRefresh = false } = {}) {
     const item = getTitle(id);
+    if (item) accentFromTitle(item);
     if (!item) return;
     if (item.kinopoiskId && !Array.isArray(item.videoSources) && !importedDetailsLoaded.has(String(item.kinopoiskId))) {
       loadImportedTitleDetails(item);
@@ -8477,6 +8478,87 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const legend = RATING_STEP_NAMES.map((name, step) => `<span><i class="is-r${step}" aria-hidden="true"></i>${name}</span>`).reverse().join("");
     return `<section class="section ep-map-section" aria-labelledby="ep-map-title"><div class="section-header"><div><h2 id="ep-map-title">Оценки серий</h2><span>по оценкам зрителей ${item.source === "tmdb" ? "TMDB" : "IMDb"}</span></div></div><p class="ep-map-facts">${escapeHtml(facts)}.</p><div class="ep-map-scroll"><div class="ep-map" style="--seasons:${seasons.length}">${head}${body}</div></div><div class="ep-map-legend">${legend}</div></section>`;
   }
+
+  // ---- Colour from the poster, as in Lampa: the open title tints the interface, and the
+  // tint stays until another title is opened. The colour is lifted to a readable accent.
+  const ACCENT_KEY = "cinevault.accent.v1";
+  const accentCache = new Map();
+  function accentVars([h, sat, light]) {
+    const hsl = (s2, l2, a = 1) => `hsl(${h} ${s2}% ${l2}%${a < 1 ? ` / ${a}` : ""})`;
+    return {
+      "--accent": hsl(sat, light),
+      "--accent-hover": hsl(sat, Math.min(light + 9, 82)),
+      "--accent-soft": hsl(sat, light, .14),
+      "--on-accent": hsl(Math.min(sat, 40), 8),
+      "--tint": hsl(Math.min(sat, 55), 22, .55),
+    };
+  }
+  function applyAccent(hsl) {
+    const root = document.documentElement;
+    if (!hsl) {
+      ["--accent", "--accent-hover", "--accent-soft", "--on-accent", "--tint"].forEach((name) => root.style.removeProperty(name));
+      return;
+    }
+    Object.entries(accentVars(hsl)).forEach(([name, value]) => root.style.setProperty(name, value));
+  }
+  function posterHsl(url) {
+    if (!url) return Promise.resolve(null);
+    if (accentCache.has(url)) return accentCache.get(url);
+    const job = new Promise((resolve) => {
+      const image = new Image();
+      image.crossOrigin = "anonymous";
+      image.decoding = "async";
+      image.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = 24; canvas.height = 36;
+          const context = canvas.getContext("2d", { willReadFrequently: true });
+          context.drawImage(image, 0, 0, 24, 36);
+          const data = context.getImageData(0, 0, 24, 36).data;
+          // Hue histogram weighted by saturation: the poster's main colour, not its greys.
+          const bins = new Array(36).fill(0);
+          const sums = Array.from({ length: 36 }, () => [0, 0, 0]);
+          for (let index = 0; index < data.length; index += 4) {
+            const r = data[index] / 255, g = data[index + 1] / 255, b = data[index + 2] / 255;
+            const max = Math.max(r, g, b), min = Math.min(r, g, b), delta = max - min;
+            const light = (max + min) / 2;
+            if (delta < .12 || light < .12 || light > .92) continue;
+            const sat = delta / (1 - Math.abs(2 * light - 1));
+            let hue = max === r ? ((g - b) / delta) % 6 : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4;
+            hue = (hue * 60 + 360) % 360;
+            const bin = Math.floor(hue / 10);
+            const weight = sat * sat;
+            bins[bin] += weight;
+            sums[bin][0] += hue * weight; sums[bin][1] += sat * weight; sums[bin][2] += light * weight;
+          }
+          let best = 0;
+          bins.forEach((value, index) => { if (value > bins[best]) best = index; });
+          if (bins[best] < 1.5) { resolve(null); return; }
+          const weight = bins[best];
+          const hue = Math.round(sums[best][0] / weight);
+          // Readable on the dark background: saturated, mid-light.
+          const sat = Math.round(Math.min(85, Math.max(55, sums[best][1] / weight * 100)));
+          const light = Math.round(Math.min(68, Math.max(58, sums[best][2] / weight * 100 + 10)));
+          resolve([hue, sat, light]);
+        } catch {
+          resolve(null);
+        }
+      };
+      image.onerror = () => resolve(null);
+      image.src = url;
+    });
+    accentCache.set(url, job);
+    return job;
+  }
+  function accentFromTitle(item) {
+    const url = String(item?.posterImage || "").replace(/\/(w\d+|original)\//, "/w92/");
+    posterHsl(url).then((hsl) => {
+      if (!hsl || activeTitleId !== item.id) return;
+      applyAccent(hsl);
+      try { localStorage.setItem(ACCENT_KEY, JSON.stringify(hsl)); } catch {}
+    });
+  }
+  try { const saved = JSON.parse(localStorage.getItem(ACCENT_KEY) || "null"); if (Array.isArray(saved)) applyAccent(saved); } catch {}
 
   // ---- Feed and series subscriptions, as in Lampa. The feed is CUB's own (the same one
   // Lampa shows); subscriptions live in the account like favourites, and the bell is
