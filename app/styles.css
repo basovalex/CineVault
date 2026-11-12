@@ -1322,3 +1322,21 @@ span.studio-sort-button::after { display: none; }
 .lampac-voice-copy { display: grid; gap: 3px; }
 .lampac-voice-copy small { color: var(--muted); font-size: var(--s-1); }
 .lampac-voice .player-choice-badge { position: static; justify-self: end; background: var(--surface-3); color: var(--text-2); white-space: nowrap; }
+.cv-player-skip { gap: 14px; padding: 10px 16px 10px 10px; max-width: min(460px, calc(100% - 32px)); background: rgba(20,22,26,.92); color: #fff; text-align: left; border: 1px solid rgba(255,255,255,.12); }
+.cv-player-skip:hover, .cv-player-skip:focus-visible { background: rgba(40,42,48,.95); outline: none; }
+.cv-player-skip-still { flex: none; width: 128px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; background: #222; }
+.cv-player-skip-icon { display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: rgba(255,255,255,.12); }
+.cv-player-skip-icon svg { width: 18px; height: 18px; }
+.cv-player-skip-copy { display: grid; gap: 4px; min-width: 0; }
+.cv-player-skip-copy small { font: 500 13px/1.2 var(--body); color: rgba(255,255,255,.7); }
+.cv-player-skip-copy strong { font: 600 17px/1.25 var(--body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-player-skip-copy em { font: 400 13px/1.2 var(--body); font-style: normal; color: rgba(255,255,255,.6); }
+
+/* Phone: the day's pick shows its frame clean on top and the text below it, as Lampa does,
+   instead of a huge title over the whole picture. */
+@media (max-width: 720px) {
+  .home-feature { height: auto; min-height: 0; justify-content: flex-start; padding-top: calc(var(--header-h) + 46vw); }
+  .feature-backdrop { bottom: auto; height: calc(var(--header-h) + 64vw); background-position: center 22%; }
+  .home-feature::before { background: linear-gradient(180deg, rgba(8, 9, 11, .6) 0%, rgba(8, 9, 11, 0) calc(var(--header-h) + 4vw), rgba(8, 9, 11, 0) calc(var(--header-h) + 34vw), var(--bg) calc(var(--header-h) + 63vw), var(--bg) 100%); }
+  .home-feature h1 { font-size: clamp(28px, 8.4vw, 40px); line-height: 1.06; }
+}

@@ -98,6 +98,7 @@
         <div class="cv-player-controls">
           <div class="cv-player-group">
             <button class="cv-player-icon" data-act="list" type="button" aria-label="Серии и озвучки">${icon("list")}</button>
+            <button class="cv-player-icon" data-act="next" type="button" aria-label="Следующая серия" title="Следующая серия" hidden>${icon("next")}</button>
             <div class="cv-player-volume"><button class="cv-player-icon" data-act="mute" type="button" aria-label="Звук">${icon("volume")}</button><input type="range" min="0" max="1" step="0.05" aria-label="Громкость"></div>
           </div>
           <div class="cv-player-group cv-player-center">
@@ -148,6 +149,8 @@
     const episode = () => episodes[index] || {};
     const header = () => {
       const entry = episode();
+      const nextButton = root.querySelector('.cv-player-icon[data-act="next"]');
+      if (nextButton) nextButton.hidden = !(options.autoNext !== false && episodes[index + 1]);
       $(".cv-player-title").textContent = entry.label && entry.e ? `${options.title} · ${entry.s ? `${entry.s} сезон, ` : ""}${entry.label}` : (options.subtitle ? `${options.title} · ${options.subtitle}` : options.title);
       $(".cv-player-voice").textContent = options.voice || "";
     };
@@ -323,7 +326,10 @@
       if (!episodes[target] || nextTimer) return;
       nextLeft = NEXT_COUNTDOWN;
       const button = $(".cv-player-skip");
-      const render = () => { button.innerHTML = `${icon("next")}<span>${esc(episodes[target].label)} через ${nextLeft} с</span>`; };
+      const next = episodes[target];
+      const render = () => {
+        button.innerHTML = `${next.still ? `<img class="cv-player-skip-still" src="${esc(next.still)}" alt="" loading="lazy">` : `<span class="cv-player-skip-icon">${icon("next")}</span>`}<span class="cv-player-skip-copy"><small>Следующая серия · через ${nextLeft} с</small><strong>${esc(next.name || next.label)}</strong>${next.name ? `<em>${esc(next.label)}</em>` : ""}</span>`;
+      };
       render();
       button.hidden = false;
       nextTimer = window.setInterval(() => {

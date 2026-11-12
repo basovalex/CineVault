@@ -109,11 +109,15 @@
     reportClientError("error", event.error || event.message, event.filename);
     window.setTimeout(showCrashScreen, 0);
   });
-  // A new version took over this tab: offer a reload instead of doing it under a running film.
+  // A new version took over this tab: no notice to dismiss; the page reloads quietly the next
+  // time the viewer comes back to it, unless a film is playing.
   window.addEventListener("cinevault:updateavailable", () => {
-    if (document.getElementById("update-notice")) return;
-    document.getElementById("app")?.insertAdjacentHTML("beforeend", `<div id="update-notice" class="toast toast-action" role="status"><span><strong>Вышла новая версия сайта</strong><span>Обновите страницу, когда будет удобно.</span></span><button class="primary-button" type="button" data-update-reload>Обновить</button></div>`);
-    document.querySelector("[data-update-reload]")?.addEventListener("click", () => window.location.reload());
+    window.__cvUpdatePending = true;
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!window.__cvUpdatePending || document.visibilityState !== "visible") return;
+    const playing = [...document.querySelectorAll("video")].some((video) => !video.paused && !video.ended);
+    if (!playing && !document.querySelector(".cv-player, .player-modal")) window.location.reload();
   });
   window.addEventListener("unhandledrejection", (event) => {
     if (event.reason?.name === "AbortError") return;
@@ -5094,11 +5098,23 @@
       return url;
     }
   }
-  function lampacChoice() {
+  // Source and voice are remembered per title, as in Lampa; the last choice anywhere
+  // is the fallback for a title opened for the first time.
+  function lampacChoiceStore() {
     try { return JSON.parse(localStorage.getItem(LAMPAC_CHOICE_KEY) || "{}") || {}; } catch { return {}; }
   }
-  function rememberLampacChoice(choice) {
-    try { localStorage.setItem(LAMPAC_CHOICE_KEY, JSON.stringify({ ...lampacChoice(), ...choice })); } catch {}
+  function lampacChoice(titleId = "") {
+    const store = lampacChoiceStore();
+    const own = titleId && store.titles ? store.titles[titleId] : null;
+    return own ? { ...own, own: true } : { source: store.source, voice: store.voice };
+  }
+  function rememberLampacChoice(choice, titleId = "") {
+    const store = lampacChoiceStore();
+    const next = { ...store, ...choice, titles: { ...(store.titles || {}) } };
+    if (titleId) next.titles[titleId] = { ...(next.titles[titleId] || {}), ...choice, at: Date.now() };
+    const ids = Object.keys(next.titles);
+    if (ids.length > 500) ids.sort((a, b) => (next.titles[a].at || 0) - (next.titles[b].at || 0)).slice(0, ids.length - 500).forEach((id) => delete next.titles[id]);
+    try { localStorage.setItem(LAMPAC_CHOICE_KEY, JSON.stringify(next)); } catch {}
   }
   async function lampacJson(url, timeout = LAMPAC_PROBE_TIMEOUT_MS) {
     const controller = new AbortController();
@@ -5212,6 +5228,70 @@
     }
   }
 
+  // TMDB, as Lampa uses it: on the public site through the server's /tmdb/3 route
+  // (behind the site password, the key stays on the server), elsewhere directly.
+  const cvTmdbCache = new Map();
+  function cvTmdbLocal() {
+    const host = location.hostname;
+    return host === "localhost" || host === "127.0.0.1" || /^(192\.168|10)\./.test(host);
+  }
+  async function cvTmdb(path, timeout = 8000) {
+    if (cvTmdbCache.has(path)) return cvTmdbCache.get(path);
+    const run = async (url, headers = {}) => {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), timeout);
+      try {
+        const response = await fetch(url, { headers: { accept: "application/json", ...headers }, signal: controller.signal, credentials: "same-origin" });
+        if (!response.ok) throw new Error(`TMDB ${response.status}`);
+        return await response.json();
+      } finally {
+        window.clearTimeout(timer);
+      }
+    };
+    const direct = () => {
+      if (!tmdbCredential) throw new Error("нет ключа TMDB");
+      const url = new URL(`https://api.themoviedb.org/3/${path}`);
+      const bearer = tmdbCredential.startsWith("eyJ");
+      if (!bearer) url.searchParams.set("api_key", tmdbCredential);
+      return run(url, bearer ? { Authorization: `Bearer ${tmdbCredential}` } : {});
+    };
+    const request = (cvTmdbLocal() ? direct() : run(`/tmdb/3/${path}`).catch(direct))
+      .catch((error) => { cvTmdbCache.delete(path); throw error; });
+    cvTmdbCache.set(path, request);
+    return request;
+  }
+  // The show on TMDB: its real seasons (a source may glue a spin-off on as an extra season,
+  // like «Декстер: Новая кровь» as season 9) and, per season, episode names and stills.
+  async function cvTmdbShow(item) {
+    if (item?.kind !== "series") return null;
+    let id = Number(item.tmdbId || 0);
+    if (!id) {
+      const query = encodeURIComponent(item.originalTitle || item.title || "");
+      const found = await cvTmdb(`search/tv?query=${query}&language=ru-RU${item.year ? `&first_air_date_year=${Number(item.year)}` : ""}`);
+      let match = (found.results || [])[0];
+      if (!match && item.year) {
+        const loose = await cvTmdb(`search/tv?query=${query}&language=ru-RU`);
+        match = (loose.results || []).find((entry) => Math.abs(Number(String(entry.first_air_date || "").slice(0, 4)) - Number(item.year)) <= 1);
+      }
+      id = Number(match?.id || 0);
+    }
+    if (!id) return null;
+    const details = await cvTmdb(`tv/${id}?language=ru-RU`);
+    const seasons = (details.seasons || []).filter((season) => season.season_number > 0 && season.episode_count > 0);
+    return { id, maxSeason: Math.max(0, ...seasons.map((season) => season.season_number)), seasons };
+  }
+  async function cvTmdbEpisodes(showId, season) {
+    const data = await cvTmdb(`tv/${showId}/season/${season}?language=ru-RU`);
+    const map = {};
+    (data.episodes || []).forEach((episode) => {
+      map[episode.episode_number] = {
+        name: String(episode.name || "").replace(/^(Эпизод|Серия|Episode)\s*\d+$/i, "").trim(),
+        still: episode.still_path ? `${cvTmdbLocal() ? "https://image.tmdb.org/t/p" : "/tmdb/t/p"}/w300${episode.still_path}` : "",
+      };
+    });
+    return map;
+  }
+
   function lampacProgressKey(item, season, episode) {
     return season ? `${item.id}-s${season}e${episode}` : item.id;
   }
@@ -5248,11 +5328,11 @@
       listTitle: isMovie ? "Озвучка" : "Серии",
       keepPosition: isMovie,
       autoNext: !isMovie,
-      episodes: list.map((entry, position) => ({ label: entry.label, note: entry.note || "", s: entry.s, e: entry.e, current: position === index, startAt: lampacSavedPosition(item, entry.s, entry.e) })),
+      episodes: list.map((entry, position) => ({ label: entry.label, note: entry.title || entry.note || "", name: entry.title || "", still: entry.still || "", s: entry.s, e: entry.e, current: position === index, startAt: lampacSavedPosition(item, entry.s, entry.e) })),
       resolve: async (position) => {
         const entry = list[position];
         const next = await lampacStream(entry.entry);
-        if (isMovie) { voice = entry.label; rememberLampacChoice({ voice }); }
+        if (isMovie) { voice = entry.label; rememberLampacChoice({ voice }, item.id); }
         return { ...next, voice: isMovie ? entry.label : voice };
       },
       onProgress: ({ position, duration, completed, s, e }) => {
@@ -5370,11 +5450,14 @@
   }
 
   function openLampacChooser(item, { season = null, episode = null } = {}) {
-    const saved = lampacChoice();
+    const saved = lampacChoice(item.id);
     const series = item.kind === "series";
     const progress = progressForTitle(item);
     const wantSeason = Number(season || progress?.seasonNumber || 1);
     const wantEpisode = Number(episode || progress?.episodeNumber || 0);
+    // Real seasons and episode names come from TMDB, looked up while sources are searched.
+    const tmdbShow = series ? cvTmdbShow(item).catch(() => null) : Promise.resolve(null);
+    const tmdbShowSoon = () => Promise.race([tmdbShow, new Promise((resolve) => window.setTimeout(() => resolve(null), 4000))]);
     const sources = [];
     let active = "";
     let token = 0;
@@ -5392,7 +5475,7 @@
       statusRoot.innerHTML = text ? `${busy ? `<span class="loading-spinner" aria-hidden="true"></span>` : ""}<span>${text}</span>` : "";
     };
     const renderSources = () => {
-      sourcesRoot.innerHTML = sources.map((source) => `<button class="filter-button${source.id === active ? " is-active" : ""}" type="button" role="tab" aria-selected="${source.id === active}" data-lampac-source="${escapeHtml(source.id)}">${escapeHtml(source.name)}${source.lines ? `<span class="lampac-quality">${lampacQualityLabel(source.lines)}</span>` : ""}</button>`).join("");
+      sourcesRoot.innerHTML = sources.map((source) => `<button class="filter-button${source.id === active ? " is-active" : ""}" type="button" role="tab" aria-selected="${source.id === active}" data-lampac-source="${escapeHtml(source.id)}">${escapeHtml(source.name)}${source.lines ? `<span class="lampac-quality" title="Лучшее качество у этого источника; у отдельных озвучек и серий может быть ниже">до ${lampacQualityLabel(source.lines)}</span>` : ""}</button>`).join("");
     };
     const progressKey = (seasonNumber, episodeNumber) => lampacProgressKey(item, seasonNumber, episodeNumber);
     const play = async (list, index, { voiceName = "", isMovie = false } = {}) => {
@@ -5401,7 +5484,7 @@
         const first = await lampacStream(list[index].entry);
         if (closed) return;
         if (!first.stream) throw new Error("источник не отдал ссылку");
-        rememberLampacChoice({ source: active, voice: voiceName || "" });
+        rememberLampacChoice({ source: active, voice: voiceName || "" }, item.id);
         modalRoot.innerHTML = "";
         closed = true;
         startLampacPlayer(item, list, index, first, { voiceName, isMovie, sourceId: active });
@@ -5453,6 +5536,18 @@
         const e = Number(entry.e || index + 1);
         return { entry, s, e, label: entry.name || `${e} серия`, note: resumeNote(s, e) };
       });
+      // Episode names and stills from TMDB: tooltips here, names and the next-episode card in the player.
+      tmdbShow.then((show) => (show ? cvTmdbEpisodes(show.id, seasonNumber) : null)).then((names) => {
+        if (!names) return;
+        list.forEach((entry, position) => {
+          const info = names[entry.e];
+          if (!info) return;
+          entry.title = info.name;
+          entry.still = info.still;
+          const button = body.querySelector(`[data-lampac-episode="${position}"]`);
+          if (button && info.name) button.title = `${entry.label}: ${info.name}`;
+        });
+      }).catch(() => {});
       // Where to start: the episode stopped on (or the next after a finished one), else the first.
       let start = list.findIndex((entry) => entry.s === wantSeason && entry.e === wantEpisode);
       const startRecord = start >= 0 ? state.progress[progressKey(list[start].s, list[start].e)] : null;
@@ -5462,22 +5557,32 @@
       const startNote = resumeNote(list[start].s, list[start].e);
       const startButton = `<button class="primary-button lampac-start" type="button" data-lampac-start>${playerIcon("play")}<span>${resuming && startNote !== "Просмотрено" ? "Продолжить" : "Смотреть"} · ${seasons.length > 1 ? `${list[start].s} сезон, ` : ""}${escapeHtml(list[start].label)}${activeVoice ? `, ${escapeHtml(activeVoice)}` : ""}</span><em>${escapeHtml(sourceName())}</em>${startNote && startNote !== "Просмотрено" ? `<small>${escapeHtml(startNote)}</small>` : ""}</button>`;
       const seasonTabs = seasons.length > 1 ? `<div class="lampac-label">Сезон</div><div class="season-tabs lampac-tabs">${seasons.map((entry, index) => `<button class="filter-button${lampacNumber(entry, index + 1) === seasonNumber ? " is-active" : ""}" type="button" data-lampac-season="${index}">${escapeHtml(entry.name || `${index + 1} сезон`)}</button>`).join("")}</div>` : "";
-      const voiceTabs = voices.length ? `<div class="lampac-label">Озвучка</div><div class="season-tabs lampac-tabs">${voices.map((voice, index) => `<button class="filter-button${voice.active ? " is-active" : ""}" type="button" data-lampac-voice="${index}">${escapeHtml(voice.name)}</button>`).join("")}</div>` : "";
+      const voiceTabs = voices.length ? `<div class="lampac-label">Озвучка</div><div class="season-tabs lampac-tabs">${voices.map((voice, index) => `<button class="filter-button${voice.active ? " is-active" : ""}" type="button" data-lampac-voice="${index}">${escapeHtml(voice.name)}${voice.active ? `<span class="lampac-quality" data-voice-quality hidden></span>` : ""}</button>`).join("")}</div>` : "";
       const episodes = list.map((entry, index) => {
         const record = state.progress[progressKey(entry.s, entry.e)];
         const share = record?.duration ? Math.min(100, (record.position / record.duration) * 100) : 0;
         const classes = ["lampac-episode", index === start ? "is-current" : "", record?.completed ? "is-watched" : ""].filter(Boolean).join(" ");
         return `<button class="${classes}" type="button" data-lampac-episode="${index}" title="Смотреть: ${escapeHtml(entry.label)}"><span class="lampac-episode-play" aria-hidden="true">${playerIcon("play")}</span><span>${escapeHtml(entry.label)}</span>${share && !record.completed ? `<i style="width:${share.toFixed(1)}%"></i>` : ""}</button>`;
       }).join("");
-      body.innerHTML = `${startButton}${seasonTabs}${voiceTabs}<div class="lampac-label">Серии — нажмите, чтобы смотреть</div><div class="lampac-episodes">${episodes}</div>`;
+      body.innerHTML = `${startButton}${voiceTabs}${seasonTabs}<div class="lampac-label">Серии — нажмите, чтобы смотреть</div><div class="lampac-episodes">${episodes}</div>`;
       body.querySelector("[data-lampac-start]").addEventListener("click", () => play(list, start, { voiceName: activeVoice }));
+      // The source badge is its best; what this voice really gives is checked on its first episode.
+      const qualityMark = body.querySelector("[data-voice-quality]");
+      if (qualityMark && list[0]) {
+        const mine = token;
+        lampacSourceQuality({ type: "episode", data: [list[0].entry] }).then((lines) => {
+          if (!lines || mine !== token || !qualityMark.isConnected) return;
+          qualityMark.textContent = lampacQualityLabel(lines);
+          qualityMark.hidden = false;
+        }).catch(() => {});
+      }
       body.querySelectorAll("[data-lampac-season]").forEach((button) => button.addEventListener("click", () => {
         const index = Number(button.dataset.lampacSeason);
         loadNode(seasons[index].url, seasons, lampacNumber(seasons[index], index + 1));
       }));
       body.querySelectorAll("[data-lampac-voice]").forEach((button) => button.addEventListener("click", () => {
         const voice = voices[Number(button.dataset.lampacVoice)];
-        rememberLampacChoice({ voice: voice.name });
+        rememberLampacChoice({ voice: voice.name }, item.id);
         if (voice.url) loadNode(voice.url, seasons, seasonNumber);
       }));
       body.querySelectorAll("[data-lampac-episode]").forEach((button) => button.addEventListener("click", () => {
@@ -5504,8 +5609,12 @@
         if (!closed && mine === token) setStatus("Источник не ответил. Выберите другой.");
       }
     };
-    const openSeasons = (node) => {
-      const seasons = node.data;
+    const openSeasons = async (node) => {
+      const mine = token;
+      const show = await tmdbShowSoon();
+      if (closed || mine !== token) return;
+      const fitting = show?.maxSeason ? node.data.filter((entry, position) => lampacNumber(entry, position + 1) <= show.maxSeason) : node.data;
+      const seasons = fitting.length ? fitting : node.data;
       const index = Math.max(0, seasons.findIndex((entry, position) => lampacNumber(entry, position + 1) === wantSeason));
       loadNode(seasons[index].url, seasons, lampacNumber(seasons[index], index + 1), { preferSavedVoice: true });
     };
