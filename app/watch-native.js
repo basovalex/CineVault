@@ -10,7 +10,7 @@
       try { this.hostToken=localStorage.getItem(`cinevault.room.${roomId}.host`)||''; } catch {}
       this.isHost=!!this.hostToken;this.seq=-1;this.commandSeq=0;this.suppressUntil=0;this.waiting=video.readyState<2;
       this.tail=Promise.resolve();this.listeners=[];this.renderShell();this.setControls(true);
-      for(const event of ['waiting','stalled','seeking'])this.listen(event,()=>{this.waiting=true;this.reportSoon();});
+      for(const event of ['waiting','seeking'])this.listen(event,()=>{this.waiting=true;this.reportSoon();});
       for(const event of ['canplay','playing','seeked','loadeddata'])this.listen(event,()=>{this.waiting=false;this.applyPending();this.reportSoon();});
       this.root=this.video.closest('.player-modal');
       this.editionCapture=e=>{if(this.isHost&&!this.applyingEdition&&e.target.matches('#video-variant,select[id$="-hls-audio"]'))this.suppressUntil=Date.now()+1500;};
@@ -78,7 +78,7 @@
       this.message(!s.host_online?'Ведущий не на связи.':waiting?'Ждём загрузку видео у участников.':s.playing?'Смотрим вместе':'Общая пауза');
     }
     applyEdition(edition){
-      if(!edition)return true;const kind=edition.slice(0,2),wanted=edition.slice(2);
+      if(!edition||!/^[va]:/.test(edition))return true;const kind=edition.slice(0,2),wanted=edition.slice(2);
       const select=kind==='v:'?this.root?.querySelector('#video-variant'):kind==='a:'?this.root?.querySelector('select[id$="-hls-audio"]'):null;
       if(!select){this.message('Ждём загрузки общей озвучки.');return false;}
       const option=[...select.options].find(o=>kind==='v:'?o.value===wanted:o.textContent===wanted);

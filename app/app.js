@@ -4646,6 +4646,7 @@
       return;
     }
     roomOpenAttempted = true;
+    if (String(roomState.translation || "").startsWith("l:") && lampacOrigin()) return openLampacRoom(item, roomState, roomId);
     if ([2, 3].includes(roomState.protocol) && roomState.provider === "alloha") return openAlternativePlayer(item, { roomId, roomState });
     if (item.kind === "movie" && getVideoVariants(item).length) return openItemPlayer(item, null, null, roomId);
     const sourceUrl = directEpisodeUrl(item, season, episode);
@@ -5055,13 +5056,509 @@
     return openEmbedProviderPlayer(item, provider);
   }
 
+  // Lampac (prototype): a self-hosted server that finds the title on many sources and
+  // returns seasons, voices and direct streams. CineVault only draws them and plays the
+  // stream in its own player. On by default for local and home-network hosts; elsewhere
+  // set localStorage "cinevault.lampacOrigin" to its address, or to "off" to disable.
+  const LAMPAC_ORIGIN_KEY = "cinevault.lampacOrigin";
+  const LAMPAC_CHOICE_KEY = "cinevault.lampacChoice";
+  const LAMPAC_PROBE_TIMEOUT_MS = 15000;
+  function lampacOrigin() {
+    try {
+      const saved = localStorage.getItem(LAMPAC_ORIGIN_KEY);
+      if (saved === "off") return "";
+      if (saved) return saved.replace(/\/+$/, "");
+    } catch {}
+    const host = location.hostname;
+    const home = host === "localhost" || host === "127.0.0.1" || /^(192\.168|10)\.|^172\.(1[6-9]|2\d|3[01])\./.test(host);
+    return home ? `${location.protocol}//${host}:9118` : "";
+  }
+  function lampacChoice() {
+    try { return JSON.parse(localStorage.getItem(LAMPAC_CHOICE_KEY) || "{}") || {}; } catch { return {}; }
+  }
+  function rememberLampacChoice(choice) {
+    try { localStorage.setItem(LAMPAC_CHOICE_KEY, JSON.stringify({ ...lampacChoice(), ...choice })); } catch {}
+  }
+  async function lampacJson(url, timeout = LAMPAC_PROBE_TIMEOUT_MS) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeout);
+    try {
+      const target = new URL(url, lampacOrigin());
+      target.searchParams.set("rjson", "true");
+      const response = await fetch(target, { signal: controller.signal, cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const text = (await response.text()).trim();
+      return text.startsWith("{") || text.startsWith("[") ? JSON.parse(text) : null;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+  function lampacQuery(item) {
+    const params = new URLSearchParams({
+      kinopoisk_id: String(item.kinopoiskId || item.kinopoisk_id || ""),
+      title: item.title || "",
+      original_title: item.originalTitle || item.title || "",
+      year: String(item.year || ""),
+      serial: item.kind === "series" ? "1" : "0",
+    });
+    if (item.imdbId) params.set("imdb_id", item.imdbId);
+    if (item.tmdbId) params.set("id", item.tmdbId);
+    return params;
+  }
+  // A source either answers with the title itself or with a list of look-alikes;
+  // a look-alike is taken only when its year matches, never guessed.
+  async function lampacResolve(url, item) {
+    let node = await lampacJson(url);
+    for (let hop = 0; node?.type === "similar" && hop < 2; hop += 1) {
+      const year = String(item.year || "");
+      const match = (node.data || []).find((entry) => year && String(entry.year || "") === year);
+      if (!match?.url) return null;
+      node = await lampacJson(match.url);
+    }
+    return node && ["movie", "season", "episode"].includes(node.type) && (node.data || []).length ? node : null;
+  }
+  // "play" carries the link itself; "call" has to be asked and answers with every
+  // quality and the subtitles, as Lampa does. Its ready "stream" is the fallback.
+  async function lampacStream(entry) {
+    const pack = (source) => ({
+      stream: source?.url || "",
+      qualities: source?.quality && typeof source.quality === "object" ? source.quality : {},
+      subtitles: Array.isArray(source?.subtitles) ? source.subtitles.filter((sub) => sub?.url).map((sub) => ({ label: sub.label || sub.name || "", url: sub.url })) : [],
+    });
+    if (entry.method === "play") return pack(entry);
+    try {
+      const answer = await lampacJson(entry.url);
+      if (answer?.url) return pack(answer);
+    } catch {}
+    return { stream: entry.stream || "", qualities: {}, subtitles: [] };
+  }
+  function lampacNumber(entry, fallback) {
+    const value = Number(entry?.s ?? entry?.id ?? String(entry?.name || "").match(/\d+/)?.[0]);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  }
+  // Quality as a line count: "1080p" -> 1080, "4K" -> 2160.
+  function lampacLines(label) {
+    const text = String(label || "");
+    if (/4k|uhd/i.test(text)) return 2160;
+    if (/2k/i.test(text)) return 1440;
+    return Number(text.match(/(\d{3,4})p?/i)?.[1] || 0);
+  }
+  function lampacQualityLabel(lines) {
+    if (lines >= 2000) return "4K";
+    if (lines >= 1400) return "2K";
+    return lines ? `${lines}p` : "";
+  }
+  // By width, so letterboxed films (3840x1600) still count as 4K.
+  function lampacLinesFromPlaylist(text) {
+    const widths = [...String(text || "").matchAll(/RESOLUTION=(\d+)x(\d+)/g)].map((match) => Number(match[1]));
+    const width = Math.max(0, ...widths);
+    if (width >= 3800) return 2160;
+    if (width >= 2500) return 1440;
+    if (width >= 1900) return 1080;
+    if (width >= 1260) return 720;
+    if (width >= 840) return 480;
+    return width ? 360 : 0;
+  }
+  function lampacEntryLines(entry) {
+    const listed = entry?.quality && typeof entry.quality === "object" ? Object.keys(entry.quality) : [];
+    return Math.max(lampacLines(entry?.maxquality), ...listed.map(lampacLines), 0);
+  }
+  // Best quality a source gives: its own labels first, else the first video's playlist.
+  async function lampacSourceQuality(node) {
+    let entries = node.data || [];
+    if (node.type === "season") {
+      const first = await lampacJson(entries[0]?.url);
+      entries = first?.type === "episode" ? first.data || [] : [];
+    }
+    const labelled = Math.max(0, ...entries.map(lampacEntryLines));
+    if (labelled) return labelled;
+    const entry = entries[0];
+    if (entry?.method === "call") {
+      const answer = await lampacJson(entry.url).catch(() => null);
+      const listed = answer?.quality && typeof answer.quality === "object" ? Object.keys(answer.quality) : [];
+      const lines = Math.max(0, ...listed.map(lampacLines));
+      if (lines) return lines;
+    }
+    const stream = entry && (entry.stream || (entry.method === "play" ? entry.url : ""));
+    if (!stream || !isHlsUrl(stream)) return 0;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(stream, { signal: controller.signal, cache: "no-store" });
+      return response.ok ? lampacLinesFromPlaylist(await response.text()) : 0;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  function lampacProgressKey(item, season, episode) {
+    return season ? `${item.id}-s${season}e${episode}` : item.id;
+  }
+  function lampacSavedPosition(item, season, episode) {
+    const record = state.progress[lampacProgressKey(item, season, episode)];
+    return record && !record.completed ? Number(record.position || 0) : 0;
+  }
+  function lampacSourceUrl(entry, item) {
+    const url = new URL(entry.url, lampacOrigin());
+    lampacQuery(item).forEach((value, key) => { if (!url.searchParams.has(key)) url.searchParams.set(key, value); });
+    return url.href;
+  }
+  // The room keeps "what we watch", never a link: links are personal and short-lived,
+  // so every viewer asks Lampac for their own. Format "l:<source>|<voice>", 80 chars max.
+  function lampacRoomEdition(sourceId, voice) {
+    return `l:${sourceId}|${voice || ""}`.slice(0, 80);
+  }
+
+  // Opens the CineVault player on a Lampac list (a voice's episodes, or a film's voices)
+  // and wires progress and the shared room to it.
+  function startLampacPlayer(item, list, index, first, { voiceName = "", isMovie = false, sourceId = "", roomId = "" } = {}) {
+    const target = list[index];
+    let voice = voiceName;
+    let roomSync = null;
+    let currentRoom = "";
+    rememberHistory(item.id);
+    const player = window.CineVaultPlayer.open({
+      title: item.title,
+      voice,
+      stream: first.stream,
+      qualities: first.qualities,
+      subtitles: first.subtitles,
+      startAt: roomId ? 0 : lampacSavedPosition(item, target.s, target.e),
+      listTitle: isMovie ? "Озвучка" : "Серии",
+      keepPosition: isMovie,
+      autoNext: !isMovie,
+      episodes: list.map((entry, position) => ({ label: entry.label, note: entry.note || "", s: entry.s, e: entry.e, current: position === index, startAt: lampacSavedPosition(item, entry.s, entry.e) })),
+      resolve: async (position) => {
+        const entry = list[position];
+        const next = await lampacStream(entry.entry);
+        if (isMovie) { voice = entry.label; rememberLampacChoice({ voice }); }
+        return { ...next, voice: isMovie ? entry.label : voice };
+      },
+      onProgress: ({ position, duration, completed, s, e }) => {
+        if (!duration) return;
+        state.progress[lampacProgressKey(item, s, e)] = { titleId: item.id, providerId: "lampac", ...(s ? { seasonNumber: s, episodeNumber: e } : {}), position, duration, completed: completed || duration - position < 60, updatedAt: Date.now() };
+        saveState();
+      },
+      onEpisodeChange: (s, e) => { if (roomSync?.isHost !== false) roomSync?.publishEpisode?.(s, e)?.catch?.(() => {}); },
+      onRoom: async () => {
+        if (currentRoom) {
+          const copied = await copyWatchRoomLink(currentRoom);
+          player.toast(copied ? "Приглашение скопировано" : "Ссылка на комнату — в адресной строке");
+          return;
+        }
+        try {
+          const now = player.current();
+          const created = await createWatchRoom(item, now.s, now.e, { position: Number(player.video.currentTime || 0), playing: !player.video.paused, translation: lampacRoomEdition(sourceId, voice) });
+          attachRoom(created.room_id);
+          setWatchRoomInUrl(created.room_id);
+          const copied = await copyWatchRoomLink(created.room_id);
+          player.toast(copied ? "Комната создана, приглашение скопировано" : "Комната создана, ссылка — в адресной строке");
+        } catch (error) {
+          player.toast(error.message || "Комнату создать не удалось");
+        }
+      },
+      onChooseSource: () => openLampacChooser(item, { season: target.s || null, episode: target.e || null }),
+      onClose: () => {
+        if (roomSync) { roomSync.leave ? roomSync.leave() : roomSync.dispose(); setWatchRoomInUrl(""); }
+        roomSync = null;
+        player.video.removeEventListener("play", onPlay);
+        player.video.removeEventListener("pause", onPause);
+        player.video.removeEventListener("seeking", onSeeking);
+        if (activeTitleId === item.id) renderDetails(getTitleFromPage());
+      },
+    });
+    const onPlay = () => { if (roomSync && !roomSync.isApplying()) roomSync.publish({ playing: true }); };
+    const onPause = () => { if (roomSync && !roomSync.isApplying() && !player.video.seeking) roomSync.publish({ position: Number(player.video.currentTime || 0), playing: false }); };
+    // Sent when the seek starts: waiting for "seeked" let the room pull the host back first.
+    const onSeeking = () => { if (roomSync && !roomSync.isApplying()) roomSync.schedulePublish(); };
+    player.video.addEventListener("play", onPlay);
+    player.video.addEventListener("pause", onPause);
+    player.video.addEventListener("seeking", onSeeking);
+    function attachRoom(id) {
+      roomSync?.dispose();
+      currentRoom = id;
+      const now = player.current();
+      roomSync = installWatchRoomSync({
+        roomId: id,
+        video: player.video,
+        item,
+        season: now.s,
+        episode: now.e,
+        roomStatus: player.roomSlot,
+        onEpisodeChange: (s, e) => player.playEpisode(s, e),
+        onLeave: () => { roomSync = null; currentRoom = ""; player.roomSlot.hidden = true; player.video.dataset.roomLocked = "false"; setWatchRoomInUrl(""); },
+      });
+    }
+    if (roomId) attachRoom(roomId);
+    return player;
+  }
+
+  // An invitation link to a Lampac room: find the same source, voice, season and episode.
+  async function openLampacRoom(item, roomState, roomId) {
+    const [sourceId, voice = ""] = String(roomState.translation || "").slice(2).split("|");
+    const season = Number(roomState.season || 0);
+    const episode = Number(roomState.episode || 0);
+    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal player-choice-modal" role="dialog" aria-modal="true" aria-label="Совместный просмотр"><div class="eyebrow">Совместный просмотр</div><h2>${escapeHtml(item.title)}</h2><div class="lampac-status" role="status"><span class="loading-spinner" aria-hidden="true"></span><span>Подключаю тот же источник и озвучку…</span></div></section></div>`;
+    const fail = (text) => { modalRoot.innerHTML = ""; showWatchRoomEntryError(text); };
+    try {
+      const answer = await lampacJson(`/lite/events?${lampacQuery(item)}&life=false`, 30000);
+      const sources = Array.isArray(answer) ? answer : (answer?.online || []);
+      const source = sources.find((entry) => String(entry.balanser || entry.name || entry.url) === sourceId);
+      if (!source) return fail("Источника из комнаты сейчас нет в Lampac.");
+      let node = await lampacResolve(lampacSourceUrl(source, item), item);
+      if (!node) return fail("Источник из комнаты не нашёл этот фильм.");
+      let list;
+      let index = 0;
+      const isMovie = node.type === "movie";
+      if (isMovie) {
+        list = node.data.map((entry, position) => ({ entry, label: entry.translate || entry.title || `Вариант ${position + 1}` }));
+        index = Math.max(0, list.findIndex((entry) => entry.label === voice));
+      } else {
+        if (node.type === "season") {
+          const seasonEntry = node.data.find((entry, position) => lampacNumber(entry, position + 1) === season) || node.data[0];
+          node = await lampacJson(seasonEntry.url);
+        }
+        const wantedVoice = (node?.voice || []).find((entry) => entry.name === voice && !entry.active && entry.url);
+        if (wantedVoice) node = await lampacJson(wantedVoice.url);
+        if (node?.type !== "episode" || !node.data?.length) return fail("В источнике нет этой серии.");
+        list = node.data.map((entry, position) => {
+          const s = Number(entry.s || season || 1);
+          const e = Number(entry.e || position + 1);
+          return { entry, s, e, label: entry.name || `${e} серия` };
+        });
+        index = Math.max(0, list.findIndex((entry) => entry.s === season && entry.e === episode));
+      }
+      const first = await lampacStream(list[index].entry);
+      if (!first.stream) return fail("Источник не отдал видео.");
+      modalRoot.innerHTML = "";
+      startLampacPlayer(item, list, index, first, { voiceName: voice, isMovie, sourceId, roomId });
+    } catch (error) {
+      fail(`Lampac не ответил: ${error.message || "ошибка"}.`);
+    }
+  }
+
+  // Every way into the old players (history, "continue", resume cards) comes here first:
+  // when Lampac is on, the title opens in the Lampac window instead. Own library files,
+  // watch-together rooms and the explicit "previous sources" button keep the old players.
+  let lampacBypassUntil = 0;
+  function routeToLampac(item, season = null, episode = null, roomId = "") {
+    if (!item || roomId || Date.now() < lampacBypassUntil || !lampacOrigin()) return false;
+    if (hasOwnEpisodeSources(item) || libraryEpisodeFor(item)) return false;
+    if (!(Number(item.kinopoiskId || item.kinopoisk_id || 0) || item.imdbId || item.tmdbId)) return false;
+    openLampacChooser(item, { season, episode });
+    return true;
+  }
+
+  function openLampacChooser(item, { season = null, episode = null } = {}) {
+    const saved = lampacChoice();
+    const series = item.kind === "series";
+    const progress = progressForTitle(item);
+    const wantSeason = Number(season || progress?.seasonNumber || 1);
+    const wantEpisode = Number(episode || progress?.episodeNumber || 0);
+    const sources = [];
+    let active = "";
+    let token = 0;
+    let closed = false;
+    let finished = false;
+    modalRoot.innerHTML = `<div class="modal-backdrop" role="presentation"><section class="modal player-choice-modal lampac-modal" role="dialog" aria-modal="true" aria-labelledby="lampac-title"><div class="modal-head"><div><div class="eyebrow">Где смотреть</div><h2 id="lampac-title">${escapeHtml(item.title)}</h2></div><button class="icon-button" id="lampac-close" type="button" aria-label="Закрыть">${uiIcon("close")}</button></div><div class="lampac-sources" id="lampac-sources" role="tablist" aria-label="Источники"></div><div class="lampac-status" id="lampac-status" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><span>Ищу источники…</span></div><div class="lampac-body" id="lampac-body"></div></section></div>`;
+    const sourcesRoot = $("#lampac-sources");
+    const statusRoot = $("#lampac-status");
+    const body = $("#lampac-body");
+    const close = () => { closed = true; modalRoot.innerHTML = ""; };
+    $("#lampac-close").addEventListener("click", close);
+    $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
+    const setStatus = (text, { busy = false } = {}) => {
+      statusRoot.hidden = !text;
+      statusRoot.innerHTML = text ? `${busy ? `<span class="loading-spinner" aria-hidden="true"></span>` : ""}<span>${text}</span>` : "";
+    };
+    const renderSources = () => {
+      sourcesRoot.innerHTML = sources.map((source) => `<button class="filter-button${source.id === active ? " is-active" : ""}" type="button" role="tab" aria-selected="${source.id === active}" data-lampac-source="${escapeHtml(source.id)}">${escapeHtml(source.name)}${source.lines ? `<span class="lampac-quality">${lampacQualityLabel(source.lines)}</span>` : ""}</button>`).join("");
+    };
+    const progressKey = (seasonNumber, episodeNumber) => lampacProgressKey(item, seasonNumber, episodeNumber);
+    const play = async (list, index, { voiceName = "", isMovie = false } = {}) => {
+      setStatus("Подключаю видео…", { busy: true });
+      try {
+        const first = await lampacStream(list[index].entry);
+        if (closed) return;
+        if (!first.stream) throw new Error("источник не отдал ссылку");
+        rememberLampacChoice({ source: active, voice: voiceName || "" });
+        modalRoot.innerHTML = "";
+        closed = true;
+        startLampacPlayer(item, list, index, first, { voiceName, isMovie, sourceId: active });
+      } catch (error) {
+        if (!closed) setStatus(`Видео не открылось: ${escapeHtml(error.message || "ошибка")}. Попробуйте другую озвучку или источник.`);
+      }
+    };
+    const sourceName = () => sources.find((source) => source.id === active)?.name || "";
+    const resumeNote = (seasonNumber, episodeNumber) => {
+      const record = state.progress[progressKey(seasonNumber, episodeNumber)];
+      if (!record?.duration) return "";
+      if (record.completed) return "Просмотрено";
+      return `Остановились на ${formatTime(record.position)}`;
+    };
+    // A film: pick a voice (the one chosen before is preselected), then one "Смотреть"
+    // button starts it. Picking only selects, so the button is the single way to play.
+    const renderMovie = (node) => {
+      const voices = node.data;
+      const list = voices.map((entry, index) => ({ entry, label: entry.translate || entry.title || `Вариант ${index + 1}`, note: [entry.maxquality, entry.voice_name].filter(Boolean).join(" · ") }));
+      const remembered = list.findIndex((entry) => saved.voice && entry.label === saved.voice);
+      let chosen = Math.max(0, remembered);
+      const resume = resumeNote(null, null);
+      const resuming = resume && resume !== "Просмотрено";
+      const startLabel = () => `${resuming ? "Продолжить" : "Смотреть"} · ${escapeHtml(list[chosen].label)}`;
+      body.innerHTML = `<button class="primary-button lampac-start" type="button" data-lampac-start>${playerIcon("play")}<span data-start-label>${startLabel()}</span><em>${escapeHtml(sourceName())}</em>${resuming ? `<small>${escapeHtml(resume)}</small>` : ""}</button><div class="lampac-label">Озвучка</div><div class="lampac-voices" role="radiogroup" aria-label="Озвучка">${list.map((entry, index) => `<button class="lampac-voice${index === chosen ? " is-active" : ""}" type="button" role="radio" aria-checked="${index === chosen}" data-lampac-voice-pick="${index}"><span class="lampac-voice-mark" aria-hidden="true"></span><span class="lampac-voice-copy"><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(entry.note || "Качество выбирается в плеере")}</small></span>${index === remembered ? `<span class="player-choice-badge">Вы выбирали</span>` : ""}</button>`).join("")}</div>`;
+      const start = body.querySelector("[data-lampac-start]");
+      start.addEventListener("click", () => play(list, chosen, { voiceName: list[chosen].label, isMovie: true }));
+      body.querySelectorAll("[data-lampac-voice-pick]").forEach((button) => {
+        button.addEventListener("click", () => {
+          chosen = Number(button.dataset.lampacVoicePick);
+          body.querySelectorAll("[data-lampac-voice-pick]").forEach((other) => {
+            const on = other === button;
+            other.classList.toggle("is-active", on);
+            other.setAttribute("aria-checked", String(on));
+          });
+          start.querySelector("[data-start-label]").innerHTML = startLabel();
+        });
+        button.addEventListener("dblclick", () => start.click());
+      });
+      start.focus();
+    };
+    const renderEpisodes = (node, seasons, seasonNumber) => {
+      const voices = Array.isArray(node.voice) ? node.voice : [];
+      const activeVoice = voices.find((voice) => voice.active)?.name || "";
+      const list = node.data.map((entry, index) => {
+        const s = Number(entry.s || seasonNumber);
+        const e = Number(entry.e || index + 1);
+        return { entry, s, e, label: entry.name || `${e} серия`, note: resumeNote(s, e) };
+      });
+      // Where to start: the episode stopped on (or the next after a finished one), else the first.
+      let start = list.findIndex((entry) => entry.s === wantSeason && entry.e === wantEpisode);
+      const startRecord = start >= 0 ? state.progress[progressKey(list[start].s, list[start].e)] : null;
+      if (start >= 0 && startRecord?.completed && list[start + 1]) start += 1;
+      const resuming = start >= 0 && Boolean(resumeNote(list[start].s, list[start].e));
+      if (start < 0) start = 0;
+      const startNote = resumeNote(list[start].s, list[start].e);
+      const startButton = `<button class="primary-button lampac-start" type="button" data-lampac-start>${playerIcon("play")}<span>${resuming && startNote !== "Просмотрено" ? "Продолжить" : "Смотреть"} · ${seasons.length > 1 ? `${list[start].s} сезон, ` : ""}${escapeHtml(list[start].label)}${activeVoice ? `, ${escapeHtml(activeVoice)}` : ""}</span><em>${escapeHtml(sourceName())}</em>${startNote && startNote !== "Просмотрено" ? `<small>${escapeHtml(startNote)}</small>` : ""}</button>`;
+      const seasonTabs = seasons.length > 1 ? `<div class="lampac-label">Сезон</div><div class="season-tabs lampac-tabs">${seasons.map((entry, index) => `<button class="filter-button${lampacNumber(entry, index + 1) === seasonNumber ? " is-active" : ""}" type="button" data-lampac-season="${index}">${escapeHtml(entry.name || `${index + 1} сезон`)}</button>`).join("")}</div>` : "";
+      const voiceTabs = voices.length ? `<div class="lampac-label">Озвучка</div><div class="season-tabs lampac-tabs">${voices.map((voice, index) => `<button class="filter-button${voice.active ? " is-active" : ""}" type="button" data-lampac-voice="${index}">${escapeHtml(voice.name)}</button>`).join("")}</div>` : "";
+      const episodes = list.map((entry, index) => {
+        const record = state.progress[progressKey(entry.s, entry.e)];
+        const share = record?.duration ? Math.min(100, (record.position / record.duration) * 100) : 0;
+        const classes = ["lampac-episode", index === start ? "is-current" : "", record?.completed ? "is-watched" : ""].filter(Boolean).join(" ");
+        return `<button class="${classes}" type="button" data-lampac-episode="${index}" title="Смотреть: ${escapeHtml(entry.label)}"><span class="lampac-episode-play" aria-hidden="true">${playerIcon("play")}</span><span>${escapeHtml(entry.label)}</span>${share && !record.completed ? `<i style="width:${share.toFixed(1)}%"></i>` : ""}</button>`;
+      }).join("");
+      body.innerHTML = `${startButton}${seasonTabs}${voiceTabs}<div class="lampac-label">Серии — нажмите, чтобы смотреть</div><div class="lampac-episodes">${episodes}</div>`;
+      body.querySelector("[data-lampac-start]").addEventListener("click", () => play(list, start, { voiceName: activeVoice }));
+      body.querySelectorAll("[data-lampac-season]").forEach((button) => button.addEventListener("click", () => {
+        const index = Number(button.dataset.lampacSeason);
+        loadNode(seasons[index].url, seasons, lampacNumber(seasons[index], index + 1));
+      }));
+      body.querySelectorAll("[data-lampac-voice]").forEach((button) => button.addEventListener("click", () => {
+        const voice = voices[Number(button.dataset.lampacVoice)];
+        rememberLampacChoice({ voice: voice.name });
+        if (voice.url) loadNode(voice.url, seasons, seasonNumber);
+      }));
+      body.querySelectorAll("[data-lampac-episode]").forEach((button) => button.addEventListener("click", () => {
+        play(list, Number(button.dataset.lampacEpisode), { voiceName: activeVoice });
+      }));
+      body.querySelector("[data-lampac-start]").focus();
+    };
+    // A source's episode list opens on its default voice; switch once to the one chosen before.
+    const loadNode = async (url, seasons, seasonNumber, { preferSavedVoice = false } = {}) => {
+      const mine = ++token;
+      setStatus("Загружаю…", { busy: true });
+      try {
+        let node = await lampacJson(url);
+        if (preferSavedVoice && node?.type === "episode" && saved.voice) {
+          const voice = (node.voice || []).find((entry) => entry.name === saved.voice && !entry.active && entry.url);
+          if (voice) node = await lampacJson(voice.url);
+        }
+        if (closed || mine !== token) return;
+        setStatus("");
+        if (node?.type === "episode" && node.data?.length) return renderEpisodes(node, seasons, seasonNumber);
+        if (node?.type === "season" && node.data?.length) return openSeasons(node);
+        body.innerHTML = `<p class="player-choice-empty">Здесь пусто. Выберите другой источник.</p>`;
+      } catch {
+        if (!closed && mine === token) setStatus("Источник не ответил. Выберите другой.");
+      }
+    };
+    const openSeasons = (node) => {
+      const seasons = node.data;
+      const index = Math.max(0, seasons.findIndex((entry, position) => lampacNumber(entry, position + 1) === wantSeason));
+      loadNode(seasons[index].url, seasons, lampacNumber(seasons[index], index + 1), { preferSavedVoice: true });
+    };
+    const select = (id) => {
+      const source = sources.find((entry) => entry.id === id);
+      if (!source) return;
+      active = id;
+      token += 1;
+      renderSources();
+      setStatus(finished ? "" : `Ищу ещё источники… найдено ${sources.length}`, { busy: !finished });
+      if (source.node.type === "movie") renderMovie(source.node);
+      else if (source.node.type === "season") openSeasons(source.node);
+      else renderEpisodes(source.node, [], wantSeason);
+    };
+    sourcesRoot.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-lampac-source]");
+      if (button) select(button.dataset.lampacSource);
+    });
+    (async () => {
+      let list = [];
+      try {
+        const answer = await lampacJson(`/lite/events?${lampacQuery(item)}&life=false`, 30000);
+        list = Array.isArray(answer) ? answer : (answer?.online || []);
+      } catch {}
+      if (closed) return;
+      if (!list.length) {
+        finished = true;
+        setStatus("Lampac не отвечает.");
+        body.innerHTML = `<button class="secondary-button" type="button" data-lampac-fallback>Открыть прежние источники</button>`;
+        body.querySelector("[data-lampac-fallback]").addEventListener("click", () => { closed = true; modalRoot.innerHTML = ""; openWatchChooser(item, { season, episode, skipLampac: true }); });
+        return;
+      }
+      await Promise.all(list.map(async (entry) => {
+        const id = String(entry.balanser || entry.name || entry.url);
+        try {
+          // The list gives bare source addresses; the title's ids go on top, as Lampa does.
+          const url = new URL(entry.url, lampacOrigin());
+          lampacQuery(item).forEach((value, key) => { if (!url.searchParams.has(key)) url.searchParams.set(key, value); });
+          const node = await lampacResolve(url.href, item);
+          if (!node || closed) return;
+          const source = { id, name: entry.name || id, node, lines: 0 };
+          sources.push(source);
+          renderSources();
+          lampacSourceQuality(node).then((lines) => {
+            if (!lines || closed) return;
+            source.lines = lines;
+            renderSources();
+          }).catch(() => {});
+          if (!active || (id === saved.source && !body.dataset.touched)) select(id);
+          else setStatus(`Ищу ещё источники… найдено ${sources.length}`, { busy: true });
+        } catch {}
+      }));
+      if (closed) return;
+      finished = true;
+      if (!sources.length) {
+        setStatus("");
+        body.innerHTML = `<p class="player-choice-empty">Ни один источник не нашёл «${escapeHtml(item.title)}».</p><button class="secondary-button" type="button" data-lampac-fallback>Открыть прежние источники</button>`;
+        body.querySelector("[data-lampac-fallback]").addEventListener("click", () => { closed = true; modalRoot.innerHTML = ""; openWatchChooser(item, { season, episode, skipLampac: true }); });
+      } else if (statusRoot.textContent.startsWith("Ищу ещё")) {
+        setStatus("");
+      }
+    })();
+    body.addEventListener("click", () => { body.dataset.touched = "1"; });
+    sourcesRoot.addEventListener("click", () => { body.dataset.touched = "1"; });
+  }
+
   // One "Смотреть" button: list every player that has the title.
-  function openWatchChooser(item, { episode = null, season = null } = {}) {
+  function openWatchChooser(item, { episode = null, season = null, skipLampac = false } = {}) {
     if (!item) return;
     const main = Boolean(item) && (hasPlayableSource(item) || shouldRefreshKinopoiskPlayback(item));
     // In the showcase only our own player and trailers are shown.
     if (isShowcase()) return main ? openItemPlayer(item, episode, season) : openTrailer(item);
     const hasKinopoisk = Number(item?.kinopoiskId || item?.kinopoisk_id || 0) > 0;
+    if (!skipLampac && lampacOrigin() && (hasKinopoisk || item.imdbId || item.tmdbId)) return openLampacChooser(item, { season, episode });
+    if (skipLampac) lampacBypassUntil = Date.now() + 5000;
     if (!hasKinopoisk) return openItemPlayer(item, episode, season);
     // Alloha when it has the title (95% of those with 50 000+ votes, 11.11.2026), our own
     // CineVault player when it does not, the trailer when neither does. The chooser below is
@@ -5205,6 +5702,7 @@
   }
 
   function openEmbedProviderPlayer(item, provider) {
+    if (routeToLampac(item, null, null, "")) return;
     rememberPlayerContext();
     const key = `${item.id}-embed`;
     state.progress[key] = { titleId: item.id, player: `embed:${provider.id}`, providerName: provider.name, untracked: true, position: 0, duration: 0, completed: false, updatedAt: Date.now() };
@@ -5330,6 +5828,7 @@
 
   async function openItemPlayer(item, episodeNumber = null, seasonNumber = null, roomId = null, refreshSource = true) {
     if (!item) return;
+    if (refreshSource && routeToLampac(item, seasonNumber, episodeNumber, roomId)) return;
     rememberTasteInteraction(item, "played");
     stopDetailPrebuffer();
     const token = ++playerOpenToken;
@@ -7507,6 +8006,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   function openAlternativePlayer(item, { resume = false, roomId = "", season = null, episode = null, roomState = null, resumeRecord = null } = {}) {
     const kinopoiskId = Number(item?.kinopoiskId || item?.kinopoisk_id || 0);
     if (!kinopoiskId) return;
+    if (!roomState && routeToLampac(item, season, episode, roomId)) return;
     rememberPlayerContext();
     const progressKey = alternativeProgressKey(item);
     const savedProgress = resumeRecord ? {position:resumeRecord.completed ? 0 : resumeRecord.position, duration:resumeRecord.duration, seasonNumber:resumeRecord.season, episodeNumber:resumeRecord.episode, translationId:String(resumeRecord.edition || "").replace(/^alloha:/, "")} : state.progress[progressKey] || null;
