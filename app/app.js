@@ -3931,7 +3931,7 @@
     return String(value || "")
       .replace(/\/1344x756([?#].*)?$/i, "/678x380$1")
       .replace(/^(https?:\/\/avatars\.mds\.yandex\.net\/get-kinopoisk-image\/[^/]+\/[^/]+\/)(?:\d+x\d+|orig)([?#].*)?$/i, (_match, prefix, suffix = "") => `${prefix}300x450${suffix}`)
-      .replace(/(image\.tmdb\.org\/t\/p\/)(?:w\d+|original)\//i, "$1w300/");
+      .replace(/(image\.tmdb\.org\/t\/p\/|^\/tmdb\/t\/p\/)(?:w\d+|original)\//i, "$1w342/");
   }
   // Show a blurred small copy at once, then sharpen when the full image loads.
   const sharpBackgrounds = new Set();
@@ -3956,6 +3956,14 @@
     full.onerror = () => element.dispatchEvent(new Event("cv:frame-settled"));
     full.src = fullUrl;
     element.classList.add("is-blurred");
+  }
+  // TMDB posters: the browser picks the size for the card's width and the screen's density
+  // (sharp on Retina, light on phones); off-screen cards still load only when scrolled to.
+  const TMDB_SIZED = /^(.*\/t\/p\/)(?:w\d+|original)(\/.+)$/;
+  function tmdbPosterSrcset(url) {
+    const match = String(url || "").match(TMDB_SIZED);
+    if (!match) return "";
+    return ` srcset="${escapeHtml(`${match[1]}w342${match[2]}`)} 342w, ${escapeHtml(`${match[1]}w500${match[2]}`)} 500w, ${escapeHtml(`${match[1]}w780${match[2]}`)} 780w" sizes="(max-width: 720px) 42vw, 230px"`;
   }
   function highResolutionPosterUrl(value) {
     return String(value || "").replace(
@@ -6751,7 +6759,7 @@
     const meta = [item.year, genres[0] || (item.kind === "series" ? (item.seasons?.length ? countWord(item.seasons.length, "сезон", "сезона", "сезонов") : "") : formatRuntime(item.runtime))].filter(Boolean);
     const rating = catalogRatingValue(item);
     const posterAttrs = item.posterImage ? ` style="--poster:${escapeHtml(item.poster || "linear-gradient(145deg, #5c3b63, #221b31)")}"` : ` style="${posterStyle(item)}"`;
-    const posterImage = item.posterImage ? `<img class="poster-art-image" src="${escapeHtml(previewImageUrl(highResolutionPosterUrl(item.posterImage)))}" alt="" loading="lazy" decoding="async" fetchpriority="low" aria-hidden="true">` : "";
+    const posterImage = item.posterImage ? `<img class="poster-art-image" src="${escapeHtml(previewImageUrl(highResolutionPosterUrl(item.posterImage)))}"${tmdbPosterSrcset(item.posterImage)} alt="" loading="lazy" decoding="async" fetchpriority="low" aria-hidden="true">` : "";
     const upcoming = upcomingPremiere(item);
     const premiereLabel = upcoming ? String(upcoming).replace(/^Премьера\s+/, "").split(" · ")[0].replace(/\s+г\.$/, "") : "";
     return `<a class="poster-card ${extra}" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="Открыть ${escapeHtml(item.title)}"><div class="poster-art"${posterAttrs}>${posterImage}${posterTitleArt(item)}${!upcoming && rating ? `<span class="poster-rating">${rating.toFixed(1)}</span>` : ""}${progress ? `<span class="progress-bar" style="--progress:${progressPct}%"><i></i></span>` : ""}</div><div class="poster-card-copy"><strong>${escapeHtml(item.title)}</strong>${upcoming ? `<small class="premiere-date" title="${escapeHtml(upcoming)}">${escapeHtml(premiereLabel)}</small>` : ''}<div class="poster-card-meta">${meta.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div><p class="poster-card-description">${escapeHtml(item.description || "Описания пока нет.")}</p><div class="poster-card-tags">${genres.map((genre) => `<span>#${escapeHtml(genre)}</span>`).join("")}</div></div></a>`;
