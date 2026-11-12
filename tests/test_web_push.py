@@ -91,7 +91,7 @@ class NotifierTests(unittest.TestCase):
             self.notifier.db.execute('UPDATE devices SET created_at=?', (subscribed_ms / 1000,))
         notices = self.notifier.notices_for('tmdb-tv-1', '2026-11-10', '2026-11-12', {})
         self.assertEqual([n['key'] for n in notices], ['tmdb-tv-1:s2e2', 'tmdb-tv-1:s2e3'])
-        self.assertEqual(notices[0]['body'], '2 сезон, 2 серия')
+        self.assertEqual(notices[0]['body'], '2 сезон, 2 серия · уже можно смотреть')
 
 
 if __name__ == '__main__':

@@ -3,6 +3,8 @@
 Подписки на сериалы и фильмы — это список «Напомнить» в состоянии аккаунта (site-state).
 Устройство, разрешившее уведомления, присылает свою push-подписку; раз в 20 минут сервер
 спрашивает TMDB, что вышло, и шлёт по одному уведомлению на серию или премьеру.
+О серии пишет не в день выхода по TMDB, а когда её можно смотреть: она нашлась хотя бы
+в одном источнике Lampac. До того серия перепроверяется каждый круг, до недели.
 """
 import hmac
 import json
@@ -12,7 +14,7 @@ import sqlite3
 import threading
 import time
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urljoin, urlsplit, parse_qsl
 
 import requests
 
@@ -21,6 +23,63 @@ from tools.accounts import AccountError
 
 CHECK_EVERY = 20 * 60
 LOOKBACK_DAYS = 3
+EPISODE_LOOKBACK_DAYS = 7
+SOURCES_TO_ASK = 12
+
+
+class LampacProbe:
+    """Is an episode playable yet: the same questions the site asks Lampac."""
+
+    def __init__(self, origin, uid=''):
+        self.origin = origin.rstrip('/')
+        self.uid = uid
+
+    def _json(self, url, timeout=15):
+        target = urljoin(self.origin + '/', url)
+        parts = urlsplit(target)
+        params = dict(parse_qsl(parts.query, keep_blank_values=True))
+        params['rjson'] = 'true'
+        if self.uid and target.startswith(self.origin) and re.match(r'^/(lite|lifeevents)', parts.path):
+            params.setdefault('uid', self.uid)
+        response = requests.get(f'{parts.scheme}://{parts.netloc}{parts.path}?{urlencode(params)}', timeout=timeout)
+        response.raise_for_status()
+        text = response.text.strip()
+        return json.loads(text) if text[:1] in ('{', '[') else None
+
+    @staticmethod
+    def _number(entry, fallback):
+        for value in (entry.get('s'), entry.get('id'), (re.search(r'\d+', str(entry.get('name') or '')) or [None])[0]):
+            try:
+                number = int(value)
+                if number > 0:
+                    return number
+            except (TypeError, ValueError):
+                continue
+        return fallback
+
+    def has_episode(self, query, season, episode):
+        events = self._json(f'/lite/events?{urlencode(query)}&life=false', timeout=45)
+        entries = events if isinstance(events, list) else (events or {}).get('online') or []
+        for entry in [one for one in entries if one.get('show') is not False and one.get('url')][:SOURCES_TO_ASK]:
+            try:
+                url = urljoin(self.origin + '/', entry['url'])
+                have = dict(parse_qsl(urlsplit(url).query))
+                extra = {key: value for key, value in query.items() if key not in have and value}
+                node = self._json(url + ('&' if '?' in url else '?') + urlencode(extra))
+                if (node or {}).get('type') == 'similar':
+                    continue
+                if (node or {}).get('type') == 'season':
+                    seasons = node.get('data') or []
+                    match = next((one for position, one in enumerate(seasons) if self._number(one, position + 1) == season and one.get('url')), None)
+                    node = self._json(match['url']) if match else None
+                if (node or {}).get('type') != 'episode':
+                    continue
+                for position, item in enumerate(node.get('data') or []):
+                    if int(item.get('s') or season) == season and int(item.get('e') or position + 1) == episode:
+                        return True
+            except Exception:
+                continue
+        return False
 TITLE_RE = re.compile(r'^tmdb-(movie|tv)-(\d+)$')
 
 
@@ -38,6 +97,8 @@ class PushNotifier:
         self.vapid = Vapid(data_dir / 'vapid_private.pem', public_url or 'mailto:admin@localhost')
         self.tmdb_token = tmdb_token
         self.public_url = public_url.rstrip('/')
+        origin = os.environ.get('CINEVAULT_LAMPAC_ORIGIN', '').strip()
+        self.lampac = LampacProbe(origin, os.environ.get('CINEVAULT_LAMPAC_UID', '').strip()) if origin else None
 
     # ---- devices
     def add_device(self, user_id, subscription):
@@ -78,13 +139,16 @@ class PushNotifier:
         if title_id not in cache:
             try:
                 if kind == 'tv':
-                    show = self._tmdb(f'tv/{tmdb_id}?language=ru-RU')
+                    show = self._tmdb(f'tv/{tmdb_id}?language=ru-RU&append_to_response=external_ids')
                     last = show.get('last_episode_to_air') or {}
                     episodes = []
                     if last.get('season_number') is not None:
                         season = self._tmdb(f"tv/{tmdb_id}/season/{last['season_number']}?language=ru-RU")
                         episodes = season.get('episodes') or []
                     cache[title_id] = {'title': show.get('name') or '', 'image': show.get('backdrop_path') or show.get('poster_path') or '',
+                                       'query': {'title': show.get('name') or '', 'original_title': show.get('original_name') or '',
+                                                 'year': str(show.get('first_air_date') or '')[:4], 'serial': '1', 'id': str(tmdb_id),
+                                                 'imdb_id': (show.get('external_ids') or {}).get('imdb_id') or '', 'kinopoisk_id': ''},
                                        'items': [{'season': e.get('season_number'), 'episode': e.get('episode_number'), 'name': e.get('name') or '',
                                                   'date': e.get('air_date') or '', 'still': e.get('still_path') or ''} for e in episodes]}
                 else:
@@ -116,7 +180,10 @@ class PushNotifier:
                 url = f'/title/{title_id}/'
                 image = info['image']
                 title = info['title']
+            if kind == 'tv':
+                body += ' · уже можно смотреть'
             out.append({'key': key, 'title': title, 'body': body, 'url': url,
+                        'season': entry.get('season'), 'episode': entry.get('episode'), 'query': info.get('query'),
                         'image': f'{self.public_url}/tmdb/t/p/w780{image}' if image and self.public_url else ''})
         return out
 
@@ -125,7 +192,9 @@ class PushNotifier:
         if not devices:
             return 0
         today = datetime.now(timezone.utc).date().isoformat()
-        floor = datetime.fromtimestamp(time.time() - LOOKBACK_DAYS * 86400, timezone.utc).date().isoformat()
+        floor = datetime.fromtimestamp(time.time() - EPISODE_LOOKBACK_DAYS * 86400, timezone.utc).date().isoformat()
+        movie_floor = datetime.fromtimestamp(time.time() - LOOKBACK_DAYS * 86400, timezone.utc).date().isoformat()
+        playable = {}
         by_user = {}
         for device in devices:
             by_user.setdefault(device['user_id'], []).append(device)
@@ -140,16 +209,33 @@ class PushNotifier:
                 if not mark.get('on'):
                     continue
                 subscribed = datetime.fromtimestamp(max(float(mark.get('at') or 0) / 1000, first_device), timezone.utc).date().isoformat()
-                since = max(subscribed, floor)
+                since = max(subscribed, floor if title_id.startswith('tmdb-tv-') else movie_floor)
                 for notice in self.notices_for(title_id, since, today, cache):
                     with self.lock:
                         if self.db.execute('SELECT 1 FROM sent WHERE user_id=? AND key=?', (user_id, notice['key'])).fetchone():
                             continue
+                    if notice.get('season') is not None and not self._playable(notice, playable):
+                        continue
+                    with self.lock:
                         self.db.execute('INSERT INTO sent VALUES (?,?,?)', (user_id, notice['key'], time.time()))
                         self.db.commit()
+                    message = {name: notice[name] for name in ('key', 'title', 'body', 'url', 'image') if notice.get(name)}
                     for device in user_devices:
-                        sent_total += self.deliver(device, notice)
+                        sent_total += self.deliver(device, message)
         return sent_total
+
+    def _playable(self, notice, playable):
+        """An episode is announced once a source has it; without Lampac — by the air date."""
+        if not self.lampac or not notice.get('query'):
+            return True
+        key = notice['key']
+        if key not in playable:
+            try:
+                playable[key] = self.lampac.has_episode(notice['query'], int(notice['season']), int(notice['episode']))
+            except Exception as error:
+                print(f'push: lampac check failed: {type(error).__name__}', flush=True)
+                playable[key] = False
+        return playable[key]
 
     def deliver(self, device, message):
         from tools.web_push import send
