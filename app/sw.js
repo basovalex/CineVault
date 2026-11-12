@@ -1,4 +1,4 @@
-const SHELL_CACHE = "cinevault-shell-v167";
+const SHELL_CACHE = "cinevault-shell-v168";
 const API_CACHE = "cinevault-api-v1";
 const MEDIA_CACHE = "cinevault-media-v1";
 const SHELL = ["/", "/index.html", "/boot.js", "/styles.css", "/config.local.js", "/app.js", "/lampac-player.js", "/watch-together.js", "/watch-native.js", "/accounts.js", "/manifest.json", "/favicon.svg", "/assets/fonts/onest-cyrillic.woff2", "/assets/fonts/onest-latin.woff2", "/assets/fonts/geologica-cyrillic.woff2", "/assets/fonts/geologica-latin.woff2"];
@@ -60,6 +60,9 @@ self.addEventListener("fetch", (event) => {
     return;
   }
   if (url.origin !== self.location.origin) return;
+  // Live data goes straight from the page: on iPhone a service-worker request may not carry
+  // the site password, and a refused TMDB answer left series without seasons and air dates.
+  if (url.pathname.startsWith("/tmdb/3/") || (url.pathname.startsWith("/api/") && !isSavableCatalogRequest(event.request, url))) return;
   if (url.pathname.includes("/media/") || url.pathname === "/api/library" || url.pathname.includes("/api/library/episodes/") || url.pathname.startsWith("/api/catalog/downloads/")) {
     event.respondWith(fetch(event.request));
     return;
