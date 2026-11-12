@@ -8630,10 +8630,10 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   }
   // ---- Notifications on the device itself (Web Push): the server checks new episodes and
   // premieres of the "Напомнить" list and sends them even when the site is closed.
-  const PUSH_SUPPORTED = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
-  const IOS_BROWSER_TAB = /iPhone|iPad|iPod/.test(navigator.userAgent) && !window.matchMedia?.("(display-mode: standalone)").matches && !navigator.standalone;
+  const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  const iosBrowserTab = () => /iPhone|iPad|iPod/.test(navigator.userAgent) && !window.matchMedia?.("(display-mode: standalone)").matches && !navigator.standalone;
   async function pushSubscription() {
-    if (!PUSH_SUPPORTED) return null;
+    if (!pushSupported()) return null;
     const registration = await navigator.serviceWorker.ready;
     return registration.pushManager.getSubscription();
   }
@@ -8665,8 +8665,8 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     announceLive("Уведомления на этом устройстве выключены");
   }
   async function pushControlMarkup() {
-    if (IOS_BROWSER_TAB) return `<div class="notify-push"><span>Чтобы уведомления приходили на iPhone, добавьте сайт на экран «Домой» (Поделиться → На экран «Домой») и откройте его оттуда.</span></div>`;
-    if (!PUSH_SUPPORTED) return "";
+    if (iosBrowserTab()) return `<div class="notify-push"><span>Чтобы уведомления приходили на iPhone, добавьте сайт на экран «Домой» (Поделиться → На экран «Домой») и откройте его оттуда.</span></div>`;
+    if (!pushSupported()) return "";
     const on = Notification.permission === "granted" && Boolean(await pushSubscription().catch(() => null));
     return `<div class="notify-push"><span>${on ? "Уведомления приходят на это устройство" : "Присылать уведомления на это устройство, даже когда сайт закрыт"}</span><button class="${on ? "text-button" : "primary-button"}" data-push-toggle="${on ? "off" : "on"}" type="button">${on ? "Выключить" : "Включить"}</button></div>`;
   }
