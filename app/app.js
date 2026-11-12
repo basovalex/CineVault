@@ -127,9 +127,11 @@
   // index.html may have asked for the first catalogue page already; take it once if it matches.
   const posterOverrides = Object.freeze({
     "kinopoisk-5304403": "/data/posters/kinopoisk-5304403.jpg",
+    // The same series on TMDB: the site's own avatar stays with it after the move to TMDB.
+    "tmdb-tv-234763": "/data/posters/kinopoisk-5304403.jpg",
   });
   // Titles shown with their poster only: no wide frame on the title page or in shelves.
-  const posterOnlyTitles = new Set(["kinopoisk-5304403"]);
+  const posterOnlyTitles = new Set(["kinopoisk-5304403", "tmdb-tv-234763"]);
   // Hand-picked posters replace the server's wherever a catalogue answer brings the card.
   function overrideCatalogBody(path, body) {
     if (!String(path).startsWith("/api/catalog") || !body) return body;
@@ -2750,6 +2752,24 @@
       updateDocumentRoute({ type: "view", view: "catalog" });
       return;
     }
+    if (route.type === "title" && lampacOrigin() && !parseTmdbItemId(route.id) && (/^kinopoisk-\d+$/.test(route.id) || Number(getTitle(route.id)?.kinopoiskId || 0) > 0)) {
+      const known = knownTmdbId(route.id);
+      if (known) {
+        window.history.replaceState(window.history.state, "", routeForTitle(known));
+        return renderRoute({ type: "title", id: known }, { replaceHistory });
+      }
+      const legacy = getTitle(route.id);
+      if (legacy && !legacy.tmdbResolveTried) {
+        legacy.tmdbResolveTried = true;
+        renderCatalogLoading();
+        resolveTmdbId(legacy).catch(() => "").then((found) => {
+          if (readRouteFromLocation().id !== route.id) return;
+          if (found) { migrateTitleId(route.id, found) && saveState(); window.history.replaceState(window.history.state, "", routeForTitle(found)); renderRoute({ type: "title", id: found }, { replaceHistory }); }
+          else renderRoute(route, { replaceHistory });
+        });
+        return;
+      }
+    }
     if (route.type === "title") {
       const item = getTitle(route.id);
       // A TMDB card is fetched on demand; the page shows the loader until it arrives.
@@ -2984,8 +3004,11 @@
   // Taste is built from everything the viewer saved or watched, including
   // titles that are in none of the lists loaded for this page.
   async function loadSavedTitlesCatalog() {
-    const ids = [...new Set([...state.favorites, ...state.history, ...state.watchlist].map(String).filter(Boolean))].slice(0, 100);
-    const loaded = [];
+    const progressIds = Object.entries(state.progress || {}).map(([key, record]) => record?.titleId || String(key).replace(/-s\d+e\d+$|-alt$|-embed$/, ""));
+    const allIds = [...new Set([...state.favorites, ...state.history, ...state.watchlist, ...progressIds].map(String).filter(Boolean))].slice(0, 120);
+    const tmdbIds = allIds.filter((id) => parseTmdbItemId(id));
+    const ids = allIds.filter((id) => !parseTmdbItemId(id)).slice(0, 100);
+    const loaded = (await Promise.all(tmdbIds.map((id) => loadTmdbTitle(id).catch(() => null)))).filter(Boolean);
     for (let start = 0; start < ids.length; start += 50) {
       try {
         const params = new URLSearchParams({ ids: ids.slice(start, start + 50).join(","), limit: "50" });
@@ -3235,9 +3258,21 @@
         const prepared = isImportedDesperateHousewives ? { ...entry, posterImage: importedDesperateHousewives.posterImage, episodePosterUrls: importedDesperateHousewives.episodePosterUrls } : entry;
         return mergeCachedImportedDetails(prepared);
       });
+      let fresh = incoming;
+      if (savedIds) {
+        // Saved TMDB cards are not in the server catalogue: load them here and keep the saved order.
+        const tmdbItems = (await Promise.all(savedIds.filter((id) => parseTmdbItemId(id)).slice(0, 60).map((id) => {
+          const known = getTitle(id);
+          return known?.source === "tmdb" ? Promise.resolve(known) : loadTmdbTitle(id).catch(() => null);
+        }))).filter(Boolean);
+        if (requestId !== remoteCatalogRequest) return;
+        const order = new Map(savedIds.map((id, index) => [String(id), index]));
+        fresh = [...incoming, ...tmdbItems].sort((a, b) => (order.get(a.id) ?? 1e9) - (order.get(b.id) ?? 1e9));
+        payload.total = Number(payload.total || 0) + tmdbItems.length;
+      }
       // The list follows the chosen sort only; «what people watch now» lives on the home page.
       const base = append ? catalog : [];
-      catalog = [...new Map([...base, ...incoming].map((entry) => [entry.id, entry])).values()];
+      catalog = [...new Map([...base, ...fresh].map((entry) => [entry.id, entry])).values()];
       loadedCatalogKey = catalogListKey();
       remoteCatalog = { page: payload.page, pages: payload.pages, total: payload.total, facets: remoteCatalog.facets };
       state.catalogPage = payload.page;
@@ -3424,6 +3459,8 @@
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       if (activeTitleId) renderDetails(activeTitleId, { skipPlaybackRefresh: true });
       else render();
+      // Records synced from other devices may still name Kinopoisk cards.
+      migrateLegacyTitles();
     } catch { accountSyncUser = ""; }
   }
   function pushAccountState(keepalive = false) {
@@ -5399,7 +5436,7 @@
     const extra = parsed.kind === "series" ? "credits,external_ids,content_ratings" : "credits,external_ids,release_dates";
     const request = cvTmdb(`${kindPath}/${parsed.tmdbId}?language=ru-RU&append_to_response=${extra}`, 10000)
       .then((raw) => {
-        const item = tmdbToItem(raw, parsed.kind);
+        const item = withTitleOverrides(tmdbToItem(raw, parsed.kind));
         rememberLooseTitles([item]);
         return item;
       })
@@ -5410,7 +5447,123 @@
   function tmdbListItems(json, kindHint = "") {
     return (json?.results || [])
       .filter((raw) => (raw.media_type || kindHint) !== "person" && (raw.poster_path || raw.backdrop_path))
-      .map((raw) => tmdbToItem(raw, kindHint));
+      .map((raw) => withTitleOverrides(tmdbToItem(raw, kindHint)));
+  }
+
+  // ---- Moving Kinopoisk cards to TMDB. Each old id is matched once by title and year
+  // (remembered), then every saved record that names it is renamed: progress, history,
+  // favourites, ratings, chosen voices. Old addresses open the TMDB card.
+  const TMDB_MAP_KEY = "cinevault.tmdbMap.v1";
+  const KNOWN_TMDB_IDS = Object.freeze({ "kinopoisk-5304403": "tmdb-tv-234763", "kinopoisk-412344": "tmdb-tv-5920", "kinopoisk-277537": "tmdb-tv-1405" });
+  function tmdbMap() {
+    try { return JSON.parse(localStorage.getItem(TMDB_MAP_KEY) || "{}") || {}; } catch { return {}; }
+  }
+  function rememberTmdbMap(oldId, newId) {
+    const map = tmdbMap();
+    map[oldId] = newId;
+    try { localStorage.setItem(TMDB_MAP_KEY, JSON.stringify(map)); } catch {}
+  }
+  function knownTmdbId(oldId) {
+    return KNOWN_TMDB_IDS[oldId] || tmdbMap()[oldId] || "";
+  }
+  async function resolveTmdbId(item) {
+    if (!item) return "";
+    if (item.source === "tmdb" || parseTmdbItemId(item.id)) return item.id;
+    const known = knownTmdbId(item.id);
+    if (known) return known;
+    let found = "";
+    if (Number(item.tmdbId || 0) > 0) found = tmdbItemId(item.kind, item.tmdbId);
+    const kindPath = item.kind === "series" ? "tv" : "movie";
+    const year = Number(item.year || 0);
+    const yearParam = year ? `&${item.kind === "series" ? "first_air_date_year" : "year"}=${year}` : "";
+    for (const query of [...new Set([item.originalTitle, item.title].filter(Boolean))]) {
+      if (found) break;
+      for (const withYear of [true, false]) {
+        const json = await cvTmdb(`search/${kindPath}?query=${encodeURIComponent(query)}&language=ru-RU${withYear ? yearParam : ""}`).catch(() => null);
+        const match = (json?.results || []).find((entry) => {
+          const entryYear = Number(String(entry.release_date || entry.first_air_date || "").slice(0, 4));
+          return !year || !entryYear || Math.abs(entryYear - year) <= 1;
+        });
+        if (match) { found = tmdbItemId(item.kind, match.id); break; }
+        if (!yearParam) break;
+      }
+    }
+    if (found) rememberTmdbMap(item.id, found);
+    return found;
+  }
+  function renameTitleKey(key, oldId, newId) {
+    if (key === oldId) return newId;
+    if (key.startsWith(`${oldId}-`)) return `${newId}${key.slice(oldId.length)}`;
+    return key;
+  }
+  function migrateTitleId(oldId, newId) {
+    if (!oldId || !newId || oldId === newId) return false;
+    let changed = false;
+    const renameObject = (object, merge) => {
+      if (!object || typeof object !== "object" || Array.isArray(object)) return object;
+      const next = {};
+      Object.entries(object).forEach(([key, value]) => {
+        const target = renameTitleKey(key, oldId, newId);
+        if (target !== key) changed = true;
+        next[target] = target in next && merge ? merge(next[target], value) : value;
+      });
+      return next;
+    };
+    const renameList = (list) => {
+      if (!Array.isArray(list)) return list;
+      if (!list.includes(oldId)) return list;
+      changed = true;
+      return [...new Set(list.map((id) => (id === oldId ? newId : id)))];
+    };
+    const newer = (a, b) => (Number(b?.updatedAt || 0) > Number(a?.updatedAt || 0) ? b : a);
+    state.progress = renameObject(state.progress, newer);
+    Object.values(state.progress || {}).forEach((record) => {
+      if (record && record.titleId === oldId) { record.titleId = newId; changed = true; }
+    });
+    ["favorites", "watchlist", "history", "recommendationHistory"].forEach((name) => { state[name] = renameList(state[name]); });
+    ["historyAt", "ratings", "voiceSelections", "playbackSelections", "offline"].forEach((name) => { state[name] = renameObject(state[name], (a, b) => b); });
+    const choice = lampacChoiceStore();
+    if (choice.titles?.[oldId]) {
+      choice.titles[newId] = { ...choice.titles[oldId], ...(choice.titles[newId] || {}) };
+      delete choice.titles[oldId];
+      try { localStorage.setItem(LAMPAC_CHOICE_KEY, JSON.stringify(choice)); } catch {}
+    }
+    return changed;
+  }
+  function legacyTitleIds() {
+    const ids = new Set();
+    // Base title of a record key: "<id>", "<id>-s2e7", "<id>-alt", "<id>-embed".
+    const add = (id) => {
+      const base = String(id || "").replace(/-s\d+e\d+$|-alt$|-embed$/, "");
+      if (base && !parseTmdbItemId(base) && !/^(rutube|library|local)-/.test(base)) ids.add(base);
+    };
+    Object.keys(state.progress || {}).forEach(add);
+    Object.values(state.progress || {}).forEach((record) => add(record?.titleId));
+    ["favorites", "watchlist", "history"].forEach((name) => (state[name] || []).forEach(add));
+    return [...ids];
+  }
+  let legacyMigration = null;
+  function migrateLegacyTitles() {
+    if (!lampacOrigin()) return Promise.resolve();
+    if (legacyMigration) return legacyMigration;
+    legacyMigration = (async () => {
+      let changed = false;
+      for (const oldId of legacyTitleIds()) {
+        let newId = knownTmdbId(oldId);
+        if (!newId) {
+          const item = getTitle(oldId) || await ensureCatalogTitle(oldId).catch(() => null);
+          // Only cards of the Kinopoisk catalogue move; own library files keep their ids.
+          if (!item || !(Number(item.kinopoiskId || 0) > 0 || /^kinopoisk-\d+$/.test(oldId))) continue;
+          newId = await resolveTmdbId(item).catch(() => "");
+        }
+        if (newId && migrateTitleId(oldId, newId)) changed = true;
+      }
+      if (changed) {
+        saveState();
+        if (state.view === "home" && readRouteFromLocation().type !== "title") render();
+      }
+    })().finally(() => { legacyMigration = null; });
+    return legacyMigration;
   }
 
   function lampacProgressKey(item, season, episode) {
@@ -9291,6 +9444,8 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       initialCatalogReady = true;
       const readyRoute = readRouteFromLocation();
       renderRoute(readyRoute, { replaceHistory: true, reuseCatalogPage: readyRoute.type === "view" && initialRoute.type === "view" && readyRoute.view === initialRoute.view });
+      // Saved records still naming Kinopoisk cards move to TMDB in the background.
+      window.setTimeout(() => { migrateLegacyTitles().then(() => loadSavedTitlesCatalog()).then(() => { if (state.view === "home" && readRouteFromLocation().type !== "title") render(); }).catch(() => {}); }, 1500);
       return loadEpisodeAssets();
     })
     .then(() => {
