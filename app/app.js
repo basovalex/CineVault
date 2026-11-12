@@ -2496,7 +2496,7 @@
   // be opened, but they must not join the list the viewer searched or filtered.
   let looseTitles = [];
   function rememberLooseTitles(items) {
-    looseTitles = [...new Map([...looseTitles, ...items].filter(Boolean).map((entry) => [entry.id, entry])).values()].slice(-400);
+    looseTitles = [...new Map([...looseTitles, ...items].filter(Boolean).map((entry) => [entry.id, entry])).values()].slice(-2000);
   }
   // Episode ratings of popular series (IMDb), by catalogue id; null when there is no map to show.
   const episodeRatingsCache = new Map();
@@ -2637,6 +2637,7 @@
 
   function routeForView(view) { return ROUTE_PATHS[view] || ROUTE_PATHS.catalog; }
   function routeForTitle(id) { return `/title/${encodeURIComponent(String(id))}/`; }
+  function routeForPerson(id) { return `/person/${encodeURIComponent(String(id))}/`; }
 
   function readRouteFromLocation() {
     // Addresses published before the catalogue moved to Kinopoisk ids (the sitemap still lists them).
@@ -2651,6 +2652,8 @@
       if (canonical !== id) window.history.replaceState(window.history.state, "", routeForTitle(canonical));
       return { type: "title", id: canonical };
     }
+    const personMatch = path.match(/^\/person\/(\d+)\/$/);
+    if (personMatch) return { type: "person", id: personMatch[1] };
     return { type: "view", view: ROUTE_VIEWS[path] || "home" };
   }
 
@@ -2750,6 +2753,12 @@
       state.view = "catalog";
       renderCatalogLoading();
       updateDocumentRoute({ type: "view", view: "catalog" });
+      return;
+    }
+    if (route.type === "person") {
+      activeTitleId = null;
+      renderPersonPage(route.id);
+      scheduleScroll(0);
       return;
     }
     if (route.type === "title" && lampacOrigin() && !parseTmdbItemId(route.id) && (/^kinopoisk-\d+$/.test(route.id) || Number(getTitle(route.id)?.kinopoiskId || 0) > 0)) {
@@ -2944,6 +2953,15 @@
     if (detailLink && app.contains(detailLink) && shouldHandleLink(event, detailLink)) {
       event.preventDefault();
       openTitleRoute(detailLink.dataset.openTitle, { trigger: detailLink });
+      return;
+    }
+    const personLink = element.closest("[data-open-person]");
+    if (personLink && app.contains(personLink) && shouldHandleLink(event, personLink)) {
+      event.preventDefault();
+      updateCurrentHistoryScroll();
+      const route = { type: "person", id: personLink.dataset.openPerson };
+      window.history.pushState(routeHistoryState(route, 0, { hasPreviousView: true }), "", routeForPerson(route.id));
+      renderRoute(route);
       return;
     }
     const backLink = element.closest("[data-back-from-detail]");
@@ -7705,7 +7723,90 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   }
 
   const similarTitlesCache = new Map();
+  // Under a TMDB card, as in Lampa: the cast with photos, then TMDB's recommendations and similar titles.
+  const tmdbExtrasCache = new Map();
+  function personCardMarkup(person) {
+    const photo = person.photo ? `<img src="${escapeHtml(person.photo)}" alt="" loading="lazy" decoding="async">` : `<span class="person-card-initial" aria-hidden="true">${escapeHtml(String(person.name || "?").slice(0, 1))}</span>`;
+    return `<a class="person-card" href="${routeForPerson(person.id)}" data-open-person="${escapeHtml(String(person.id))}"><span class="person-card-photo">${photo}</span><strong>${escapeHtml(person.name)}</strong>${person.role ? `<small>${escapeHtml(person.role)}</small>` : ""}</a>`;
+  }
+  function tmdbShelfSection(key, title, items) {
+    if (!items.length) return "";
+    return `<section class="discovery-shelf" data-tmdb-extra="${escapeHtml(key)}"><div class="section-header discovery-shelf-header"><div><h2>${escapeHtml(title)}</h2></div></div><div class="discovery-rail">${items.map((candidate) => poster(candidate)).join("")}</div></section>`;
+  }
+  async function renderTmdbExtras(item) {
+    let pending = tmdbExtrasCache.get(item.id);
+    if (!pending) {
+      const kindPath = item.kind === "series" ? "tv" : "movie";
+      pending = Promise.all([
+        cvTmdb(`${kindPath}/${item.tmdbId}/recommendations?language=ru-RU`).catch(() => null),
+        cvTmdb(`${kindPath}/${item.tmdbId}/similar?language=ru-RU`).catch(() => null),
+      ]).then(([recommended, similar]) => {
+        const recommendations = tmdbListItems(recommended, kindPath).slice(0, 20);
+        const seen = new Set(recommendations.map((entry) => entry.id));
+        const alike = tmdbListItems(similar, kindPath).filter((entry) => !seen.has(entry.id)).slice(0, 20);
+        rememberLooseTitles([...recommendations, ...alike]);
+        return { recommendations, alike };
+      });
+      tmdbExtrasCache.set(item.id, pending);
+    }
+    const cast = (item.people || []).filter((person) => person.name).slice(0, 20);
+    const castSection = cast.length ? `<section class="discovery-shelf person-shelf" data-tmdb-extra="cast"><div class="section-header discovery-shelf-header"><div><h2>В ролях</h2></div></div><div class="discovery-rail person-rail">${cast.map(personCardMarkup).join("")}</div></section>` : "";
+    if (castSection && !page.querySelector('[data-tmdb-extra="cast"]')) page.insertAdjacentHTML("beforeend", castSection);
+    try {
+      const { recommendations, alike } = await pending;
+      if (activeTitleId !== item.id) return;
+      if (!page.querySelector('[data-tmdb-extra="recommendations"]')) page.insertAdjacentHTML("beforeend", tmdbShelfSection("recommendations", "Рекомендации", recommendations));
+      if (!page.querySelector('[data-tmdb-extra="similar"]')) page.insertAdjacentHTML("beforeend", tmdbShelfSection("similar", "Похожие", alike));
+      hydrateLazyPosters();
+    } catch { tmdbExtrasCache.delete(item.id); }
+  }
+
+  // A person, as in Lampa: photo, dates, biography and what they are known for, best first.
+  const tmdbPeopleCache = new Map();
+  async function renderPersonPage(personId) {
+    state.view = "person";
+    page.innerHTML = `<div class="page-heading"><a class="text-button" href="/" data-back-from-detail>Назад</a></div><section class="person-page" aria-busy="true"><div class="loading-spinner" aria-hidden="true"></div></section>`;
+    let data = tmdbPeopleCache.get(personId);
+    if (!data) {
+      data = cvTmdb(`person/${personId}?language=ru-RU&append_to_response=combined_credits`).then(async (person) => {
+        if (!person.biography) {
+          const english = await cvTmdb(`person/${personId}?language=en-US`).catch(() => null);
+          if (english?.biography) person.biography = english.biography;
+        }
+        person.biography = String(person.biography || "").replace(/\*\*|__/g, "").trim();
+        return person;
+      });
+      tmdbPeopleCache.set(personId, data);
+    }
+    let person;
+    try { person = await data; } catch {
+      tmdbPeopleCache.delete(personId);
+      if (readRouteFromLocation().id !== personId) return;
+      page.innerHTML = `<section class="section"><div class="empty-state"><h2>Не удалось загрузить</h2><p>Попробуйте открыть страницу ещё раз.</p></div></section>`;
+      return;
+    }
+    if (readRouteFromLocation().type !== "person" || readRouteFromLocation().id !== personId) return;
+    const credits = [...(person.combined_credits?.cast || []), ...(person.combined_credits?.crew || []).filter((entry) => entry.job === "Director")];
+    const unique = [...new Map(credits.filter((entry) => entry.media_type === "movie" || entry.media_type === "tv").map((entry) => [`${entry.media_type}-${entry.id}`, entry])).values()];
+    const ranked = unique.sort((a, b) => (Number(b.vote_count || 0) * Number(b.vote_average || 0)) - (Number(a.vote_count || 0) * Number(a.vote_average || 0)));
+    const toItems = (list) => list.map((raw) => withTitleOverrides(tmdbToItem(raw))).filter((entry) => entry.posterImage);
+    const known = toItems(ranked.slice(0, 20));
+    const movies = toItems(ranked.filter((entry) => entry.media_type === "movie"));
+    const shows = toItems(ranked.filter((entry) => entry.media_type === "tv"));
+    rememberLooseTitles([...known, ...movies, ...shows]);
+    const age = person.birthday ? Math.floor((new Date(person.deathday || Date.now()) - new Date(person.birthday)) / (365.25 * 864e5)) : 0;
+    const dates = person.birthday ? `${new Date(person.birthday).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}${person.deathday ? ` — ${new Date(person.deathday).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}` : ""}${age ? ` · ${countWord(age, "год", "года", "лет")}` : ""}` : "";
+    const department = { Acting: "Актёр", Directing: "Режиссёр", Writing: "Сценарист", Production: "Продюсер" }[person.known_for_department] || "";
+    const photo = person.profile_path ? `<img class="person-photo" src="${escapeHtml(tmdbImage(person.profile_path, "w500"))}" alt="">` : "";
+    page.innerHTML = `<div class="page-heading"><a class="text-button" href="/" data-back-from-detail>Назад</a></div>
+      <section class="person-page"><div class="person-head">${photo}<div class="person-info"><div class="eyebrow">${escapeHtml(department || "Персона")}</div><h1>${escapeHtml(person.name || "")}</h1>${dates ? `<p class="person-dates">${escapeHtml(dates)}</p>` : ""}${person.place_of_birth ? `<p class="person-place">${escapeHtml(person.place_of_birth)}</p>` : ""}${person.biography ? `<p class="person-bio">${escapeHtml(person.biography)}</p>` : ""}</div></div></section>
+      ${tmdbShelfSection("known", "Известность", known)}${tmdbShelfSection("movies", `Фильмы · ${movies.length}`, movies)}${tmdbShelfSection("shows", `Сериалы · ${shows.length}`, shows)}`;
+    document.title = `${person.name} — CineVault`;
+    hydrateLazyPosters();
+  }
+
   async function renderSimilarTitles(item) {
+    if (item.source === "tmdb") return renderTmdbExtras(item);
     const genre = genresForItem(item)[0];
     if (!genre) return;
     let pending = similarTitlesCache.get(item.id);
