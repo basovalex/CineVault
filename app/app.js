@@ -3236,6 +3236,29 @@
         if (initial || state.view !== "home") render();
         return;
       }
+      if (lampacOrigin() && !savedIds && !state.query && ["catalog", "movies", "series", "upcoming"].includes(state.view)) {
+        // The catalogue as Lampa's sections: TMDB discover by kind, genre and sort.
+        remoteCatalogLoading = true;
+        remoteCatalogError = false;
+        if (!initial && !quiet && catalog.length) renderCatalogView();
+        const kinds = state.view === "movies" || state.view === "upcoming" ? ["movie"] : state.view === "series" ? ["tv"] : ["movie", "tv"];
+        const answers = await Promise.all(kinds.map((kind) => cvTmdb(tmdbDiscoverPath(kind, pageNumber), 12000).catch(() => null)));
+        if (requestId !== remoteCatalogRequest) return;
+        const lists = answers.map((json, index) => tmdbListItems(json, kinds[index]));
+        const found = [];
+        for (let index = 0; index < Math.max(0, ...lists.map((list) => list.length)); index += 1) lists.forEach((list) => { if (list[index]) found.push(list[index]); });
+        rememberLooseTitles(found);
+        const base = append ? catalog : [];
+        catalog = [...new Map([...base, ...found].map((entry) => [entry.id, entry])).values()];
+        loadedCatalogKey = catalogListKey();
+        const pages = Math.min(50, Math.max(1, ...answers.map((json) => Number(json?.total_pages || 1))));
+        remoteCatalog = { page: pageNumber, pages, total: answers.reduce((sum, json) => sum + Number(json?.total_results || 0), 0), facets: remoteCatalog.facets };
+        state.catalogPage = pageNumber;
+        remoteCatalogLoading = false;
+        if (!append && (initial || state.view !== "home")) render();
+        else if (append) render();
+        return;
+      }
       if (lampacOrigin() && state.query && !savedIds) {
         // Full search on TMDB, page by page, as Lampa does.
         remoteCatalogLoading = true;
@@ -6354,7 +6377,7 @@
   function persistAndRender() { saveState(); render(); }
   // A menu of our own instead of a native <select>: Chrome on Windows would not open
   // the native list here, and this one looks and behaves the same everywhere.
-  const CATALOG_SORTS = [["now", "Интерес зрителей"], ["audience", "Больше всего оценок"], ["rating", "По рейтингу"], ["year", "Сначала новые"], ["title", "По алфавиту"]];
+  const CATALOG_SORTS = [["now", "Популярное"], ["audience", "Больше всего оценок"], ["rating", "По рейтингу"], ["year", "Сначала новые"], ["title", "По алфавиту"]];
   function catalogSortMenuMarkup() {
     if (state.catalogCollection === "upcoming") return '<span class="studio-sort-button">По числу ожидающих</span>';
     const current = CATALOG_SORTS.find(([value]) => value === state.catalogSort) || CATALOG_SORTS[0];
@@ -6860,7 +6883,7 @@
   });
   const catalogCollections = Object.freeze([
     { id: "new", title: "Последний год", description: "Вышедшие фильмы и сериалы этого и прошлого года" },
-    { id: "audience", title: "Любимые зрителями", description: "По числу оценок на IMDb и Кинопоиске" },
+    { id: "audience", title: "Любимые зрителями", description: "Больше всего оценок зрителей" },
   ]);
 
   function normalizeCatalogGenre(value) {
@@ -7119,6 +7142,12 @@
   }
 
   function catalogGenreOptions() {
+    if (lampacOrigin()) {
+      // TMDB genres of the section, as in Lampa's filter.
+      const valid = state.view === "movies" ? [TMDB_MOVIE_GENRE_IDS] : state.view === "series" ? [TMDB_TV_GENRE_IDS] : [TMDB_MOVIE_GENRE_IDS, TMDB_TV_GENRE_IDS];
+      const names = [...new Set(Object.entries(TMDB_GENRES).filter(([id]) => valid.some((set) => set.has(Number(id)))).map(([, name]) => name))];
+      return names.filter((name) => !["новости", "ток-шоу", "мыльная опера", "телефильм"].includes(name)).sort((a, b) => a.localeCompare(b, "ru")).map((genre) => ({ genre, count: 1 }));
+    }
     const facets = currentFacets();
     if (!facets && facetsKind() && !facetsByKind.has(`loading:${facetsKind()}`)) {
       facetsByKind.set(`loading:${facetsKind()}`, true);
@@ -7761,6 +7790,37 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   let tmdbHomeGenreCursor = 0;
   const tmdbHomeGenreRows = [];
   const TMDB_HOME_GENRES = [[28, "Боевики"], [35, "Комедии"], [18, "Драмы"], [878, "Фантастика"], [53, "Триллеры"], [16, "Мультфильмы"], [27, "Ужасы"], [10749, "Мелодрамы"], [80, "Криминал"], [12, "Приключения"], [14, "Фэнтези"], [9648, "Детективы"], [10751, "Семейные"], [36, "Исторические"], [10752, "Военные"], [99, "Документальные"], [37, "Вестерны"], [10402, "Музыкальные"]];
+  const TMDB_MOVIE_GENRE_IDS = new Set([28, 12, 16, 35, 80, 99, 18, 10751, 14, 36, 27, 10402, 9648, 10749, 878, 10770, 53, 10752, 37]);
+  const TMDB_TV_GENRE_IDS = new Set([10759, 16, 35, 80, 99, 18, 10751, 10762, 9648, 10763, 10764, 10765, 10766, 10767, 10768, 37]);
+  function tmdbDiscoverPath(kind, page = 1) {
+    const params = new URLSearchParams({ language: "ru-RU", page: String(page), include_adult: "false" });
+    const dateField = kind === "movie" ? "primary_release_date" : "first_air_date";
+    const sort = state.catalogSort || "now";
+    if (state.view === "upcoming") {
+      params.set(`${dateField}.gte`, tmdbDay(1));
+      params.set("sort_by", "popularity.desc");
+    } else if (state.catalogCollection === "new") {
+      // «Последний год», as Lampa's title_last_year: this and last year, already out.
+      params.set(`${dateField}.gte`, `${new Date().getFullYear() - 1}-01-01`);
+      params.set(`${dateField}.lte`, tmdbDay());
+      params.set("sort_by", "popularity.desc");
+      params.set("vote_count.gte", "20");
+    } else if (state.catalogCollection === "audience") {
+      params.set("sort_by", "vote_count.desc");
+    } else if (sort === "audience") params.set("sort_by", "vote_count.desc");
+    else if (sort === "rating") { params.set("sort_by", "vote_average.desc"); params.set("vote_count.gte", kind === "movie" ? "500" : "200"); }
+    else if (sort === "year") { params.set("sort_by", `${dateField}.desc`); params.set(`${dateField}.lte`, tmdbDay()); params.set("vote_count.gte", "20"); }
+    else if (sort === "title") { params.set("sort_by", kind === "movie" ? "original_title.asc" : "name.asc"); params.set("vote_count.gte", "300"); }
+    else params.set("sort_by", "popularity.desc");
+    const genre = String(state.catalogGenre || "").trim().toLowerCase();
+    if (genre) {
+      const valid = kind === "movie" ? TMDB_MOVIE_GENRE_IDS : TMDB_TV_GENRE_IDS;
+      const ids = Object.entries(TMDB_GENRES).filter(([id, name]) => name === genre && valid.has(Number(id))).map(([id]) => id);
+      if (genre === "мультфильм" || genre === "анимация") ids.push("16");
+      params.set("with_genres", ids.length ? [...new Set(ids)].join("|") : "0");
+    }
+    return `discover/${kind}?${params}`;
+  }
   function tmdbDay(offsetDays = 0) {
     return new Date(Date.now() + offsetDays * 864e5).toISOString().slice(0, 10);
   }
