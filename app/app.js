@@ -3251,7 +3251,8 @@
         const base = append ? catalog : [];
         catalog = [...new Map([...base, ...found].map((entry) => [entry.id, entry])).values()];
         loadedCatalogKey = catalogListKey();
-        const pages = Math.min(50, Math.max(1, ...answers.map((json) => Number(json?.total_pages || 1))));
+        // TMDB serves up to 500 pages of a list: the catalogue keeps loading while there are any.
+        const pages = Math.min(500, Math.max(1, ...answers.map((json) => Number(json?.total_pages || 1))));
         remoteCatalog = { page: pageNumber, pages, total: answers.reduce((sum, json) => sum + Number(json?.total_results || 0), 0), facets: remoteCatalog.facets };
         state.catalogPage = pageNumber;
         remoteCatalogLoading = false;
@@ -7904,20 +7905,25 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     }
     if (readRouteFromLocation().type !== "person" || readRouteFromLocation().id !== personId) return;
     const credits = [...(person.combined_credits?.cast || []), ...(person.combined_credits?.crew || []).filter((entry) => entry.job === "Director")];
-    const unique = [...new Map(credits.filter((entry) => entry.media_type === "movie" || entry.media_type === "tv").map((entry) => [`${entry.media_type}-${entry.id}`, entry])).values()];
-    const ranked = unique.sort((a, b) => (Number(b.vote_count || 0) * Number(b.vote_average || 0)) - (Number(a.vote_count || 0) * Number(a.vote_average || 0)));
+    // Only real roles, newest first: no talk shows, news, award shows or playing oneself.
+    const selfRole = /\b(himself|herself|themselves|self)\b|сам(а|и)?\s*себя|себя|камео|cameo|archive footage|архивн/i;
+    const notRoles = new Set([10767, 10763, 10764]);
+    const unique = [...new Map(credits
+      .filter((entry) => (entry.media_type === "movie" || entry.media_type === "tv") && !selfRole.test(String(entry.character || "")) && !(entry.genre_ids || []).some((id) => notRoles.has(id)))
+      .map((entry) => [`${entry.media_type}-${entry.id}`, entry])).values()];
+    const dateOf = (entry) => String(entry.release_date || entry.first_air_date || "");
+    const today = new Date().toISOString().slice(0, 10);
     const toItems = (list) => list.map((raw) => withTitleOverrides(tmdbToItem(raw))).filter((entry) => entry.posterImage);
-    const known = toItems(ranked.slice(0, 20));
-    const movies = toItems(ranked.filter((entry) => entry.media_type === "movie"));
-    const shows = toItems(ranked.filter((entry) => entry.media_type === "tv"));
-    rememberLooseTitles([...known, ...movies, ...shows]);
+    const upcoming = toItems(unique.filter((entry) => !dateOf(entry) || dateOf(entry) > today).sort((a, b) => (dateOf(a) || "9999").localeCompare(dateOf(b) || "9999")));
+    const recent = toItems(unique.filter((entry) => dateOf(entry) && dateOf(entry) <= today).sort((a, b) => dateOf(b).localeCompare(dateOf(a)))).slice(0, 40);
+    rememberLooseTitles([...upcoming, ...recent]);
     const age = person.birthday ? Math.floor((new Date(person.deathday || Date.now()) - new Date(person.birthday)) / (365.25 * 864e5)) : 0;
     const dates = person.birthday ? `${new Date(person.birthday).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}${person.deathday ? ` — ${new Date(person.deathday).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}` : ""}${age ? ` · ${countWord(age, "год", "года", "лет")}` : ""}` : "";
     const department = { Acting: "Актёр", Directing: "Режиссёр", Writing: "Сценарист", Production: "Продюсер" }[person.known_for_department] || "";
     const photo = person.profile_path ? `<img class="person-photo" src="${escapeHtml(tmdbImage(person.profile_path, "w500"))}" alt="">` : "";
     page.innerHTML = `<div class="page-heading"><a class="text-button" href="/" data-back-from-detail>Назад</a></div>
       <section class="person-page"><div class="person-head">${photo}<div class="person-info"><div class="eyebrow">${escapeHtml(department || "Персона")}</div><h1>${escapeHtml(person.name || "")}</h1>${dates ? `<p class="person-dates">${escapeHtml(dates)}</p>` : ""}${person.place_of_birth ? `<p class="person-place">${escapeHtml(person.place_of_birth)}</p>` : ""}${person.biography ? `<p class="person-bio">${escapeHtml(person.biography)}</p>` : ""}</div></div></section>
-      ${tmdbShelfSection("known", "Известность", known)}${tmdbShelfSection("movies", `Фильмы · ${movies.length}`, movies)}${tmdbShelfSection("shows", `Сериалы · ${shows.length}`, shows)}`;
+      ${tmdbShelfSection("upcoming", "Скоро выйдут", upcoming)}${tmdbShelfSection("recent", "Последние роли", recent)}`;
     document.title = `${person.name} — CineVault`;
     hydrateLazyPosters();
   }
