@@ -1183,6 +1183,7 @@ span.studio-sort-button::after { display: none; }
 .lampac-label { margin: var(--sp-4) 0 var(--sp-2); color: var(--muted); font-size: var(--s-1); }
 .lampac-body .player-choices { max-height: 46vh; }
 .lampac-tabs { margin-bottom: 0; }
+.lampac-tabs .filter-button { max-width: 100%; height: auto; min-height: 38px; padding-block: 8px; white-space: normal; line-height: 1.25; text-align: left; overflow-wrap: anywhere; }
 .lampac-episodes { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: var(--sp-2); max-height: 40vh; overflow-y: auto; padding: 2px; }
 .lampac-episodes .filter-button { justify-content: center; }
 .lampac-episodes .filter-button.is-active { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
@@ -1277,6 +1278,15 @@ span.studio-sort-button::after { display: none; }
 .cv-player-back:hover, .cv-player-back:focus-visible { background: rgba(255,255,255,.12); outline: none; }
 .lampac-start em { font-style: normal; font-size: var(--s-1); font-weight: 600; opacity: .7; margin-left: auto; }
 .lampac-start em + small { margin-left: 12px; }
+.lampac-start { padding-block: 10px; white-space: normal; text-align: left; }
+.lampac-start > span { min-width: 0; line-height: 1.3; overflow-wrap: anywhere; }
+.lampac-start em, .lampac-start small { flex: none; white-space: nowrap; }
+@media (max-width: 720px) {
+  .lampac-start { flex-wrap: wrap; column-gap: 10px; row-gap: 4px; padding-inline: 16px; }
+  .lampac-start > span { flex: 1 1 calc(100% - 30px); }
+  .lampac-start em { margin-left: 30px; }
+  .lampac-start em + small, .lampac-start > span + small { margin-left: 12px; }
+}
 .cv-player-room { position: absolute; top: 110px; right: clamp(16px, 3vw, 40px); width: min(360px, calc(100% - 32px)); max-height: calc(100% - 300px); overflow-y: auto; padding: 14px 16px; border-radius: 14px; background: rgba(20,22,26,.88); color: #fff; font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .25s ease; }
 .cv-player.is-ui .cv-player-room, .cv-player.is-paused .cv-player-room { opacity: 1; pointer-events: auto; }
 .cv-player-room.together-panel { margin: 0; border: 0; }
