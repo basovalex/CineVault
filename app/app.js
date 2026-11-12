@@ -3023,7 +3023,7 @@
   // titles that are in none of the lists loaded for this page.
   async function loadSavedTitlesCatalog() {
     const progressIds = Object.entries(state.progress || {}).map(([key, record]) => record?.titleId || String(key).replace(/-s\d+e\d+$|-alt$|-embed$/, ""));
-    const allIds = [...new Set([...state.favorites, ...state.history, ...state.watchlist, ...progressIds].map(String).filter(Boolean))].slice(0, 120);
+    const allIds = displayTitleIds([...state.favorites, ...state.history, ...state.watchlist, ...progressIds].map(String)).slice(0, 120);
     const tmdbIds = allIds.filter((id) => parseTmdbItemId(id));
     const ids = allIds.filter((id) => !parseTmdbItemId(id)).slice(0, 100);
     const loaded = (await Promise.all(tmdbIds.map((id) => loadTmdbTitle(id).catch(() => null)))).filter(Boolean);
@@ -3228,7 +3228,7 @@
       }
     }
     try {
-      const savedIds = state.view === "favorites" ? state.favorites : state.view === "history" ? state.history : null;
+      const savedIds = state.view === "favorites" ? displayTitleIds(state.favorites) : state.view === "history" ? displayTitleIds(state.history) : null;
       if (savedIds && !savedIds.length) {
         catalog = [];
         remoteCatalog = { page: 1, pages: 1, total: 0, facets: remoteCatalog.facets };
@@ -5557,39 +5557,50 @@
     if (key.startsWith(`${oldId}-`)) return `${newId}${key.slice(oldId.length)}`;
     return key;
   }
+  // Copies, never moves: the old record stays for the iOS app (it still knows Kinopoisk ids)
+  // and as a safety copy in every account; the site shows each title once (see displayTitleId).
   function migrateTitleId(oldId, newId) {
     if (!oldId || !newId || oldId === newId) return false;
     let changed = false;
-    const renameObject = (object, merge) => {
+    const copyObject = (object, isNewer = () => false) => {
       if (!object || typeof object !== "object" || Array.isArray(object)) return object;
-      const next = {};
+      const next = { ...object };
       Object.entries(object).forEach(([key, value]) => {
         const target = renameTitleKey(key, oldId, newId);
-        if (target !== key) changed = true;
-        next[target] = target in next && merge ? merge(next[target], value) : value;
+        if (target === key) return;
+        if (!(target in next) || isNewer(next[target], value)) {
+          next[target] = value && typeof value === "object" && !Array.isArray(value) ? { ...value, ...(value.titleId === oldId ? { titleId: newId } : {}) } : value;
+          changed = true;
+        }
       });
       return next;
     };
-    const renameList = (list) => {
-      if (!Array.isArray(list)) return list;
-      if (!list.includes(oldId)) return list;
+    const copyList = (list) => {
+      if (!Array.isArray(list) || !list.includes(oldId) || list.includes(newId)) return list;
       changed = true;
-      return [...new Set(list.map((id) => (id === oldId ? newId : id)))];
+      const index = list.indexOf(oldId);
+      return [...list.slice(0, index), newId, ...list.slice(index)];
     };
-    const newer = (a, b) => (Number(b?.updatedAt || 0) > Number(a?.updatedAt || 0) ? b : a);
-    state.progress = renameObject(state.progress, newer);
-    Object.values(state.progress || {}).forEach((record) => {
-      if (record && record.titleId === oldId) { record.titleId = newId; changed = true; }
-    });
-    ["favorites", "watchlist", "history", "recommendationHistory"].forEach((name) => { state[name] = renameList(state[name]); });
-    ["historyAt", "ratings", "voiceSelections", "playbackSelections", "offline"].forEach((name) => { state[name] = renameObject(state[name], (a, b) => b); });
+    state.progress = copyObject(state.progress, (current, incoming) => Number(incoming?.updatedAt || 0) > Number(current?.updatedAt || 0));
+    ["favorites", "watchlist", "history", "recommendationHistory"].forEach((name) => { state[name] = copyList(state[name]); });
+    ["historyAt", "ratings", "voiceSelections", "playbackSelections", "offline"].forEach((name) => { state[name] = copyObject(state[name]); });
     const choice = lampacChoiceStore();
-    if (choice.titles?.[oldId]) {
-      choice.titles[newId] = { ...choice.titles[oldId], ...(choice.titles[newId] || {}) };
-      delete choice.titles[oldId];
+    if (choice.titles?.[oldId] && !choice.titles[newId]) {
+      choice.titles[newId] = { ...choice.titles[oldId] };
       try { localStorage.setItem(LAMPAC_CHOICE_KEY, JSON.stringify(choice)); } catch {}
     }
     return changed;
+  }
+  // The id the site shows for a saved record: a moved Kinopoisk card is shown as its TMDB card.
+  function displayTitleId(id) {
+    return knownTmdbId(String(id || "")) || String(id || "");
+  }
+  function displayTitleIds(ids) {
+    return [...new Set((ids || []).map(displayTitleId).filter(Boolean))];
+  }
+  // Removing a TMDB card from a list also removes the old Kinopoisk record it was copied from.
+  function withoutTitle(list, id) {
+    return (list || []).filter((entry) => entry !== id && displayTitleId(entry) !== id);
   }
   function legacyTitleIds() {
     const ids = new Set();
@@ -6763,7 +6774,14 @@
 
   function renderHome() {
     const picks = homeFeaturePicks();
-    const continueItems = Object.entries(state.progress).map(([contentId, progress]) => ({ item: getTitleForProgress(contentId, progress), progress: { ...progress, contentId } })).filter((entry) => entry.item && !entry.progress.completed && isRealProgress(entry.progress)).sort((a, b) => b.progress.updatedAt - a.progress.updatedAt);
+    // One card per title with its latest episode, as in Lampa; old Kinopoisk records that
+    // already have a TMDB copy are not shown twice.
+    const continueItems = Object.entries(state.progress)
+      .filter(([contentId, progress]) => !knownTmdbId(String(progress?.titleId || contentId).replace(/-s\d+e\d+$|-alt$|-embed$/, "")))
+      .map(([contentId, progress]) => ({ item: getTitleForProgress(contentId, progress), progress: { ...progress, contentId } }))
+      .filter((entry) => entry.item && !entry.progress.completed && isRealProgress(entry.progress))
+      .sort((a, b) => b.progress.updatedAt - a.progress.updatedAt)
+      .filter((entry, index, list) => list.findIndex((other) => other.item.id === entry.item.id) === index);
     const continueShelf = continueItems.length ? `<section class="discovery-shelf" aria-labelledby="shelf-continue"><div class="section-header discovery-shelf-header"><div><h2 id="shelf-continue">Продолжить просмотр</h2></div><button class="text-button" data-view="history" type="button">Вся история${uiIcon("arrow-right")}</button></div><div class="discovery-rail landscape-rail">${continueItems.slice(0, 12).map(({ item, progress }) => continueCard(item, progress)).join("")}</div></section>` : "";
     const moodStrip = `<section class="home-mood-strip" aria-label="Настроение"><span class="home-mood-label">Настроение вечера</span><div class="mood-row" role="group" aria-label="Настроение">${["уютно", "романтично", "смеяться", "напряжённо"].map((mood) => `<button class="mood-button ${state.mood === mood ? "is-active" : ""}" data-mood="${mood}" type="button" aria-pressed="${state.mood === mood}">${escapeHtml(moodDefinition(mood)?.shortLabel || mood)}</button>`).join("")}</div></section>`;
     const shelves = [
@@ -9474,8 +9492,8 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       } catch (error) { feedback.textContent = error.message.includes("403") ? "Импорт доступен только администратору backend." : `JSON не импортирован: ${error.message}`; }
     });
     $$('[data-mood]').forEach((button) => button.addEventListener("click", () => { selectMood(button.dataset.mood); }));
-    $$('[data-favorite]').forEach((button) => button.addEventListener("click", () => { const id = button.dataset.favorite; const adding = !state.favorites.includes(id); state.favorites = adding ? [...state.favorites, id] : state.favorites.filter((item) => item !== id); const tracked = Array.isArray(state.anticipatedPremieres) ? state.anticipatedPremieres : []; state.anticipatedPremieres = adding && upcomingPremiere(getTitle(id)) ? [...new Set([...tracked, id])] : adding ? tracked : tracked.filter((item) => item !== id); saveState(); renderDetails(id); }));
-    $$('[data-watchlist]').forEach((button) => button.addEventListener("click", () => { const id = button.dataset.watchlist; state.watchlist = state.watchlist.includes(id) ? state.watchlist.filter((item) => item !== id) : [...state.watchlist, id]; saveState(); renderDetails(id); }));
+    $$('[data-favorite]').forEach((button) => button.addEventListener("click", () => { const id = button.dataset.favorite; const adding = !state.favorites.includes(id); state.favorites = adding ? [...state.favorites, id] : withoutTitle(state.favorites, id); const tracked = Array.isArray(state.anticipatedPremieres) ? state.anticipatedPremieres : []; state.anticipatedPremieres = adding && upcomingPremiere(getTitle(id)) ? [...new Set([...tracked, id])] : adding ? tracked : tracked.filter((item) => item !== id); saveState(); renderDetails(id); }));
+    $$('[data-watchlist]').forEach((button) => button.addEventListener("click", () => { const id = button.dataset.watchlist; state.watchlist = state.watchlist.includes(id) ? withoutTitle(state.watchlist, id) : [...state.watchlist, id]; saveState(); renderDetails(id); }));
     $$('[data-season]').forEach((button) => button.addEventListener("click", () => switchSeason(button.dataset.season)));
     $$('[data-episode-source]').forEach((select) => select.addEventListener("change", () => {
       state.voiceSelections = state.voiceSelections && typeof state.voiceSelections === "object" ? state.voiceSelections : {};
