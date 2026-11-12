@@ -3345,21 +3345,12 @@
       catalogRecoveryTimer = 0;
       try {
         const response = await apiFetch("/api/health", { cache: "no-store" });
-        if (response.ok && !modalRoot.children.length && claimCatalogRecoveryReload()) { window.location.reload(); return; }
-        if (response.ok) return;
+        // The server is back: ask again in place instead of reloading the whole page.
+        if (response.ok) { loadRemoteCatalogPage(Number(state.catalogPage) || 1, { quiet: true }); return; }
       } catch {}
       scheduleCatalogRecovery();
     }, CATALOG_RECOVERY_INTERVAL_MS);
   }
-  function claimCatalogRecoveryReload() {
-    try {
-      const used = Number(window.sessionStorage.getItem("cinevault-catalog-recovery") || 0);
-      if (used >= 3) return false;
-      window.sessionStorage.setItem("cinevault-catalog-recovery", String(used + 1));
-      return true;
-    } catch { return false; }
-  }
-
   // Genre counts depend on the tab: "Фильмы" and "Сериалы" count only their kind.
   const facetsByKind = new Map();
   for (const kind of ["", "movie", "series"]) {
@@ -5328,6 +5319,27 @@
     let roomSync = null;
     let currentRoom = "";
     rememberHistory(item.id);
+    // Intro and credits marks come from IntroDB by IMDb id (our server asks and caches).
+    let imdbLookup = null;
+    const imdbFor = () => imdbLookup || (imdbLookup = (async () => {
+      if (item.imdbId) return item.imdbId;
+      const parsed = parseTmdbItemId(item.id);
+      if (item.kind === "series") {
+        const show = await cvTmdbShow(item);
+        return show ? (await cvTmdb(`tv/${show.id}/external_ids`))?.imdb_id || "" : "";
+      }
+      const movieId = Number(item.tmdbId || 0) || (parsed?.kind === "movie" ? parsed.tmdbId : 0);
+      return movieId ? (await cvTmdb(`movie/${movieId}/external_ids`))?.imdb_id || "" : "";
+    })().catch(() => ""));
+    const skipSegmentsFor = async (entry) => {
+      const imdb = await imdbFor();
+      if (!imdb) return [];
+      const params = new URLSearchParams({ imdb, season: String(isMovie ? 0 : Number(entry.s || 0)), episode: String(isMovie ? 0 : Number(entry.e || 0)) });
+      const response = await apiFetch(`/api/skip-segments?${params}`, { headers: { accept: "application/json" } });
+      if (!response.ok) return [];
+      const data = await response.json();
+      return Array.isArray(data.segments) ? data.segments : [];
+    };
     const episodes = list.map((entry, position) => ({ label: entry.label, note: entry.title || entry.note || "", name: entry.title || "", still: entry.still || "", s: entry.s, e: entry.e, current: position === index, startAt: lampacSavedPosition(item, entry.s, entry.e) }));
     const player = window.CineVaultPlayer.open({
       title: item.title,
@@ -5341,6 +5353,8 @@
       keepPosition: isMovie,
       autoNext: !isMovie,
       episodes,
+      segments: skipSegmentsFor,
+      autoSkip: state.skipSegments !== false,
       resolve: async (position) => {
         const entry = list[position];
         const next = await lampacStream(entry.entry);
@@ -6461,6 +6475,14 @@
   var headerNavSync = null;
 
   function render() {
+    // A background refresh (catalogue, library, account) must not replace an open title
+    // page with the section it was opened from: it redraws the title instead.
+    const here = readRouteFromLocation();
+    if (here.type === "title" && activeTitleId && activeTitleId === here.id && getTitle(here.id)) {
+      headerNavSync?.();
+      renderDetails(activeTitleId);
+      return;
+    }
     activeTitleId = null;
     headerNavSync?.();
     $("#search").value = searchDraft;

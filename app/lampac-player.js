@@ -107,6 +107,7 @@
         </div>
         <div class="cv-player-clock"><strong></strong><small></small></div>
       </div>
+      <button class="cv-player-segment" data-act="segment" type="button" hidden></button>
       <div class="cv-player-next" hidden><button class="cv-player-skip" data-act="next" type="button"></button><button class="cv-player-skip-close" data-act="next-hide" type="button" aria-label="Скрыть следующую серию">${icon("close")}</button></div>
       <div class="cv-player-bottom">
         <div class="cv-player-times"><span class="cv-player-pos">00:00:00</span><span class="cv-player-rest"></span></div>
@@ -157,6 +158,22 @@
     let nextLeft = 0;
     let closed = false;
     let panelKind = "";
+    // Intro, recap and credits marks (IntroDB through our server), per episode.
+    let segments = [];
+    let activeSegment = null;
+    const autoSkipped = new Set();
+    const SEGMENT_LABELS = { intro: "Пропустить интро", recap: "Пропустить пересказ", outro: "Пропустить титры" };
+    const loadSegments = () => {
+      const want = index;
+      segments = [];
+      activeSegment = null;
+      autoSkipped.clear();
+      if (!options.segments) return;
+      Promise.resolve(options.segments(episodes[index] || {})).then((list) => {
+        if (closed || want !== index) return;
+        segments = (Array.isArray(list) ? list : []).filter((one) => one && one.end > one.start);
+      }).catch(() => {});
+    };
 
     video.volume = Number.isFinite(pref.volume) ? pref.volume : 1;
     video.muted = Boolean(pref.muted);
@@ -333,6 +350,7 @@
         current = { stream: next.stream, qualities: next.qualities || {}, subtitles: next.subtitles || [] };
         if (next.voice !== undefined) options.voice = next.voice;
         header();
+        loadSegments();
         load(pickInitialQuality(), startAt);
         if (!fromRoom) options.onEpisodeChange?.(episode().s, episode().e);
       } catch {
@@ -363,6 +381,33 @@
       nextBox().hidden = false;
     };
     const nextLead = (duration) => Math.min(90, Math.max(30, duration * 0.04));
+    // Like Lampa: «Пропустить интро» while the intro runs; with auto-skip on it jumps by itself
+    // once per episode. Credits of a series are covered by the next-episode card instead.
+    const syncSegment = (position, duration) => {
+      const hasNext = options.autoNext !== false && episodes[index + 1];
+      const found = segments.find((one) => position >= one.start && position < Math.min(one.end, duration || one.end) - 1 && !(one.type === "outro" && hasNext)) || null;
+      const button = $(".cv-player-segment");
+      if (found && options.autoSkip && found.type !== "outro" && !autoSkipped.has(found.id || found.start)) {
+        autoSkipped.add(found.id || found.start);
+        video.currentTime = Math.min(found.end, (duration || found.end) - 1);
+        toast(found.type === "recap" ? "Пересказ пропущен" : "Интро пропущено");
+        activeSegment = null;
+        button.hidden = true;
+        return;
+      }
+      if (found === activeSegment) return;
+      activeSegment = found;
+      if (!found) { button.hidden = true; return; }
+      button.innerHTML = `<span>${SEGMENT_LABELS[found.type] || "Пропустить"}</span>${icon("next")}`;
+      button.hidden = false;
+    };
+    const skipSegment = () => {
+      if (!activeSegment) return;
+      const duration = video.duration || activeSegment.end;
+      video.currentTime = Math.min(activeSegment.end, duration - 0.5);
+      activeSegment = null;
+      $(".cv-player-segment").hidden = true;
+    };
 
     const openPanel = (kind) => {
       if (panelKind === kind) { closePanel(); return; }
@@ -477,10 +522,13 @@
       bar.setAttribute("aria-valuenow", String(Math.round(position)));
       bar.setAttribute("aria-valuetext", clock(position));
       if (Date.now() - lastSave > 5000) saveProgress(false);
+      const outro = segments.find((one) => one.type === "outro" && one.start > duration * 0.5);
       if (options.autoNext !== false && episodes[index + 1] && duration > 300) {
-        if (duration - position < nextLead(duration)) offerNext(duration - position);
+        const creditsAt = outro ? outro.start : duration - nextLead(duration);
+        if (position >= creditsAt) offerNext(duration - position);
         else if (!nextBox().hidden) cancelNext();
       }
+      syncSegment(position, duration);
     };
     const updateStats = () => {
       $(".cv-player-clock strong").textContent = hhmm(new Date());
@@ -546,6 +594,7 @@
       pip: () => { if (document.pictureInPictureElement) document.exitPictureInPicture(); else video.requestPictureInPicture?.().catch(() => toast("Браузер не поддерживает")); },
       next: () => goTo(index + 1),
       "next-hide": () => { nextHiddenFor = index; cancelNext(); },
+      segment: () => skipSegment(),
       room: () => options.onRoom?.(),
       quality: () => openPanel("quality"),
       audio: () => openPanel("audio"),
@@ -644,6 +693,7 @@
     };
 
     header();
+    loadSegments();
     load(pickInitialQuality(), Number(options.startAt || 0));
     updateStats();
     showUi();

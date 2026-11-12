@@ -1524,3 +1524,9 @@ span.studio-sort-button::after { display: none; }
 }
 .lampac-qualities { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-3); }
 .cv-player.has-panel .cv-player-next { display: none; }
+/* «Пропустить интро / пересказ / титры», как в Lampa: над панелью справа. */
+.cv-player-segment { position: absolute; right: clamp(16px, 3vw, 40px); bottom: 150px; z-index: 3; display: inline-flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 20px; border: 1px solid rgba(255,255,255,.25); border-radius: 12px; background: rgba(20,22,26,.85); color: #fff; font: 600 16px/1 var(--body); cursor: pointer; box-shadow: 0 10px 30px rgba(0,0,0,.4); animation: cv-panel .25s ease both; }
+.cv-player-segment svg { width: 18px; height: 18px; }
+.cv-player-segment:hover, .cv-player-segment:focus-visible { background: #fff; color: #000; outline: none; }
+.cv-player.has-panel .cv-player-segment { display: none; }
+@media (max-width: 720px) { .cv-player-segment { bottom: 190px; } }

@@ -1946,8 +1946,9 @@ class MediaLibrary:
             self._db.commit()
         return imdb_id
 
-    def _introdb_request(self, imdb_id: str, season: int, episode: int) -> Optional[Dict[str, Any]]:
-        query = urllib.parse.urlencode({"imdb_id": imdb_id, "season": season, "episode": episode})
+    def _introdb_request(self, imdb_id: str, season: int, episode: int, is_movie: bool = False) -> Optional[Dict[str, Any]]:
+        params: Dict[str, Any] = {"imdb_id": imdb_id, "is_movie": "true"} if is_movie else {"imdb_id": imdb_id, "season": season, "episode": episode}
+        query = urllib.parse.urlencode(params)
         request = urllib.request.Request(
             f"{INTRODB_SEGMENTS_URL}?{query}",
             headers={"Accept": "application/json", "User-Agent": "CineVault/1.0"},
@@ -1962,6 +1963,36 @@ class MediaLibrary:
         except (urllib.error.URLError, json.JSONDecodeError) as exc:
             raise RuntimeError("IntroDB segments request failed") from exc
         return payload if isinstance(payload, dict) and not payload.get("error") else None
+
+    _title_segments_cache: Dict[str, tuple] = {}
+    _title_segments_lock = threading.Lock()
+
+    def get_title_skip_segments(self, imdb_id: str, season: int, episode: int) -> Dict[str, Any]:
+        """Intro, recap and credits marks for any series episode or film (season 0) by IMDb id."""
+        imdb = self._valid_imdb_id(imdb_id)
+        if not imdb:
+            raise ValueError("imdb id is required")
+        season = max(0, int(season))
+        episode = max(0, int(episode))
+        is_movie = season == 0 and episode == 0
+        key = f"{imdb.lower()}:{season}:{episode}"
+        now = time.time()
+        with self._title_segments_lock:
+            cached = self._title_segments_cache.get(key)
+        if cached and now - cached[0] < (12 * 3600 if cached[1] else 3600):
+            return {"segments": cached[1], "source": "introdb", "cached": True}
+        try:
+            payload = self._introdb_request(imdb, season, episode, is_movie=is_movie)
+        except RuntimeError:
+            if cached:
+                return {"segments": cached[1], "source": "introdb", "cached": True}
+            return {"segments": [], "source": "introdb", "error": "unavailable"}
+        segments = self._normalise_introdb_segments(payload or {})
+        with self._title_segments_lock:
+            if len(self._title_segments_cache) > 5000:
+                self._title_segments_cache.clear()
+            self._title_segments_cache[key] = (now, segments)
+        return {"segments": segments, "source": "introdb"}
 
     def get_skip_segments(self, episode_id: str) -> Dict[str, Any]:
         with self._lock:
@@ -3488,6 +3519,16 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
                 self.send_json(200, self.library.get_shared_state(parsed.path[len("/api/shared/"):]))
             except KeyError as exc:
                 self.send_json(404, {"error": str(exc)})
+        elif parsed.path == "/api/skip-segments":
+            params = urllib.parse.parse_qs(parsed.query)
+            try:
+                self.send_json(200, self.library.get_title_skip_segments(
+                    (params.get("imdb") or [""])[0],
+                    int((params.get("season") or ["0"])[0] or 0),
+                    int((params.get("episode") or ["0"])[0] or 0),
+                ))
+            except ValueError as exc:
+                self.send_json(400, {"error": str(exc)})
         elif parsed.path.startswith("/api/library/episodes/") and parsed.path.endswith("/skip-segments"):
             episode_id = parsed.path.split("/")[4]
             try:
