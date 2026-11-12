@@ -1063,6 +1063,7 @@ span.studio-sort-button::after { display: none; }
 .ep-map-legend { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); margin-top: var(--sp-3); color: var(--muted); font-size: var(--s-1); }
 .ep-map-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .ep-map-legend i { width: 12px; height: 12px; border-radius: 50%; }
+.ep-map-legend .ep-map-few-note { color: var(--faint); }
 .episode-rating { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: var(--r-sm); font-weight: 700; font-variant-numeric: tabular-nums; }
 .is-r5 { background: var(--rate-5); color: var(--rate-5-text); }
 .is-r4 { background: var(--rate-4); color: var(--rate-4-text); }
@@ -1206,6 +1207,8 @@ span.studio-sort-button::after { display: none; }
 .lampac-sources:empty { display: none; }
 .lampac-sources .filter-button.is-active { background: var(--accent-soft); color: var(--accent); }
 .lampac-status { display: flex; align-items: center; gap: 10px; min-height: 24px; margin-bottom: var(--sp-2); color: var(--muted); font-size: var(--s-1); }
+.lampac-progress { flex: 1; max-width: 160px; height: 4px; margin-left: auto; overflow: hidden; border-radius: 2px; background: var(--surface-2); }
+.lampac-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .4s var(--ease); }
 .lampac-label { margin: var(--sp-4) 0 var(--sp-2); color: var(--muted); font-size: var(--s-1); }
 .lampac-body .player-choices { max-height: 46vh; }
 .lampac-tabs { margin-bottom: 0; }

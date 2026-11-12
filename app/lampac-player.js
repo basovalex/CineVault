@@ -53,7 +53,7 @@
   }
   function qualityName(height, width = 0) {
     if (width >= 3800 || height >= 2000) return "4K";
-    if (width >= 2500 || height >= 1400) return "2K";
+    if (height >= 1400) return "2K"; // a wide 2592×1080 film is still 1080p
     if (width >= 1900 || height >= 1000) return "FHD";
     if (width >= 1260 || height >= 700) return "HD";
     return height ? "SD" : "";
@@ -63,6 +63,23 @@
     if (/4k|uhd/i.test(text)) return 2160;
     if (/2k/i.test(text)) return 1440;
     return Number(text.match(/(\d{3,4})/)?.[1] || 0);
+  }
+  // The quality to start with. A choice the viewer once made is kept for good; until then
+  // a phone gets Full HD and a computer what its screen can show (2K or 4K), never more.
+  function deviceLines() {
+    const phone = window.matchMedia?.("(pointer: coarse)").matches && Math.min(screen.width, screen.height) < 900;
+    if (phone) return 1080;
+    const lines = Math.min(screen.width, screen.height) * (window.devicePixelRatio || 1);
+    return lines >= 2000 ? 2160 : lines >= 1400 ? 1440 : 1080;
+  }
+  function wantedLines() {
+    const lines = Number(prefs().lines);
+    return lines > 0 ? lines : deviceLines();
+  }
+  // Best available that does not exceed the wish; the lowest one if all are higher.
+  function pickLines(available, wish = wantedLines()) {
+    const sorted = [...new Set(available.filter((lines) => lines > 0))].sort((a, b) => b - a);
+    return sorted.find((lines) => lines <= wish) || sorted[sorted.length - 1] || 0;
   }
   function mbit(bits) {
     return bits ? `${(bits / 1e6).toFixed(2)} Мбит/с` : "—";
@@ -235,9 +252,11 @@
       if (hlsStream && window.Hls?.isSupported()) {
         hls = new window.Hls({ maxBufferLength: 60, maxMaxBufferLength: 120, startLevel: -1, capLevelToPlayerSize: false });
         hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
-          if (Number.isFinite(pref.lines) && hls.levels.length > 1) {
-            const match = hls.levels.findIndex((level) => level.height === pref.lines);
-            if (match >= 0) hls.currentLevel = match;
+          if (hls.levels.length > 1) {
+            const target = pickLines(hls.levels.map((level) => level.height || 0));
+            const match = hls.levels.findIndex((level) => level.height === target);
+            if (match >= 0 && Number(prefs().lines) > 0) hls.currentLevel = match;
+            else if (match >= 0) hls.autoLevelCapping = match;
           }
           updateQualityButton();
           updateTrackButtons();
@@ -269,8 +288,8 @@
       const labels = Object.keys(current.qualities || {});
       if (!labels.length) return current.stream;
       tried.clear();
-      const wanted = labels.find((label) => qualityLines(label) === pref.lines);
-      qualityLabel = wanted || labels.sort((a, b) => qualityLines(b) - qualityLines(a))[0];
+      const target = pickLines(labels.map(qualityLines));
+      qualityLabel = labels.find((label) => qualityLines(label) === target) || labels.sort((a, b) => qualityLines(b) - qualityLines(a))[0];
       return current.qualities[qualityLabel] || current.stream;
     };
 
@@ -289,9 +308,12 @@
       savePrefs({ volume: video.volume, muted: video.muted });
       toast(`Громкость ${Math.round(video.volume * 100)}%`);
     };
+    // The player already fills the page; this hides the browser's own bars too. iPhone
+    // Safari cannot do that for a page element, only its native video player can.
     const toggleFullscreen = () => {
       if (document.fullscreenElement) document.exitFullscreen?.();
-      else root.requestFullscreen?.().catch(() => {});
+      else if (root.requestFullscreen) root.requestFullscreen().catch(() => video.webkitEnterFullscreen?.());
+      else video.webkitEnterFullscreen?.();
     };
 
     const goTo = async (target, startAt = 0, { fromRoom = false } = {}) => {
@@ -348,6 +370,12 @@
         title = "Качество";
         items = qualityList().map((entry) => ({ label: entry.label, active: entry.active, run: () => {
           if (hls?.levels?.length > 1) {
+            if (entry.id === -1) {
+              const cap = hls.levels.findIndex((level) => level.height === pickLines(hls.levels.map((one) => one.height || 0), deviceLines()));
+              hls.autoLevelCapping = cap;
+            } else {
+              hls.autoLevelCapping = -1;
+            }
             hls.currentLevel = entry.id;
             savePrefs({ lines: entry.id === -1 ? null : hls.levels[entry.id].height });
           } else {

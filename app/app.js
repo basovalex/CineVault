@@ -5270,7 +5270,7 @@
   // The list of sources, as Lampa gets it: "life" mode answers at once with a key, then
   // /lifeevents is polled and every source is handed over the moment it is found, instead
   // of waiting 7-10 s for the slowest one. Falls back to the one-shot list.
-  async function lampacSourceList(item, onEntries, isClosed = () => false) {
+  async function lampacSourceList(item, onEntries, isClosed = () => false, onProgress = () => {}) {
     const query = lampacQuery(item);
     const seen = new Set();
     const hand = (entries) => {
@@ -5290,7 +5290,9 @@
           await new Promise((resolve) => window.setTimeout(resolve, delay));
           const answer = await lampacJson(`/lifeevents?memkey=${encodeURIComponent(start.memkey)}&${query}`, 10000).catch(() => null);
           if (!answer) continue;
-          hand(Array.isArray(answer) ? answer : answer.online);
+          const online = Array.isArray(answer) ? answer : (answer.online || []);
+          hand(online);
+          if (Number(answer.tasks) > 0) onProgress(Math.min(online.length, answer.tasks), answer.tasks);
           if (answer.ready) break;
         }
         if (seen.size || isClosed()) return seen.size;
@@ -5890,9 +5892,9 @@
     const close = () => { closed = true; modalRoot.innerHTML = ""; };
     $("#lampac-close").addEventListener("click", close);
     $(".modal-backdrop").addEventListener("click", (event) => { if (event.target.classList.contains("modal-backdrop")) close(); });
-    const setStatus = (text, { busy = false } = {}) => {
+    const setStatus = (text, { busy = false, share = null } = {}) => {
       statusRoot.hidden = !text;
-      statusRoot.innerHTML = text ? `${busy ? `<span class="loading-spinner" aria-hidden="true"></span>` : ""}<span>${text}</span>` : "";
+      statusRoot.innerHTML = text ? `${busy ? `<span class="loading-spinner" aria-hidden="true"></span>` : ""}<span>${text}</span>${share === null ? "" : `<span class="lampac-progress" aria-hidden="true"><i style="width:${Math.round(share * 100)}%"></i></span>`}` : "";
     };
     const renderSources = () => {
       sourcesRoot.innerHTML = sources.map((source) => `<button class="filter-button${source.id === active ? " is-active" : ""}" type="button" role="tab" aria-selected="${source.id === active}" data-lampac-source="${escapeHtml(source.id)}">${escapeHtml(source.name)}${source.lines ? `<span class="lampac-quality" title="Лучшее качество у этого источника; у отдельных озвучек и серий может быть ниже">до ${lampacQualityLabel(source.lines)}</span>` : ""}</button>`).join("");
@@ -6053,6 +6055,18 @@
       const button = event.target.closest("[data-lampac-source]");
       if (button) select(button.dataset.lampacSource);
     });
+    // While sources are being checked the viewer sees how far it got, not a frozen spinner.
+    const search = { done: 0, total: 0, over: false };
+    const showSearch = () => {
+      if (search.over || finished || closed) return;
+      if (active && !statusRoot.textContent.startsWith("Ищу") && !statusRoot.textContent.startsWith("Проверяю") && !statusRoot.hidden) return;
+      const share = search.total ? search.done / search.total : null;
+      const counted = search.total ? `проверено ${search.done} из ${search.total}` : "";
+      const text = sources.length
+        ? `Ищу ещё источники… найдено ${sources.length}${counted ? `, ${counted}` : ""}`
+        : `Проверяю источники${counted ? `: ${search.done} из ${search.total}` : "…"}`;
+      setStatus(text, { busy: true, share });
+    };
     (async () => {
       const lookups = [];
       const lookup = async (entry) => {
@@ -6072,12 +6086,13 @@
             renderSources();
           }).catch(() => {});
           if (!active || (id === saved.source && !body.dataset.touched)) select(id);
-          else setStatus(`Ищу ещё источники… найдено ${sources.length}`, { busy: true });
+          else showSearch();
         } catch {}
       };
       const listed = await lampacSourceList(item, (entries) => {
         entries.forEach((entry) => lookups.push(lookup(entry)));
-      }, () => closed).catch(() => 0);
+      }, () => closed, (done, total) => { search.done = done; search.total = total; showSearch(); }).catch(() => 0);
+      search.over = true;
       if (closed) return;
       if (!listed) {
         finished = true;
@@ -8222,11 +8237,12 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   }
 
   // TMDB stills are stored small (w300); the card asks for a size that stays sharp on its width and screen.
-  const TMDB_STILL = /^(https:\/\/image\.tmdb\.org\/t\/p\/)w300(\/.+)$/;
+  // TMDB stills, direct or through the site's /tmdb/t/p proxy, at any stored size.
+  const TMDB_STILL = /^((?:https:\/\/image\.tmdb\.org)?\/(?:tmdb\/)?t\/p\/)(?:w\d+|original)(\/.+)$/;
   function stillSize(url, size) { return String(url).replace(TMDB_STILL, `$1${size}$2`); }
   function stillSrcset(url) {
     if (!TMDB_STILL.test(String(url))) return "";
-    return ` srcset="${escapeHtml(stillSize(url, "w500"))} 500w, ${escapeHtml(stillSize(url, "w780"))} 780w" sizes="(max-width: 720px) 132px, (max-width: 1100px) 50vw, 25vw"`;
+    return ` srcset="${escapeHtml(stillSize(url, "w780"))} 780w, ${escapeHtml(stillSize(url, "w1280"))} 1280w" sizes="(max-width: 720px) 132px, (max-width: 1100px) 50vw, 25vw"`;
   }
   function episodePosterMarkup(item, season, episode, title, episodePlayable) {
     const poster = item.episodePosterUrls?.[String(season)]?.[String(episode)] || "";
@@ -8234,7 +8250,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const action = episodePlayable ? `data-play-media="${escapeHtml(item.id)}"` : `data-demo-play="${escapeHtml(item.id)}"`;
     const imageSource = poster || fallback;
     const image = imageSource
-      ? `<span class="episode-card-image" style="--poster:${item.poster}"><span class="episode-image-placeholder" aria-hidden="true"></span><img data-episode-poster${poster && fallback ? ` data-fallback="${escapeHtml(fallback)}"` : ""} src="${escapeHtml(stillSize(imageSource, "w500"))}"${stillSrcset(imageSource)} alt="" loading="lazy"><span class="episode-image-status" aria-hidden="true">Не удалось загрузить</span></span>`
+      ? `<span class="episode-card-image" style="--poster:${item.poster}"><span class="episode-image-placeholder" aria-hidden="true"></span><img data-episode-poster${poster && fallback ? ` data-fallback="${escapeHtml(fallback)}"` : ""} src="${escapeHtml(stillSize(imageSource, "w780"))}"${stillSrcset(imageSource)} alt="" loading="lazy"><span class="episode-image-status" aria-hidden="true">Не удалось загрузить</span></span>`
       : `<span class="episode-card-image" style="--poster:${item.poster}"><span class="episode-image-placeholder" aria-hidden="true"></span><span class="episode-image-status" aria-hidden="true">Превью пока недоступно</span></span>`;
     return `<button class="episode-card-art${episodePlayable ? "" : " episode-card-art-unavailable"}" ${action} data-resume-season="${season}" data-episode="${episode}" type="button" aria-label="Открыть ${escapeHtml(title)}">${image}<span class="episode-card-play">${uiIcon("play")}</span><span class="episode-card-number">${String(episode).padStart(2, "0")}</span></button>`;
   }
@@ -8313,7 +8329,9 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     if (!seasons) return "";
     const rows = Math.max(...seasons.map((season) => Math.max(...season.episodes.map((entry) => entry.episode))));
     const all = seasons.flatMap((season) => season.episodes.map((entry) => ({ ...entry, season: season.season })));
-    const trusted = all.filter((entry) => entry.votes >= 100);
+    // "Few votes" is relative to the source: IMDb counts hundreds, TMDB tens.
+    const fewVotes = item.source === "tmdb" ? 10 : 100;
+    const trusted = all.filter((entry) => entry.votes >= fewVotes);
     const best = (trusted.length ? trusted : all).reduce((top, entry) => entry.rating > top.rating ? entry : top);
     const averages = seasons.map((season) => ({ season: season.season, rating: season.episodes.reduce((sum, entry) => sum + entry.rating, 0) / season.episodes.length }));
     const strongest = averages.reduce((top, entry) => entry.rating > top.rating ? entry : top);
@@ -8331,12 +8349,12 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
         if (!entry) return `<span class="ep-map-empty" aria-hidden="true"></span>`;
         const name = episodeTitle(item, season.season, episode);
         const label = `${season.season} сезон, ${episode} серия «${name}»: ${entry.rating.toFixed(1)}, ${countWord(entry.votes, "оценка", "оценки", "оценок")}`;
-        return `<button class="ep-map-cell is-r${ratingStep(entry.rating)}${entry.votes < 100 ? " is-few" : ""}" data-map-season="${season.season}" data-map-episode="${episode}" type="button" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${entry.rating.toFixed(1)}</button>`;
+        return `<button class="ep-map-cell is-r${ratingStep(entry.rating)}${entry.votes < fewVotes ? " is-few" : ""}" data-map-season="${season.season}" data-map-episode="${episode}" type="button" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${entry.rating.toFixed(1)}</button>`;
       }).join("");
       return `<span class="ep-map-episode">${episode}</span>${cells}`;
     }).join("");
     const legend = RATING_STEP_NAMES.map((name, step) => `<span><i class="is-r${step}" aria-hidden="true"></i>${name}</span>`).reverse().join("");
-    return `<section class="section ep-map-section" aria-labelledby="ep-map-title"><div class="section-header"><div><h2 id="ep-map-title">Оценки серий</h2><span>по оценкам зрителей IMDb</span></div></div><p class="ep-map-facts">${escapeHtml(facts)}.</p><div class="ep-map-scroll"><div class="ep-map" style="--seasons:${seasons.length}">${head}${body}</div></div><div class="ep-map-legend">${legend}</div></section>`;
+    return `<section class="section ep-map-section" aria-labelledby="ep-map-title"><div class="section-header"><div><h2 id="ep-map-title">Оценки серий</h2><span>по оценкам зрителей ${item.source === "tmdb" ? "TMDB" : "IMDb"}</span></div></div><p class="ep-map-facts">${escapeHtml(facts)}.</p><div class="ep-map-scroll"><div class="ep-map" style="--seasons:${seasons.length}">${head}${body}</div></div><div class="ep-map-legend">${legend}${all.some((entry) => entry.votes < fewVotes) ? `<span class="ep-map-few-note">бледные — мало оценок</span>` : ""}</div></section>`;
   }
 
   function renderSeasons(item) {
