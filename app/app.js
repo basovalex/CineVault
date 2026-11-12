@@ -5135,6 +5135,11 @@
     if (Number(json?.total_results || 0) > 0 || !bare || bare === String(query).trim()) return json;
     return ask(bare);
   }
+  function tmdbIsAnime(raw, genres) {
+    const animated = genres.includes("мультфильм") || (raw.genre_ids || []).includes(16) || (raw.genres || []).some((genre) => genre?.id === 16);
+    const japanese = String(raw.original_language || "") === "ja" || (raw.origin_country || []).includes("JP");
+    return animated && japanese;
+  }
   function tmdbToItem(raw, kindHint = "") {
     const type = raw.media_type || kindHint;
     const kind = type === "tv" || type === "series" || (!type && raw.first_air_date !== undefined) ? "series" : "movie";
@@ -5153,7 +5158,9 @@
       description: raw.overview || "",
       posterImage: tmdbImage(raw.poster_path, "w500"),
       backdropImage: tmdbImage(raw.backdrop_path, "w1280"),
-      genres: [...new Set(genres)],
+      // Japanese animation (in Japanese or made in Japan) is anime, not «мультфильм».
+      genres: [...new Set(tmdbIsAnime(raw, genres) ? genres.map((genre) => (genre === "мультфильм" ? "аниме" : genre)) : genres)],
+      isAnime: tmdbIsAnime(raw, genres),
       rating: Number(raw.vote_count || 0) >= 5 ? Math.round(Number(raw.vote_average || 0) * 10) / 10 : 0,
       votes: Number(raw.vote_count || 0),
       popularity: Number(raw.popularity || 0),
@@ -7631,6 +7638,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       const valid = kind === "movie" ? TMDB_MOVIE_GENRE_IDS : TMDB_TV_GENRE_IDS;
       const ids = Object.entries(TMDB_GENRES).filter(([id, name]) => name === genre && valid.has(Number(id))).map(([id]) => id);
       if (genre === "мультфильм" || genre === "анимация") ids.push("16");
+      if (genre === "аниме") { ids.push("16"); params.set("with_original_language", "ja"); }
       params.set("with_genres", ids.length ? [...new Set(ids)].join("|") : "0");
     }
     return `discover/${kind}?${params}`;
@@ -7747,13 +7755,14 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       ["rewatch", "Стоит пересмотреть", "Лучшее из 2000–2015", ...tv("first_air_date.gte=2000-01-01&first_air_date.lte=2015-12-31&vote_count.gte=800&sort_by=vote_average.desc")],
     ];
     const ja = "with_genres=16&with_original_language=ja";
+    const jp = "with_genres=16&with_origin_country=JP";
     if (view === "anime") return [
-      ["on-air", "Сейчас выходят", "Новые серии на этой неделе", ...tv(`${ja}&air_date.gte=${tmdbDay(-7)}&air_date.lte=${today}&sort_by=popularity.desc`)],
-      ["popular", "Популярное аниме", "", ...tv(`${ja}&sort_by=popularity.desc&vote_count.gte=50`)],
-      ["this-year", `Новинки ${year} года`, "", ...tv(`${ja}&first_air_date_year=${year}&sort_by=popularity.desc`)],
+      ["on-air", "Сейчас выходят", "Новые серии на этой неделе", ...tv(`${jp}&air_date.gte=${tmdbDay(-7)}&air_date.lte=${today}&sort_by=popularity.desc`)],
+      ["popular", "Популярное аниме", "", ...tv(`${jp}&sort_by=popularity.desc&vote_count.gte=50`)],
+      ["this-year", `Новинки ${year} года`, "", ...tv(`${jp}&first_air_date_year=${year}&sort_by=popularity.desc`)],
       ["movies", "Аниме-фильмы", "", ...movie(`${ja}&sort_by=popularity.desc&vote_count.gte=100`)],
-      ["last-year", `Аниме ${year - 1} года`, "", ...tv(`${ja}&first_air_date_year=${year - 1}&sort_by=popularity.desc&vote_count.gte=20`)],
-      ["top", "Высокий рейтинг", "", ...tv(`${ja}&vote_average.gte=8&vote_count.gte=300&sort_by=vote_average.desc`)],
+      ["last-year", `Аниме ${year - 1} года`, "", ...tv(`${jp}&first_air_date_year=${year - 1}&sort_by=popularity.desc&vote_count.gte=20`)],
+      ["top", "Высокий рейтинг", "", ...tv(`${jp}&vote_average.gte=8&vote_count.gte=300&sort_by=vote_average.desc`)],
       ["top-movies", "Лучшие аниме-фильмы", "", ...movie(`${ja}&vote_average.gte=7.8&vote_count.gte=500&sort_by=vote_average.desc`)],
     ];
     if (view === "cartoons") return [
@@ -7779,7 +7788,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   }
   // «Мультфильмы» without anime: it has its own section.
   function sectionItems(view, items) {
-    return view === "cartoons" ? items.filter((entry) => entry.originalLanguage !== "ja") : items;
+    return view === "cartoons" ? items.filter((entry) => !entry.isAnime) : items;
   }
   function loadSectionRows(view) {
     if (sectionCache.has(view)) return sectionCache.get(view);
@@ -7825,7 +7834,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       const [genreId, name] = list[index % list.length];
       const second = index >= list.length;
       const kind = view === "series" || view === "anime" ? "tv" : "movie";
-      const base = view === "anime" ? `with_genres=16%2C${genreId}&with_original_language=ja` : view === "cartoons" ? `with_genres=16%2C${genreId}` : `with_genres=${genreId}${view === "movies" ? "&without_genres=16" : ""}`;
+      const base = view === "anime" ? `with_genres=16%2C${genreId}&with_origin_country=JP` : view === "cartoons" ? `with_genres=16%2C${genreId}` : `with_genres=${genreId}${view === "movies" ? "&without_genres=16" : ""}`;
       const sort = second ? `vote_average.desc&vote_count.gte=${view === "movies" ? 1500 : 300}` : "popularity.desc&vote_count.gte=50";
       const items = sectionItems(view, tmdbListItems(await cvTmdb(`discover/${kind}?${base}&sort_by=${sort}&language=ru-RU`).catch(() => null), kind));
       if (!items.length || state.view !== view) return;
@@ -9224,6 +9233,28 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
 
   // Card images fade in once loaded; until then a shimmer placeholder shows.
   document.addEventListener("load", (event) => { if (event.target instanceof HTMLImageElement) event.target.classList.add("is-loaded"); }, true);
+  // A picture through our TMDB proxy sometimes fails on a flaky network: ask once more, then
+  // straight from TMDB (works where it is not blocked); only then give up and show the title.
+  document.addEventListener("error", (event) => {
+    const image = event.target;
+    if (!(image instanceof HTMLImageElement)) return;
+    const src = image.getAttribute("src") || "";
+    const tries = Number(image.dataset.retries || 0);
+    const proxied = src.match(/^(?:https?:\/\/[^/]+)?\/tmdb(\/t\/p\/[^?#]+)/);
+    if (!proxied && !src.startsWith("https://image.tmdb.org/")) return;
+    image.dataset.retries = String(tries + 1);
+    if (proxied && tries === 0) {
+      window.setTimeout(() => { image.src = `/tmdb${proxied[1]}?retry=1`; }, 1500);
+    } else if (proxied && tries === 1) {
+      image.src = `https://image.tmdb.org${proxied[1]}`;
+    } else {
+      image.hidden = true;
+      const box = image.parentElement;
+      box?.classList.add("image-failed");
+      const title = image.closest(".poster-card, [data-title-id], article")?.querySelector("strong")?.textContent || image.alt || "";
+      if (box && title && !box.querySelector(".poster-title-art")) box.insertAdjacentHTML("beforeend", `<span class="poster-title-art">${escapeHtml(title)}</span>`);
+    }
+  }, true);
   // Solid top bar once the page scrolls past the hero's top edge.
   const syncScrolledHeader = () => app.classList.toggle("is-scrolled", window.scrollY > 24);
   window.addEventListener("scroll", syncScrolledHeader, { passive: true });
