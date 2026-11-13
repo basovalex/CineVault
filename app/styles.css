@@ -1563,3 +1563,20 @@ span.studio-sort-button::after { display: none; }
 .cv-player-hover-frame { width: 176px; aspect-ratio: 16 / 9; overflow: hidden; border: 2px solid var(--player-line-strong); border-radius: 8px; background: var(--player-dark); box-shadow: 0 10px 30px var(--player-shadow-color); }
 .cv-player-hover-frame[hidden] { display: none; }
 .cv-player-hover-video { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* «Назад к списку»: заметная кнопка, а не серая ссылка. */
+.page-heading [data-back-from-detail] { position: relative; z-index: 2; display: inline-flex; align-items: center; gap: 8px; min-height: 42px; padding: 0 18px 0 14px; border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--glass); color: var(--text); font-weight: 600; text-decoration: none; backdrop-filter: blur(12px); transition: background-color var(--t) var(--ease), border-color var(--t) var(--ease); }
+.page-heading [data-back-from-detail]:hover, .page-heading [data-back-from-detail]:focus-visible { background: var(--glass-hover); border-color: var(--accent); }
+.page-heading [data-back-from-detail] .ui-icon { width: 18px; height: 18px; }
+
+/* Случайный выбор: панель снизу, пока открыта случайная карточка. */
+.random-bar { display: grid; gap: var(--sp-2); max-width: 680px; margin-top: var(--sp-5); padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(12px); animation: fade-up var(--t) var(--ease) both; }
+.random-bar-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.random-bar-title { display: inline-flex; align-items: center; gap: 8px; color: var(--text); font-weight: 600; }
+.random-bar-title .ui-icon { color: var(--accent); }
+.random-bar-next { min-height: 42px; padding: 0 18px; }
+.random-bar-next .ui-icon { width: 18px; height: 18px; }
+.random-bar-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.random-bar-chips::-webkit-scrollbar { display: none; }
+.random-bar-chips .genre-pill { flex: none; height: 34px; }
+.random-bar-chips .genre-pill.is-active { background: var(--accent-soft); color: var(--accent); }
+@media (max-width: 720px) { .random-bar-title { font-size: var(--s-1); } .random-bar-next { padding: 0 14px; } }

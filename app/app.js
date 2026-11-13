@@ -2906,6 +2906,70 @@
     });
   }
 
+  // «Случайный» from the whole TMDB catalogue, not just the loaded page: by the catalogue's
+  // kind and genre, never the same title twice in a row. «Ещё случайный» on the card goes on
+  // without piling up history, so «Назад» still leads back to the list.
+  let randomSession = null;
+  const RANDOM_GENRES = ["комедия", "боевик", "драма", "фантастика", "триллер", "ужасы", "мелодрама", "детектив", "криминал", "приключения", "мультфильм"];
+  function randomGenreIds(kind, genre) {
+    if (!genre) return [];
+    const valid = kind === "movie" ? TMDB_MOVIE_GENRE_IDS : TMDB_TV_GENRE_IDS;
+    const ids = Object.entries(TMDB_GENRES).filter(([id, name]) => name === genre && valid.has(Number(id))).map(([id]) => id);
+    if (genre === "мультфильм") ids.push("16");
+    return [...new Set(ids)];
+  }
+  async function pickRandomTitle(session) {
+    const kinds = session.type === "movie" ? ["movie"] : session.type === "tv" ? ["tv"] : ["movie", "tv"];
+    const seen = new Set(session.seen);
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const kind = kinds[Math.floor(Math.random() * kinds.length)];
+      const params = new URLSearchParams({ language: "ru-RU", include_adult: "false", sort_by: "popularity.desc", "vote_count.gte": kind === "movie" ? "300" : "100" });
+      if (session.type === "anime") {
+        params.set("with_genres", "16");
+        params.set(kind === "tv" ? "with_origin_country" : "with_original_language", kind === "tv" ? "JP" : "ja");
+      } else {
+        const ids = randomGenreIds(kind, session.genre);
+        if (session.genre && !ids.length) continue;
+        if (ids.length) params.set("with_genres", ids.join("|"));
+      }
+      const first = await cvTmdb(`discover/${kind}?${params}&page=1`, 10000);
+      const pages = Math.max(1, Math.min(Number(first?.total_pages || 1), 100));
+      const page = 1 + Math.floor(Math.random() * pages);
+      const json = page === 1 ? first : await cvTmdb(`discover/${kind}?${params}&page=${page}`, 10000).catch(() => first);
+      const fresh = tmdbListItems(json, kind).filter((entry) => entry.posterImage && !seen.has(entry.id) && (session.type === "anime" || !entry.isAnime || session.genre === "мультфильм" || session.type === "all"));
+      if (fresh.length) return fresh[Math.floor(Math.random() * fresh.length)];
+    }
+    return null;
+  }
+  async function openRandomTitle({ replace = true } = {}) {
+    if (!randomSession) return;
+    let item = null;
+    try { item = await pickRandomTitle(randomSession); } catch {}
+    if (!item) {
+      $(".random-toast")?.remove();
+      app.insertAdjacentHTML("beforeend", `<div class="toast random-toast" role="status"><strong>Ничего нового не нашлось</strong><span>Измените тип или жанр и попробуйте ещё раз.</span></div>`);
+      window.setTimeout(() => $(".random-toast")?.remove(), 3500);
+      const next = $("[data-random-next]");
+      if (next) { next.disabled = false; next.querySelector("span").textContent = "Ещё случайный"; }
+      return;
+    }
+    rememberLooseTitles([item]);
+    randomSession.seen = [...randomSession.seen, item.id].slice(-200);
+    randomSession.currentId = item.id;
+    if (!replace) { openTitleRoute(item.id); return; }
+    const previous = window.history.state || {};
+    const route = { type: "title", id: item.id };
+    window.history.replaceState(routeHistoryState(route, 0, { returnView: previous.returnView || "catalog", hasPreviousView: Boolean(previous.hasPreviousView) }), "", routeForTitle(item.id));
+    renderRoute(route);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  function randomBarMarkup(item) {
+    if (!randomSession || randomSession.currentId !== item.id) return "";
+    const types = [["all", "Всё"], ["movie", "Фильмы"], ["tv", "Сериалы"], ["anime", "Аниме"]];
+    const genres = randomSession.type === "anime" ? [] : [["", "Любой жанр"], ...RANDOM_GENRES.map((genre) => [genre, genre[0].toUpperCase() + genre.slice(1)])];
+    return `<section class="random-bar" aria-label="Случайный выбор"><div class="random-bar-head"><span class="random-bar-title">${uiIcon("dice")}Случайный выбор</span><button class="primary-button random-bar-next" type="button" data-random-next>${uiIcon("dice")}<span>Ещё случайный</span></button></div><div class="random-bar-chips">${types.map(([value, label]) => `<button class="genre-pill${randomSession.type === value ? " is-active" : ""}" type="button" data-random-type="${value}">${label}</button>`).join("")}</div>${genres.length ? `<div class="random-bar-chips">${genres.map(([value, label]) => `<button class="genre-pill${randomSession.genre === value ? " is-active" : ""}" type="button" data-random-genre="${escapeHtml(value)}">${escapeHtml(label)}</button>`).join("")}</div>` : ""}</section>`;
+  }
+
   function openTitleRoute(id, { recommendation = false, trigger: clicked = null } = {}) {
     const item = getTitle(id);
     if (!item) return;
@@ -2983,6 +3047,16 @@
       if (nextView !== state.view) resetCatalogPage();
       navigateToView(nextView, { replace: leftPlayer });
     }
+  });
+
+  app.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target.closest("[data-random-next], [data-random-type], [data-random-genre]") : null;
+    if (!target || !randomSession) return;
+    if (target.dataset.randomType !== undefined) { randomSession.type = target.dataset.randomType; if (randomSession.type === "anime") randomSession.genre = ""; }
+    if (target.dataset.randomGenre !== undefined) randomSession.genre = target.dataset.randomGenre;
+    const next = $("[data-random-next]");
+    if (next) { next.disabled = true; next.querySelector("span").textContent = "Подбираю…"; }
+    openRandomTitle({ replace: true });
   });
 
   app.addEventListener("click", (event) => {
@@ -4046,6 +4120,7 @@
     const paths = {
       play: '<path d="M8 5.5v13l10-6.5L8 5.5Z" fill="currentColor" stroke="none"/>',
       plus: '<path d="M12 5v14M5 12h14"/>',
+      dice: '<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9" cy="9" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="15" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="9" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="15" r="1.2" fill="currentColor" stroke="none"/>',
       bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15L6 16Z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
       check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
       heart: '<path d="M20.8 8.7c0 5-8.8 10.3-8.8 10.3S3.2 13.7 3.2 8.7A4.6 4.6 0 0 1 12 6.2a4.6 4.6 0 0 1 8.8 2.5Z"/>',
@@ -8108,7 +8183,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       if (item.kind === "series" && item.nextEpisode?.airDate >= today) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Новая серия ${escapeHtml(airDateLabel(item.nextEpisode.airDate))}</span><small>${item.nextEpisode.season} сезон, ${item.nextEpisode.episode} серия${item.nextEpisode.name && !/^(Эпизод|Серия|Episode)\s*\d+$/i.test(item.nextEpisode.name) ? ` · ${escapeHtml(item.nextEpisode.name)}` : ""}</small></p>`;
       if (item.kind === "movie" && item.source === "tmdb" && String(item.premiere || "") > today && !upcomingPremiere(item)) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Премьера ${escapeHtml(airDateLabel(item.premiere))}</span></p>`;
       return "";
-    })()}<div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${detailWatch}${`<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button">${uiIcon("play")}<span>Трейлер</span></button>`}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button>${parseTmdbItemId(item.id) && (item.kind === "series" || String(item.premiere || "") > new Date().toISOString().slice(0, 10) || isSubscribed(item.id)) ? subscribeButtonMarkup(item.id) : ""}</div></div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section>${actors.length ? `<section class="section detail-cast"><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}</div>`;
+    })()}<div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${detailWatch}${`<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button">${uiIcon("play")}<span>Трейлер</span></button>`}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button>${parseTmdbItemId(item.id) && (item.kind === "series" || String(item.premiere || "") > new Date().toISOString().slice(0, 10) || isSubscribed(item.id)) ? subscribeButtonMarkup(item.id) : ""}</div>${randomBarMarkup(item)}</div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section>${actors.length ? `<section class="section detail-cast"><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}</div>`;
     progressiveBackground($(".detail-shell"), "--detail-backdrop", backdropUrl);
     if (awaitingPlayback) {
       const status = page.querySelector('.detail-status-card strong');
@@ -9163,10 +9238,13 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     $$('[data-genre-scroll]').forEach((button) => button.addEventListener("click", () => genreRail?.scrollBy({ left: Number(button.dataset.genreScroll) * genreRail.clientWidth * .8, behavior: "smooth" })));
     const activeGenre = genreRail?.querySelector(".genre-pill.is-active:not([data-catalog-genre=''])");
     if (activeGenre) genreRail.scrollLeft = Math.max(0, activeGenre.offsetLeft - (genreRail.clientWidth - activeGenre.offsetWidth) / 2);
-    $('[data-catalog-random]')?.addEventListener("click", () => {
-      const items = filteredCatalog();
-      const item = items[Math.floor(Math.random() * items.length)];
-      if (item) openTitleRoute(item.id);
+    $('[data-catalog-random]')?.addEventListener("click", (event) => {
+      const button = event.currentTarget;
+      const type = state.view === "movies" ? "movie" : state.view === "series" ? "tv" : "all";
+      randomSession = { type, genre: String(state.catalogGenre || "").trim().toLowerCase(), seen: [], currentId: "" };
+      button.disabled = true;
+      button.textContent = "Подбираю…";
+      openRandomTitle({ replace: false }).finally(() => { if (button.isConnected) { button.disabled = false; button.textContent = "Случайный"; } });
     });
     $("#rutube-open")?.addEventListener("click", () => { const input = $("#rutube-url"); const feedback = $("#rutube-feedback"); const videoId = extractRutubeVideoId(input?.value); if (!videoId) { feedback.textContent = "Нужна прямая ссылка RUTUBE на видео или embed-код."; return; } state.rutubeUrl = input.value.trim(); saveState(); openRutubePlayer(videoId, "RUTUBE-видео", `rutube-${videoId}`); });
     $("#rutube-test")?.addEventListener("click", () => openRutubePlayer(RUTUBE_SAMPLE_ID, "Тестовый плеер RUTUBE", `rutube-demo-${RUTUBE_SAMPLE_ID}`));
