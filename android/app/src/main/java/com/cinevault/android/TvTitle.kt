@@ -40,6 +40,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
@@ -120,7 +121,7 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
                         else if (failed) HText("Описание не загрузилось. Смотреть всё равно можно.", size = Hall.S0, color = Hall.Muted)
                         Spacer(Modifier.height(6.dp))
                         // All the buttons fit, however long «Продолжить · …» is: the row scrolls with the focus.
-                        Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.offset(x = (-16).dp).horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             HButton(playLabel, {
                                 val next = record?.takeIf { it.completed && it.season > 0 }?.let { done ->
                                     val count = seasons.firstOrNull { it.number == done.season }?.episodes ?: 0

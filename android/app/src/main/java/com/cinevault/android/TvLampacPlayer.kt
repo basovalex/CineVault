@@ -14,6 +14,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
@@ -515,7 +516,7 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, chooseSource: (Int, 
                 Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
                     .padding(horizontal = 48.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Scrubber(position, duration, pendingSeek, timelineFocus, firstButton, onSeek = { pendingSeek += it; touched = System.currentTimeMillis() }, onToggle = ::toggle)
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.offset(x = (-16).dp).horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         HButton(if (playing) "Пауза" else "Смотреть", ::toggle, icon = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, focus = firstButton)
                         if (activeSegment != null) HButton(SEGMENT_LABELS[activeSegment.type] ?: "Пропустить", { skipSegment(); controls = false }, primary = true, icon = Icons.Default.SkipNext, focus = skipFocus)
                         if (!request.isMovie && entries.size > 1) HButton("Серии", { panel = PlayerPanel.LIST }, icon = Icons.Default.List)
