@@ -119,7 +119,7 @@ private fun pickQuality(stream: LampacStream): Pair<String, String> {
 }
 
 @Composable
-private fun PlayerSurface(player: Player, fit: String) {
+internal fun PlayerSurface(player: Player, fit: String) {
     val mode = when (fit) { "cover" -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM; "fill" -> AspectRatioFrameLayout.RESIZE_MODE_FILL; else -> AspectRatioFrameLayout.RESIZE_MODE_FIT }
     AndroidView(modifier = Modifier.fillMaxSize(), factory = { context ->
         PlayerView(context).apply {
@@ -633,7 +633,7 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, chooseSource: (Int, 
 }
 
 @Composable
-private fun Timeline(position: Double, duration: Double, modifier: Modifier = Modifier, focused: Boolean = false) {
+internal fun Timeline(position: Double, duration: Double, modifier: Modifier = Modifier, focused: Boolean = false) {
     Box(modifier.fillMaxWidth().height(if (focused) 8.dp else 5.dp).clip(RoundedCornerShape(4.dp)).background(Hall.Track)) {
         Box(Modifier.fillMaxWidth(if (duration > 0) (position / duration).toFloat().coerceIn(0f, 1f) else 0f).fillMaxHeight().background(Hall.Accent))
     }

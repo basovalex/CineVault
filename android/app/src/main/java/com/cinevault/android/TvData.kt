@@ -22,7 +22,16 @@ data class TvPerson(val id: Int, val name: String, val role: String, val photo: 
 data class TvSeason(val number: Int, val episodes: Int, val name: String)
 
 @Immutable
-data class TvEpisode(val season: Int, val number: Int, val name: String, val still: String, val airDate: String, val overview: String, val runtime: Int)
+data class TvEpisode(val season: Int, val number: Int, val name: String, val still: String, val airDate: String, val overview: String, val runtime: Int,
+                     val rating: Double = 0.0, val votes: Int = 0)
+
+/** One season of the episode ratings map: (episode, rating, votes). */
+@Immutable
+data class TvRatedSeason(val season: Int, val episodes: List<Triple<Int, Double, Int>>)
+
+/** A trailer the server found on Rutube. */
+@Immutable
+data class TvTrailer(val id: String, val title: String, val author: String, val duration: Int)
 
 @Immutable
 data class TvNext(val season: Int, val episode: Int, val name: String, val airDate: String)
@@ -398,9 +407,35 @@ object Tmdb {
         return json.optJSONArray("episodes").objects().map {
             TvEpisode(season, it.optInt("episode_number"),
                 it.optString("name").replace(Regex("^(Эпизод|Серия|Episode)\\s*\\d+$", RegexOption.IGNORE_CASE), "").trim(),
-                image(it.optString("still_path").takeIf { p -> p != "null" }.orEmpty(), "w300"), it.optString("air_date"), it.optString("overview"), it.optInt("runtime"))
+                image(it.optString("still_path").takeIf { p -> p != "null" }.orEmpty(), "w300"), it.optString("air_date"), it.optString("overview"), it.optInt("runtime"),
+                if (it.optInt("vote_count") >= 3) Math.round(it.optDouble("vote_average", 0.0) * 10) / 10.0 else 0.0, it.optInt("vote_count"))
         }
     }
+
+    /** The site's episode ratings map: TMDB's per-episode ratings of every season (3 votes and more), shown from 6 rated episodes. */
+    suspend fun episodeRatings(item: TvItem): List<TvRatedSeason> = coroutineScope {
+        val seasons = item.seasons.map { it.number }
+        val semaphore = kotlinx.coroutines.sync.Semaphore(6)
+        val all = seasons.map { number ->
+            async { semaphore.acquire(); try { runCatching { episodes(item.tmdbId, number) }.getOrNull() } finally { semaphore.release() } }
+        }.awaitAll()
+        val rated = all.mapIndexedNotNull { index, list ->
+            val episodes = list.orEmpty().filter { it.rating > 0 }.map { Triple(it.number, it.rating, it.votes) }
+            if (episodes.isEmpty()) null else TvRatedSeason(seasons[index], episodes)
+        }
+        if (rated.sumOf { it.episodes.size } >= 6) rated else emptyList()
+    }
+
+    /** Trailers, as the site's «Трейлер»: Rutube, found by our server (works without a VPN). */
+    suspend fun trailers(item: TvItem): List<TvTrailer> {
+        val url = "${TvNet.server}/api/trailers?title=${enc(item.title)}&original=${enc(item.originalTitle)}&year=${if (item.year > 0) item.year else ""}"
+        return JSONObject(TvNet.get(url, 15_000)).optJSONArray("items").objects().filter { it.optString("provider", "rutube") == "rutube" && it.optString("id").isNotBlank() }
+            .map { TvTrailer(it.optString("id"), it.optString("title"), it.optString("author").ifBlank { "Rutube" }, it.optInt("duration")) }
+    }
+
+    /** Rutube's own stream of a video, so Media3 plays it on the TV's decoder instead of Rutube's web player. */
+    suspend fun rutubeStream(id: String): String =
+        JSONObject(TvNet.get("https://rutube.ru/api/play/options/$id/?format=json&no_404=true", 15_000)).optJSONObject("video_balancer")?.optString("m3u8").orEmpty()
 
     /** IntroDB knows titles by IMDb id. */
     suspend fun imdbId(item: TvItem): String {

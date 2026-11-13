@@ -105,6 +105,7 @@ enum class TvView(val title: String, val icon: ImageVector) {
 sealed interface TvRoute {
     data class Title(val item: TvItem, val season: Int = 0) : TvRoute
     data class Person(val id: Int, val name: String) : TvRoute
+    data class Trailer(val item: TvItem) : TvRoute
     data class Watch(val item: TvItem, val season: Int = 0, val episode: Int = 0) : TvRoute
     data class Play(val request: LampacPlay) : TvRoute
 }
@@ -161,6 +162,7 @@ fun TvApp(startId: String? = null) {
                 })
             }
             is TvRoute.Title -> holder.SaveableStateProvider("title-${top.item.id}") { TvTitleScreen(top.item, nav, top.season) }
+            is TvRoute.Trailer -> TvTrailerScreen(top.item, onBack = { nav.pop() })
             is TvRoute.Person -> holder.SaveableStateProvider("person-${top.id}") { TvPersonScreen(top.id, top.name, nav) }
             null -> Row(Modifier.fillMaxSize()) {
                 TvRail(view) { view = it }

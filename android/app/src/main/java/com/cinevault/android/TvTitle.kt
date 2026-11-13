@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Theaters
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -38,6 +39,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -58,6 +62,8 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
     val record = TvState.latest(item.id)
     var season by rememberSaveable { mutableIntStateOf(startSeason.takeIf { it > 0 } ?: record?.season?.takeIf { it > 0 } ?: 0) }
     var episodes by remember { mutableStateOf<List<TvEpisode>?>(null) }
+    var ratings by remember { mutableStateOf<List<TvRatedSeason>>(emptyList()) }
+    var mapOpen by rememberSaveable { mutableStateOf(false) }
     val play = remember { FocusRequester() }
     val list = rememberLazyListState()
 
@@ -68,6 +74,9 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
     LaunchedEffect(Unit) { delay(120); if (!TvMemory.restore) runCatching { play.requestFocus() } }
     val seasons = item.seasons
     LaunchedEffect(seasons) { if (season == 0 || seasons.none { it.number == season }) seasons.firstOrNull()?.let { season = it.number } }
+    LaunchedEffect(item.tmdbId, item.seasons.size) {
+        if (item.isSeries && item.seasons.isNotEmpty()) ratings = runCatching { Tmdb.episodeRatings(item) }.getOrDefault(emptyList())
+    }
     LaunchedEffect(item.tmdbId, season, item.isSeries) {
         if (!item.isSeries || season == 0) return@LaunchedEffect
         episodes = null
@@ -78,7 +87,7 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
     val unreleased = item.premiere.isNotBlank() && item.premiere > today
     val resuming = record != null && !record.completed && record.real
     val playLabel = when {
-        resuming && record!!.season > 0 -> "Продолжить · ${record.season} сезон, ${record.episode} серия"
+        resuming && record!!.season > 0 -> "Продолжить"
         resuming -> "Продолжить с ${tvClock(record!!.position)}"
         record?.completed == true && record.season > 0 -> "Смотреть дальше"
         else -> "Смотреть"
@@ -89,9 +98,9 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
         CompositionLocalProvider(LocalBringIntoViewSpec provides remember { TvPageScroll(top = 0.05f, bottom = 0.05f, target = 0.08f) }, LocalScrollTop provides { list.animateScrollToItem(0) }) {
             LazyColumn(Modifier.fillMaxSize(), list, contentPadding = PaddingValues(bottom = 60.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
                 item(key = "hero") {
-                    Column(Modifier.fillMaxWidth().scrollTopOnFocus().padding(start = Hall.Gutter, end = 280.dp, top = 70.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(Modifier.fillMaxWidth().scrollTopOnFocus().padding(start = Hall.Gutter, end = Hall.Gutter, top = 70.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         HText(if (item.isSeries) "Сериал" else "Фильм", size = Hall.S_1, color = Hall.Accent, weight = FontWeight.SemiBold)
-                        HText(item.title, size = Hall.STitle, weight = FontWeight.Bold, display = true, maxLines = 2, lineHeight = Hall.STitle * 1.08f)
+                        HText(item.title, Modifier.fillMaxWidth(0.75f), size = Hall.STitle, weight = FontWeight.Bold, display = true, maxLines = 2, lineHeight = Hall.STitle * 1.08f)
                         if (item.originalTitle.isNotBlank() && item.originalTitle != item.title) HText(item.originalTitle, size = Hall.S0, color = Hall.Muted, maxLines = 1)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                             if (item.rating > 0) Badge(String.format(Locale.US, "%.1f", item.rating), color = Hall.OnAccent, background = Hall.Accent)
@@ -107,10 +116,11 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
                         if (unreleased) HText("Премьера ${russianDate(item.premiere)}", size = Hall.S0, color = Hall.Gold, weight = FontWeight.SemiBold)
                         item.next?.let { next -> HText("Следующая серия: ${next.season} сезон, ${next.episode} серия — ${russianDate(next.airDate)}", size = Hall.S0, color = Hall.Gold) }
                         if (item.tagline.isNotBlank()) HText(item.tagline, size = Hall.S0, color = Hall.Text2, maxLines = 1)
-                        if (item.overview.isNotBlank()) HText(item.overview, size = Hall.S0, color = Hall.Text2, maxLines = 4)
+                        if (item.overview.isNotBlank()) HText(item.overview, Modifier.fillMaxWidth(0.75f), size = Hall.S0, color = Hall.Text2, maxLines = 4)
                         else if (failed) HText("Описание не загрузилось. Смотреть всё равно можно.", size = Hall.S0, color = Hall.Muted)
                         Spacer(Modifier.height(6.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        // All the buttons fit, however long «Продолжить · …» is: the row scrolls with the focus.
+                        Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             HButton(playLabel, {
                                 val next = record?.takeIf { it.completed && it.season > 0 }?.let { done ->
                                     val count = seasons.firstOrNull { it.number == done.season }?.episodes ?: 0
@@ -122,14 +132,15 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
                                     else -> nav.push(TvRoute.Watch(item))
                                 }
                             }, Modifier.remembered("title-${item.id}", "play"), primary = true, icon = Icons.Default.PlayArrow, focus = play, big = true,
-                                note = if (resuming && record!!.season > 0) "с ${tvClock(record.position)}" else null)
+                                note = if (resuming && record!!.season > 0) "${record.season} сезон, ${record.episode} серия · с ${tvClock(record.position)}" else null)
+                            HButton("Трейлер", { nav.push(TvRoute.Trailer(item)) }, icon = Icons.Default.Theaters)
                             val favorite = TvState.isFavorite(item.id)
                             HButton(if (favorite) "В избранном" else "В избранное", { TvState.toggleFavorite(item) },
-                                Modifier.remembered("title-${item.id}", "fav"), icon = if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, big = true)
+                                Modifier.remembered("title-${item.id}", "fav"), icon = if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder)
                             if (item.isSeries || unreleased) {
                                 val on = TvState.isSubscribed(item.id)
                                 HButton(if (on) "Напомню" else "Напомнить", { TvState.toggleSubscription(item) },
-                                    icon = if (on) Icons.Default.Notifications else Icons.Default.NotificationsNone, big = true)
+                                    icon = if (on) Icons.Default.Notifications else Icons.Default.NotificationsNone)
                             }
                         }
                         if (item.directors.isNotEmpty()) HText("${if (item.isSeries) "Создатели" else "Режиссёр"}: ${item.directors.joinToString(", ")}", size = Hall.S_1, color = Hall.Muted, maxLines = 1)
@@ -154,10 +165,14 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
                                     if (future) "Выйдет ${russianDate(episode.airDate)}" else if (progress?.completed == true) "Просмотрено" else episode.airDate.takeIf(String::isNotBlank)?.let { russianDate(it, true) }.orEmpty(),
                                     { nav.push(TvRoute.Watch(item, episode.season, episode.number)) },
                                     Modifier.remembered("title-${item.id}", "ep-${episode.season}-${episode.number}"), width = 230.dp,
-                                    kicker = "${episode.number} серия", progress = progress?.takeIf { !it.completed }?.share ?: 0.0)
+                                    kicker = "${episode.number} серия${if (episode.rating > 0) " · ${String.format(Locale.US, "%.1f", episode.rating)}" else ""}", progress = progress?.takeIf { !it.completed }?.share ?: 0.0)
                             }
                         }
                     }
+                }
+                // The site's episode ratings map, folded by default so the page below stays one press away.
+                if (item.isSeries && ratings.isNotEmpty()) item(key = "ratings") {
+                    EpisodeRatingsMap(ratings, mapOpen, { mapOpen = !mapOpen }) { s, e -> nav.push(TvRoute.Watch(item, s, e)) }
                 }
                 // «О фильме», the site's facts block.
                 item(key = "about") {
@@ -248,6 +263,74 @@ fun TvPersonScreen(id: Int, name: String, nav: TvNav) {
                 if (shown.upcoming.isNotEmpty()) item(key = "upcoming") { PosterShelf(TvRow("upcoming", "Скоро выйдут", "", shown.upcoming), nav::open) }
                 if (shown.recent.isNotEmpty()) item(key = "recent") { PosterShelf(TvRow("recent", "Последние роли", "Новые сверху", shown.recent), nav::open) }
                 if (shown.upcoming.isEmpty() && shown.recent.isEmpty()) item { EmptyBlock("Ролей нет", "TMDB не знает фильмов и сериалов с этим человеком.", Modifier.padding(horizontal = Hall.Gutter)) }
+            }
+        }
+    }
+}
+
+/** Six steps, as the site's map (docs/DESIGN.md «Шкала оценок»): the number is always printed, the colour only helps. */
+private val RATE_COLORS = listOf(
+    Color(0xFF7D2F34) to Color(0xFFF5F6F7), Color(0xFFE0524A) to Color(0xFFF5F6F7), Color(0xFFEC8B39) to Color(0xFF1F0F02),
+    Color(0xFFE3C04D) to Color(0xFF1D1704), Color(0xFF2FBF71) to Color(0xFF04140C), Color(0xFF0F8A4E) to Color(0xFFF5F6F7),
+)
+private val RATE_NAMES = listOf("Провал", "Плохо", "Средне", "Хорошо", "Отлично", "Шедевр")
+private fun rateStep(rating: Double) = when { rating >= 9 -> 5; rating >= 8 -> 4; rating >= 7 -> 3; rating >= 6 -> 2; rating >= 5 -> 1; else -> 0 }
+
+/** «Оценки серий»: a line with the best episode and seasons; the grid of every episode opens on demand. */
+@Composable
+private fun EpisodeRatingsMap(seasons: List<TvRatedSeason>, open: Boolean, onToggle: () -> Unit, onPick: (Int, Int) -> Unit) {
+    val all = seasons.flatMap { season -> season.episodes.map { Triple(season.season, it.first, it) } }
+    val trusted = all.filter { it.third.third >= 10 }.ifEmpty { all }
+    val best = trusted.maxByOrNull { it.third.second }
+    val averages = seasons.map { it.season to it.episodes.map { e -> e.second }.average() }
+    val strongest = averages.maxByOrNull { it.second }
+    val weakest = averages.minByOrNull { it.second }
+    val facts = listOfNotNull(
+        best?.let { "Лучшая серия — ${it.first} сезон, ${it.second} серия: ${String.format(Locale.US, "%.1f", it.third.second)}" },
+        strongest?.takeIf { seasons.size > 1 }?.let { "сильнее всего ${it.first} сезон (${String.format(Locale.US, "%.1f", it.second)})" },
+        weakest?.takeIf { seasons.size > 1 && it.first != strongest?.first }?.let { "слабее всего ${it.first} сезон (${String.format(Locale.US, "%.1f", it.second)})" },
+    ).joinToString(", ")
+    Column(Modifier.padding(horizontal = Hall.Gutter), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        HText("Оценки серий", size = Hall.S2, weight = FontWeight.SemiBold, display = true)
+        HText("$facts. Оценки TMDB.", size = Hall.S0, color = Hall.Text2, maxLines = 2)
+        HButton(if (open) "Свернуть" else "Показать оценки серий", onToggle)
+        if (!open) return@Column
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            RATE_NAMES.indices.reversed().forEach { step ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(12.dp).clip(RoundedCornerShape(3.dp)).background(RATE_COLORS[step].first))
+                    Spacer(Modifier.width(6.dp))
+                    HText(RATE_NAMES[step], size = Hall.S_1, color = Hall.Muted)
+                }
+            }
+        }
+        val rows = seasons.maxOf { season -> season.episodes.maxOf { it.first } }
+        Row {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Box(Modifier.size(width = 30.dp, height = 24.dp))
+                (1..rows).forEach { number -> Box(Modifier.size(width = 30.dp, height = 28.dp), contentAlignment = Alignment.CenterEnd) { HText("$number", size = Hall.S_1, color = Hall.Faint) } }
+            }
+            Spacer(Modifier.width(8.dp))
+            CompositionLocalProvider(LocalBringIntoViewSpec provides TvRowScroll) {
+                androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(seasons, key = { it.season }) { season ->
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Box(Modifier.size(width = 44.dp, height = 24.dp), contentAlignment = Alignment.Center) { HText("С${season.season}", size = Hall.S_1, color = Hall.Muted, weight = FontWeight.SemiBold) }
+                            (1..rows).forEach { number ->
+                                val entry = season.episodes.firstOrNull { it.first == number }
+                                if (entry == null) Box(Modifier.size(width = 44.dp, height = 28.dp))
+                                else {
+                                    val (fill, ink) = RATE_COLORS[rateStep(entry.second)]
+                                    val (interaction, focused) = rememberFocused()
+                                    Box(Modifier.size(width = 44.dp, height = 28.dp).hallFocus(RoundedCornerShape(5.dp), scale = 1.15f, interaction = interaction) { onPick(season.season, number) }
+                                        .background(fill), contentAlignment = Alignment.Center) {
+                                        HText(String.format(Locale.US, "%.1f", entry.second), size = Hall.S_1, color = ink, weight = if (focused) FontWeight.Bold else FontWeight.SemiBold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
