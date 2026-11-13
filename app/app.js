@@ -2796,7 +2796,11 @@
       if (replaceHistory) window.history.replaceState(routeHistoryState(route), "", window.location.href);
       if (item.source === "tmdb" && !item.detailed) {
         // Opened from a list: show what is known at once, then the full card.
-        loadTmdbTitle(item.id).then(() => { if (activeTitleId === item.id) renderDetails(item.id); }).catch(() => {});
+        // A failed load is tried again once by itself, then the page offers «Повторить».
+        const redraw = () => { if (activeTitleId === item.id) renderDetails(item.id); };
+        loadTmdbTitle(item.id).then(redraw).catch(() => new Promise((resolve) => window.setTimeout(resolve, 2000))
+          .then(() => loadTmdbTitle(item.id)).then(redraw)
+          .catch(() => { item.detailFailed = true; redraw(); }));
       }
       renderDetails(item.id);
       updateDocumentRoute(route, item);
@@ -2979,6 +2983,17 @@
       if (nextView !== state.view) resetCatalogPage();
       navigateToView(nextView, { replace: leftPlayer });
     }
+  });
+
+  app.addEventListener("click", (event) => {
+    const retry = event.target instanceof Element ? event.target.closest("[data-retry-title]") : null;
+    if (!retry) return;
+    const item = getTitle(retry.dataset.retryTitle);
+    if (!item) return;
+    item.detailFailed = false;
+    renderDetails(item.id);
+    loadTmdbTitle(item.id).then(() => { if (activeTitleId === item.id) renderDetails(item.id); })
+      .catch(() => { item.detailFailed = true; if (activeTitleId === item.id) renderDetails(item.id); });
   });
 
   app.addEventListener("click", (event) => {
@@ -3228,7 +3243,8 @@
       }
     }
     try {
-      const savedIds = state.view === "favorites" ? displayTitleIds(state.favorites) : state.view === "history" ? displayTitleIds(state.history) : null;
+      // «Избранное»: the last added first.
+      const savedIds = state.view === "favorites" ? displayTitleIds([...state.favorites].reverse()) : state.view === "history" ? displayTitleIds(state.history) : null;
       if (savedIds && !savedIds.length) {
         catalog = [];
         remoteCatalog = { page: 1, pages: 1, total: 0, facets: remoteCatalog.facets };
@@ -4779,6 +4795,13 @@
   function hasOwnEpisodeSources(item) {
     return Boolean(item?.libraryEpisodes?.length);
   }
+  // A card from a list has no seasons yet: say they are loading instead of «0 сезонов».
+  function seasonsLabel(item) {
+    const count = titleSeasonList(item).length;
+    if (count) return countWord(count, "сезон", "сезона", "сезонов");
+    if (item?.source === "tmdb" && !item.detailed) return item.detailFailed ? "сезоны не загрузились" : "загружаю сезоны…";
+    return "сезоны неизвестны";
+  }
   function titleSeasonList(item) {
     return (item?.seasons || []).map((count, index) => ({ number: index + 1, episodes: Array.from({ length: count }, (_, episode) => episode + 1) }));
   }
@@ -5372,7 +5395,7 @@
 
   // Opens the CineVault player on a Lampac list (a voice's episodes, or a film's voices)
   // and wires progress and the shared room to it.
-  function startLampacPlayer(item, list, index, first, { voiceName = "", isMovie = false, sourceId = "", roomId = "", voices = null } = {}) {
+  function startLampacPlayer(item, list, index, first, { voiceName = "", isMovie = false, sourceId = "", roomId = "", voices = null, seasons = null } = {}) {
     const target = list[index];
     let voice = voiceName;
     let roomSync = null;
@@ -5410,6 +5433,34 @@
       handoff: { source: sourceId, voice: voiceName },
       listTitle: isMovie ? "Озвучка" : "Серии",
       isMovie,
+      seasons: isMovie ? [] : (seasons || []).filter((entry) => entry?.url).map((entry, position) => ({ number: lampacNumber(entry, position + 1), label: entry.name || "", url: entry.url })),
+      // Another season of this source, in the voice being watched when it has one.
+      loadSeason: isMovie ? null : async (number) => {
+        const entry = (seasons || []).find((one, position) => lampacNumber(one, position + 1) === Number(number));
+        if (!entry?.url) return null;
+        let node = await lampacJson(entry.url, 15000);
+        const same = (node?.voice || []).find((one) => one.name === voice && !one.active && one.url);
+        if (same) node = await lampacJson(same.url, 15000).catch(() => node);
+        if (node?.type !== "episode" || !node.data?.length) return null;
+        const fresh = node.data.map((one, position) => {
+          const e = Number(one.e || position + 1);
+          return { entry: one, s: Number(one.s || number), e, label: one.name || `${e} серия`, note: "" };
+        });
+        const names = await Promise.race([
+          cvTmdbShow(item).then((show) => (show ? cvTmdbEpisodes(show.id, Number(number)) : null)).catch(() => null),
+          new Promise((resolve) => window.setTimeout(() => resolve(null), 3000)),
+        ]);
+        const shown = fresh.map((one) => ({ label: one.label, name: names?.[one.e]?.name || "", note: names?.[one.e]?.name || "", still: names?.[one.e]?.still || "", s: one.s, e: one.e, current: false, startAt: lampacSavedPosition(item, one.s, one.e) }));
+        const activeVoice = (node.voice || []).find((one) => one.active)?.name || voice;
+        return {
+          episodes: shown,
+          apply: () => {
+            list.splice(0, list.length, ...fresh);
+            episodes.splice(0, episodes.length, ...shown);
+            voice = activeVoice;
+          },
+        };
+      },
       voices: (voices || []).filter((one) => one?.name).map((one) => ({ name: one.name, url: one.url || "", active: Boolean(one.active) })),
       // Another voice of this source: its episode list replaces this one in place, so the
       // next episodes and the list follow the new voice; the same episode keeps playing.
@@ -5670,7 +5721,7 @@
       }
     };
     const progressKey = (seasonNumber, episodeNumber) => lampacProgressKey(item, seasonNumber, episodeNumber);
-    const play = async (list, index, { voiceName = "", isMovie = false, trigger = null, voices = null } = {}) => {
+    const play = async (list, index, { voiceName = "", isMovie = false, trigger = null, voices = null, seasons = null } = {}) => {
       const mine = ++token;
       const done = busy(trigger, `Открываю видео: ${escapeHtml(list[index].label)}${voiceName && !isMovie ? `, ${escapeHtml(voiceName)}` : ""}…`);
       try {
@@ -5681,7 +5732,7 @@
         rememberLampacChoice({ source: active, voice: voiceName || "" }, item.id);
         modalRoot.innerHTML = "";
         closed = true;
-        startLampacPlayer(item, list, index, first, { voiceName, isMovie, sourceId: active, voices });
+        startLampacPlayer(item, list, index, first, { voiceName, isMovie, sourceId: active, voices, seasons });
       } catch (error) {
         if (closed || mine !== token) return;
         done();
@@ -5772,7 +5823,7 @@
         return `<button class="${classes}" type="button" data-lampac-episode="${index}" title="Смотреть: ${escapeHtml(entry.label)}"><span class="lampac-episode-play" aria-hidden="true">${playerIcon("play")}</span><span>${escapeHtml(entry.label)}</span>${share && !record.completed ? `<i style="width:${share.toFixed(1)}%"></i>` : ""}</button>`;
       }).join("");
       body.innerHTML = picked ? `${startButton}${voiceTabs}` : `${startButton}${voiceTabs}${seasonTabs}<div class="lampac-label">Серии — нажмите, чтобы смотреть</div><div class="lampac-episodes">${episodes}</div>`;
-      body.querySelector("[data-lampac-start]").addEventListener("click", (event) => play(list, start, { voiceName: activeVoice, trigger: event.currentTarget, voices }));
+      body.querySelector("[data-lampac-start]").addEventListener("click", (event) => play(list, start, { voiceName: activeVoice, trigger: event.currentTarget, voices, seasons }));
       // The source badge is its best; what this voice really gives is checked on its first episode.
       const qualityMark = body.querySelector("[data-voice-quality]");
       if (qualityMark && list[0]) {
@@ -5794,7 +5845,7 @@
       }));
       body.querySelectorAll("[data-lampac-episode]").forEach((button) => button.addEventListener("click", () => {
         if (picked) return;
-        play(list, Number(button.dataset.lampacEpisode), { voiceName: activeVoice, trigger: button, voices });
+        play(list, Number(button.dataset.lampacEpisode), { voiceName: activeVoice, trigger: button, voices, seasons });
       }));
       body.querySelector("[data-lampac-start]").focus();
     };
@@ -8045,13 +8096,13 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       detailFact("Режиссёр", directors),
       detailFact("Продюсеры", producers),
       detailFact("Возраст", ageRating),
-      detailFact(item.kind === "series" ? "Сезоны" : "Хронометраж", item.kind === "series" ? countWord(titleSeasonList(item).length, "сезон", "сезона", "сезонов") : formatRuntime(item.runtime)),
+      detailFact(item.kind === "series" ? "Сезоны" : "Хронометраж", item.kind === "series" ? seasonsLabel(item) : formatRuntime(item.runtime)),
     ].join("");
     const actorPreview = actors.slice(0, 8).map((actor) => `<span class="detail-person">${escapeHtml(actor)}</span>`).join("");
     const actorAll = actors.length > 8 ? `<details class="detail-more"><summary>Показать всех актёров (${actors.length})</summary><div class="detail-people">${actors.map((actor) => `<span class="detail-person">${escapeHtml(actor)}</span>`).join("")}</div></details>` : "";
     const catalogReturnView = ["catalog", "movies", "series", "favorites", "evening", "history", "home"].includes(state.view) ? state.view : "catalog";
     const backLabel = `${uiIcon("arrow-left")}${catalogReturnView === "home" ? "Назад" : "Назад к списку"}`;
-    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell${frame ? " has-backdrop" : ""}"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}</div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"}</div><h1>${escapeHtml(item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">${uiIcon("star")}</span><strong>${ratingKinopoisk}</strong><small>${item.source === "tmdb" ? "TMDB" : "КиноПоиск"}</small></div>${item.source === "tmdb" && !Number(item.imdbRating || 0) ? "" : `<div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div>`}<div class="detail-status-card"><span class="detail-status-dot ${hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${hasPlayableSource(item) ? "Можно смотреть" : "Видео пока нет"}</strong><small>${item.kind === "series" ? countWord(titleSeasonList(item).length, "сезон", "сезона", "сезонов") : formatRuntime(item.runtime)}</small></div></div>${(() => {
+    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell${frame ? " has-backdrop" : ""}"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}</div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"}</div><h1>${escapeHtml(item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">${uiIcon("star")}</span><strong>${ratingKinopoisk}</strong><small>${item.source === "tmdb" ? "TMDB" : "КиноПоиск"}</small></div>${item.source === "tmdb" && !Number(item.imdbRating || 0) ? "" : `<div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div>`}<div class="detail-status-card"><span class="detail-status-dot ${hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${hasPlayableSource(item) ? "Можно смотреть" : "Видео пока нет"}</strong><small>${item.kind === "series" ? seasonsLabel(item) : formatRuntime(item.runtime)}</small></div></div>${(() => {
       // As in Lampa: when the next episode comes out, or when a film is released.
       const today = new Date().toISOString().slice(0, 10);
       if (item.kind === "series" && item.nextEpisode?.airDate >= today) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Новая серия ${escapeHtml(airDateLabel(item.nextEpisode.airDate))}</span><small>${item.nextEpisode.season} сезон, ${item.nextEpisode.episode} серия${item.nextEpisode.name && !/^(Эпизод|Серия|Episode)\s*\d+$/i.test(item.nextEpisode.name) ? ` · ${escapeHtml(item.nextEpisode.name)}` : ""}</small></p>`;
@@ -8625,6 +8676,11 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const assetsLoading = isImportedSeries ? episodeAssetsLoading : onlineAssetState.loading;
     const assetsError = isImportedSeries ? episodeAssetsError : onlineAssetState.error;
     const seasonList = titleSeasonList(item);
+    if (!seasonList.length && item.source === "tmdb" && !item.detailed) {
+      return item.detailFailed
+        ? `<section class="section"><div class="section-header"><div><h2>Сезоны и серии</h2></div></div><div class="episode-loading-note" role="status">Сезоны не загрузились. <button class="text-button" type="button" data-retry-title="${escapeHtml(item.id)}">Повторить</button></div></section>`
+        : `<section class="section"><div class="section-header"><div><h2>Сезоны и серии</h2></div></div><div class="episode-loading-note" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю сезоны…</div></section>`;
+    }
     const activeSeason = seasonList.find((season) => season.number === selectedSeason) || seasonList[0];
     if (activeSeason) selectedSeason = activeSeason.number;
     const seasonCount = seasonList.length;

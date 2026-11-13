@@ -113,7 +113,7 @@
       <div class="cv-player-bottom">
         <div class="cv-player-times"><span class="cv-player-pos">00:00:00</span><span class="cv-player-rest"></span></div>
         <div class="cv-player-bar" role="slider" tabindex="0" aria-label="Позиция">
-          <div class="cv-player-buffered"></div><div class="cv-player-played"></div><div class="cv-player-thumb"></div><div class="cv-player-hover" hidden></div>
+          <div class="cv-player-buffered"></div><div class="cv-player-played"></div><div class="cv-player-thumb"></div><div class="cv-player-hover" hidden><div class="cv-player-hover-frame" hidden></div><span></span></div>
         </div>
         <div class="cv-player-controls">
           <div class="cv-player-group">
@@ -136,7 +136,7 @@
           </div>
         </div>
       </div>
-      <aside class="cv-player-panel" hidden><h3></h3><div class="cv-player-options"></div></aside>
+      <aside class="cv-player-panel" hidden><h3></h3><div class="cv-player-seasons" hidden></div><div class="cv-player-options"></div></aside>
       <div class="cv-player-room" hidden></div>
       <div class="cv-player-toast" role="status" aria-live="polite" hidden></div>`;
     document.body.append(root);
@@ -160,6 +160,10 @@
     let nextLeft = 0;
     let closed = false;
     let panelKind = "";
+    // The episode list can show another season: loaded on demand, played only when an
+    // episode of it is chosen (then that season becomes the player's list).
+    let panelSeason = null;
+    const seasonCache = new Map();
     // Intro, recap and credits marks (IntroDB through our server), per episode.
     let segments = [];
     let activeSegment = null;
@@ -276,13 +280,61 @@
         window.clearTimeout(timer);
       }
     };
+    // A frame over the seek bar, as in Lampa and YouTube: a second, muted copy of the video
+    // in its lowest quality seeks to the hovered second. Made on the first hover only.
+    let previewSource = { stream: "", hls: false };
+    let preview = null;
+    const dropPreview = () => {
+      if (!preview) return;
+      window.clearTimeout(preview.timer);
+      preview.hls?.destroy();
+      preview.video.removeAttribute("src");
+      preview.video.load();
+      preview.video.remove();
+      preview = null;
+      const frame = $(".cv-player-hover-frame");
+      if (frame) frame.hidden = true;
+    };
+    const ensurePreview = () => {
+      if (preview || !previewSource.stream || !window.matchMedia("(hover: hover)").matches) return preview;
+      const frameVideo = document.createElement("video");
+      frameVideo.muted = true;
+      frameVideo.playsInline = true;
+      frameVideo.preload = "auto";
+      frameVideo.className = "cv-player-hover-video";
+      preview = { video: frameVideo, hls: null, timer: 0, ready: false, wanted: -1 };
+      frameVideo.addEventListener("loadedmetadata", () => { if (preview?.video === frameVideo) { preview.ready = true; if (preview.wanted >= 0) frameVideo.currentTime = preview.wanted; } });
+      frameVideo.addEventListener("seeked", () => { const frame = $(".cv-player-hover-frame"); if (frame && preview?.video === frameVideo) frame.hidden = false; });
+      if (previewSource.hls && window.Hls?.isSupported()) {
+        const copy = new window.Hls({ maxBufferLength: 2, maxMaxBufferLength: 4, startLevel: 0, capLevelToPlayerSize: false, autoStartLoad: true });
+        copy.on(window.Hls.Events.MANIFEST_PARSED, () => { copy.currentLevel = 0; copy.autoLevelEnabled = false; });
+        copy.loadSource(previewSource.stream);
+        copy.attachMedia(frameVideo);
+        preview.hls = copy;
+      } else {
+        frameVideo.src = previewSource.stream;
+      }
+      $(".cv-player-hover-frame").append(frameVideo);
+      return preview;
+    };
+    const previewAt = (seconds) => {
+      const copy = ensurePreview();
+      if (!copy) return;
+      copy.wanted = seconds;
+      window.clearTimeout(copy.timer);
+      copy.timer = window.setTimeout(() => {
+        if (copy.ready && Math.abs(copy.video.currentTime - seconds) > 1) copy.video.currentTime = seconds;
+      }, 120);
+    };
     let loadToken = 0;
     const load = async (stream, startAt = 0, autoplay = true) => {
       const mine = ++loadToken;
+      dropPreview();
       connecting = true;
       root.classList.add("is-loading");
       const hlsStream = await isHls(stream);
       if (closed || mine !== loadToken) return;
+      previewSource = { stream, hls: hlsStream };
       hls?.destroy();
       hls = null;
       $(".cv-player-error").hidden = true;
@@ -480,6 +532,7 @@
       panelKind = kind;
       let title = "";
       let items = [];
+      let emptyText = "Пока нечего выбрать.";
       if (kind === "quality") {
         title = "Качество";
         items = qualityList().map((entry) => ({ label: entry.label, active: entry.active, run: () => {
@@ -534,6 +587,32 @@
           items = (options.voices || []).map((voice) => ({ label: voice.name, note: voice.active ? "Сейчас" : "", active: Boolean(voice.active), run: () => { if (!voice.active) switchVoice(voice); } }));
         }
         if (options.onChooseSource) items.push({ label: "Другой источник", note: "Вернуться к выбору источника и озвучки", run: () => { const pick = options.onChooseSource; close(); pick(); } });
+      } else if (kind === "list" && options.seasons?.length > 1 && panelSeason !== null && panelSeason !== Number(episode().s)) {
+        title = options.listTitle || "Серии";
+        const viewing = panelSeason;
+        const cached = seasonCache.get(viewing);
+        if (!cached) {
+          emptyText = "Загружаю сезон…";
+          if (options.loadSeason) {
+            seasonCache.set(viewing, { loading: true });
+            Promise.resolve(options.loadSeason(viewing)).then((data) => {
+              seasonCache.set(viewing, data?.episodes?.length ? data : { error: true });
+            }).catch(() => seasonCache.set(viewing, { error: true })).then(() => {
+              if (panelKind === "list" && panelSeason === viewing) { panelKind = ""; openPanel("list"); }
+            });
+          }
+        } else if (cached.loading) {
+          emptyText = "Загружаю сезон…";
+        } else if (cached.error) {
+          emptyText = `В этой озвучке нет ${viewing} сезона. Выберите другой сезон или озвучку.`;
+        } else {
+          items = cached.episodes.map((entry, entryIndex) => ({ label: entry.name ? `${entry.e}. ${entry.name}` : entry.label, note: entry.name ? entry.label : "", still: entry.still || "", active: false, run: () => {
+            cached.apply();
+            panelSeason = null;
+            seasonCache.clear();
+            goTo(entryIndex, entry.startAt || 0);
+          } }));
+        }
       } else if (kind === "list") {
         title = options.listTitle || "Серии";
         items = episodes.map((entry, entryIndex) => ({ label: entry.name ? `${entry.e ? `${entry.e}. ` : ""}${entry.name}` : entry.label, note: entry.name ? entry.label : entry.note || "", still: options.autoNext !== false ? entry.still || "" : undefined, active: entryIndex === index, run: () => { if (entryIndex !== index) goTo(entryIndex, options.keepPosition ? video.currentTime : entry.startAt || 0); } }));
@@ -544,7 +623,20 @@
       panel.querySelector(".cv-player-back").addEventListener("click", () => { if (parent) { panelKind = ""; openPanel(parent); } else closePanel(); });
       panel.querySelector(".cv-player-options").innerHTML = items.length
         ? items.map((entry, itemIndex) => `<button type="button" class="cv-player-option${entry.active ? " is-active" : ""}${entry.still !== undefined ? " has-thumb" : ""}" data-option="${itemIndex}">${entry.still !== undefined ? (entry.still ? `<img class="cv-player-option-thumb" src="${esc(entry.still)}" alt="" loading="lazy">` : `<span class="cv-player-option-thumb" aria-hidden="true"></span>`) : ""}<span><strong>${esc(entry.label)}</strong>${entry.note ? `<small>${esc(entry.note)}</small>` : ""}</span>${entry.active ? icon("check") : ""}</button>`).join("")
-        : `<p class="cv-player-empty">Пока нечего выбрать.</p>`;
+        : `<p class="cv-player-empty">${esc(emptyText)}</p>`;
+      const seasonRow = panel.querySelector(".cv-player-seasons");
+      const showSeasons = kind === "list" && options.seasons?.length > 1;
+      seasonRow.hidden = !showSeasons;
+      if (showSeasons) {
+        const viewing = panelSeason ?? Number(episode().s);
+        seasonRow.innerHTML = options.seasons.map((one) => `<button type="button" class="cv-player-season${one.number === viewing ? " is-active" : ""}" data-season="${one.number}">${esc(one.label || `${one.number} сезон`)}</button>`).join("");
+        seasonRow.querySelectorAll("[data-season]").forEach((button) => button.addEventListener("click", () => {
+          panelSeason = Number(button.dataset.season);
+          panelKind = "";
+          openPanel("list");
+        }));
+        seasonRow.querySelector(".is-active")?.scrollIntoView({ block: "nearest", inline: "center" });
+      }
       panel.querySelectorAll("[data-option]").forEach((button) => button.addEventListener("click", () => {
         const entry = items[Number(button.dataset.option)];
         entry.run();
@@ -557,6 +649,7 @@
     };
     const closePanel = () => {
       panelKind = "";
+      panelSeason = null;
       panel.hidden = true;
       root.classList.remove("has-panel");
       showUi();
@@ -651,8 +744,11 @@
       const hover = $(".cv-player-hover");
       const rect = bar.getBoundingClientRect();
       hover.hidden = false;
-      hover.style.left = `${Math.max(0, Math.min(rect.width, event.clientX - rect.left))}px`;
-      hover.textContent = clock(barSeek(event));
+      const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+      hover.style.left = `${Math.max(90, Math.min(rect.width - 90, x))}px`;
+      const seconds = barSeek(event);
+      hover.querySelector("span").textContent = clock(seconds);
+      previewAt(seconds);
     });
     bar.addEventListener("mouseleave", () => { $(".cv-player-hover").hidden = true; });
     volume.addEventListener("input", () => setVolume(Number(volume.value)));
@@ -746,6 +842,7 @@
     function close() {
       if (closed) return;
       closed = true;
+      dropPreview();
       saveProgress(video.ended);
       cancelNext();
       window.clearInterval(statsTimer);

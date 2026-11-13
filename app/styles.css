@@ -1552,3 +1552,14 @@ span.studio-sort-button::after { display: none; }
 .cv-player-loading-other { margin-top: 6px; min-height: 44px; padding: 0 18px; border: 1px solid var(--player-line-strong); border-radius: 12px; background: var(--player-glass); color: var(--player-light); font: 600 15px/1 var(--body); cursor: pointer; }
 .cv-player-loading-other:hover, .cv-player-loading-other:focus-visible { background: var(--player-light); color: var(--player-dark); outline: none; }
 .cv-player.is-loading .cv-player-segment { display: none; }
+/* Сезоны над списком серий в плеере. */
+.cv-player-seasons { display: flex; gap: 8px; margin: 0 0 10px; padding: 0 28px 6px; overflow-x: auto; scrollbar-width: none; }
+.cv-player-seasons::-webkit-scrollbar { display: none; }
+.cv-player-season { flex: none; min-height: 38px; padding: 0 14px; border: 1px solid var(--player-line); border-radius: var(--r-pill); background: transparent; color: var(--player-text-2); font: 600 var(--s-1)/1 var(--body); cursor: pointer; }
+.cv-player-season:hover, .cv-player-season:focus-visible { background: var(--player-hover); color: var(--player-light); outline: none; }
+.cv-player-season.is-active { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+/* Кадр над ползунком при наведении. */
+.cv-player-hover { display: grid; justify-items: center; gap: 6px; }
+.cv-player-hover-frame { width: 176px; aspect-ratio: 16 / 9; overflow: hidden; border: 2px solid var(--player-line-strong); border-radius: 8px; background: var(--player-dark); box-shadow: 0 10px 30px var(--player-shadow-color); }
+.cv-player-hover-frame[hidden] { display: none; }
+.cv-player-hover-video { display: block; width: 100%; height: 100%; object-fit: cover; }
