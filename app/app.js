@@ -5372,7 +5372,7 @@
 
   // Opens the CineVault player on a Lampac list (a voice's episodes, or a film's voices)
   // and wires progress and the shared room to it.
-  function startLampacPlayer(item, list, index, first, { voiceName = "", isMovie = false, sourceId = "", roomId = "" } = {}) {
+  function startLampacPlayer(item, list, index, first, { voiceName = "", isMovie = false, sourceId = "", roomId = "", voices = null } = {}) {
     const target = list[index];
     let voice = voiceName;
     let roomSync = null;
@@ -5409,6 +5409,33 @@
       startAt: roomId ? 0 : lampacSavedPosition(item, target.s, target.e),
       handoff: { source: sourceId, voice: voiceName },
       listTitle: isMovie ? "Озвучка" : "Серии",
+      isMovie,
+      voices: (voices || []).filter((one) => one?.name).map((one) => ({ name: one.name, url: one.url || "", active: Boolean(one.active) })),
+      // Another voice of this source: its episode list replaces this one in place, so the
+      // next episodes and the list follow the new voice; the same episode keeps playing.
+      onVoice: isMovie ? null : async (choice, now) => {
+        if (!choice.url) throw new Error("нет ссылки");
+        const node = await lampacJson(choice.url, 15000);
+        if (node?.type !== "episode" || !node.data?.length) throw new Error("нет серии");
+        const fresh = node.data.map((entry, position) => {
+          const s = Number(entry.s || now.s || 1);
+          const e = Number(entry.e || position + 1);
+          return { entry, s, e, label: entry.name || `${e} серия`, note: "" };
+        });
+        const at = fresh.findIndex((entry) => entry.s === Number(now.s) && entry.e === Number(now.e));
+        if (at < 0) throw new Error("нет серии");
+        const next = await lampacStream(fresh[at].entry);
+        if (!next.stream) throw new Error("нет ссылки");
+        const known = new Map(episodes.map((entry) => [`${entry.s}:${entry.e}`, entry]));
+        list.splice(0, list.length, ...fresh);
+        episodes.splice(0, episodes.length, ...fresh.map((entry, position) => {
+          const old = known.get(`${entry.s}:${entry.e}`) || {};
+          return { label: entry.label, note: old.name || "", name: old.name || "", still: old.still || "", s: entry.s, e: entry.e, current: position === at, startAt: lampacSavedPosition(item, entry.s, entry.e) };
+        }));
+        voice = choice.name;
+        rememberLampacChoice({ source: sourceId, voice }, item.id);
+        return { ...next, index: at, voices: (node.voice || []).filter((one) => one?.name).map((one) => ({ name: one.name, url: one.url || "", active: Boolean(one.active) })) };
+      },
       keepPosition: isMovie,
       autoNext: !isMovie,
       episodes,
@@ -5643,7 +5670,7 @@
       }
     };
     const progressKey = (seasonNumber, episodeNumber) => lampacProgressKey(item, seasonNumber, episodeNumber);
-    const play = async (list, index, { voiceName = "", isMovie = false, trigger = null } = {}) => {
+    const play = async (list, index, { voiceName = "", isMovie = false, trigger = null, voices = null } = {}) => {
       const mine = ++token;
       const done = busy(trigger, `Открываю видео: ${escapeHtml(list[index].label)}${voiceName && !isMovie ? `, ${escapeHtml(voiceName)}` : ""}…`);
       try {
@@ -5654,7 +5681,7 @@
         rememberLampacChoice({ source: active, voice: voiceName || "" }, item.id);
         modalRoot.innerHTML = "";
         closed = true;
-        startLampacPlayer(item, list, index, first, { voiceName, isMovie, sourceId: active });
+        startLampacPlayer(item, list, index, first, { voiceName, isMovie, sourceId: active, voices });
       } catch (error) {
         if (closed || mine !== token) return;
         done();
@@ -5745,7 +5772,7 @@
         return `<button class="${classes}" type="button" data-lampac-episode="${index}" title="Смотреть: ${escapeHtml(entry.label)}"><span class="lampac-episode-play" aria-hidden="true">${playerIcon("play")}</span><span>${escapeHtml(entry.label)}</span>${share && !record.completed ? `<i style="width:${share.toFixed(1)}%"></i>` : ""}</button>`;
       }).join("");
       body.innerHTML = picked ? `${startButton}${voiceTabs}` : `${startButton}${voiceTabs}${seasonTabs}<div class="lampac-label">Серии — нажмите, чтобы смотреть</div><div class="lampac-episodes">${episodes}</div>`;
-      body.querySelector("[data-lampac-start]").addEventListener("click", (event) => play(list, start, { voiceName: activeVoice, trigger: event.currentTarget }));
+      body.querySelector("[data-lampac-start]").addEventListener("click", (event) => play(list, start, { voiceName: activeVoice, trigger: event.currentTarget, voices }));
       // The source badge is its best; what this voice really gives is checked on its first episode.
       const qualityMark = body.querySelector("[data-voice-quality]");
       if (qualityMark && list[0]) {
@@ -5767,7 +5794,7 @@
       }));
       body.querySelectorAll("[data-lampac-episode]").forEach((button) => button.addEventListener("click", () => {
         if (picked) return;
-        play(list, Number(button.dataset.lampacEpisode), { voiceName: activeVoice, trigger: button });
+        play(list, Number(button.dataset.lampacEpisode), { voiceName: activeVoice, trigger: button, voices });
       }));
       body.querySelector("[data-lampac-start]").focus();
     };

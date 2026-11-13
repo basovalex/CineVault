@@ -26,6 +26,7 @@
     next: '<path d="M6 6l9 6-9 6V6z" fill="currentColor" stroke="none"/><path d="M18 6v12"/>',
     check: '<path d="M5 12l5 5 9-10"/>',
     close: '<path d="M6 6l12 12M18 6L6 18"/>',
+    voice: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/>',
     together: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0113 0"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.2a5 5 0 016.5 4.8"/>',
   };
   const icon = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || ""}</svg>`;
@@ -116,7 +117,8 @@
         </div>
         <div class="cv-player-controls">
           <div class="cv-player-group">
-            <button class="cv-player-icon" data-act="list" type="button" aria-label="Серии и озвучки">${icon("list")}</button>
+            <button class="cv-player-icon" data-act="list" type="button" aria-label="Серии" title="Серии" hidden>${icon("list")}</button>
+            <button class="cv-player-icon cv-player-voice-button" data-act="voices" type="button" aria-label="Озвучка" title="Озвучка" hidden>${icon("voice")}</button>
             <button class="cv-player-icon" data-act="next" type="button" aria-label="Следующая серия" title="Следующая серия" hidden>${icon("next")}</button>
             <div class="cv-player-volume"><button class="cv-player-icon" data-act="mute" type="button" aria-label="Звук">${icon("volume")}</button><input type="range" min="0" max="1" step="0.05" aria-label="Громкость"></div>
           </div>
@@ -211,6 +213,11 @@
       const entry = episode();
       const nextButton = root.querySelector('.cv-player-icon[data-act="next"]');
       if (nextButton) nextButton.hidden = !(options.autoNext !== false && episodes[index + 1]);
+      // Episodes and voices are two different buttons: a film has only voices.
+      const listButton = root.querySelector('[data-act="list"]');
+      if (listButton) listButton.hidden = Boolean(options.isMovie) || episodes.length < 2;
+      const voiceButton = root.querySelector('[data-act="voices"]');
+      if (voiceButton) voiceButton.hidden = !(options.isMovie ? episodes.length > 1 || options.onChooseSource : (options.voices || []).length > 1 || options.onChooseSource);
       $(".cv-player-title").textContent = entry.label && entry.e ? `${options.title} · ${entry.s ? `${entry.s} сезон, ` : ""}${entry.label}` : (options.subtitle ? `${options.title} · ${options.subtitle}` : options.title);
       $(".cv-player-voice").textContent = options.voice || "";
     };
@@ -391,6 +398,35 @@
     // it counts down only over the last seconds, and the episode's end plays the next one.
     let nextHiddenFor = -1;
     const nextBox = () => $(".cv-player-next");
+    // Another voice of the same source, same episode, same second.
+    const switchVoice = async (voice) => {
+      if (!options.onVoice) return;
+      const at = video.currentTime || 0;
+      cancelNext();
+      saveProgress(false);
+      video.pause();
+      connecting = true;
+      loadingTarget = index;
+      options.voice = voice.name;
+      delete root.dataset.loadingShown;
+      root.classList.add("is-loading");
+      paintLoading();
+      try {
+        const next = await options.onVoice(voice, episode());
+        if (closed) return;
+        if (!next?.stream) throw new Error("нет ссылки");
+        index = Math.max(0, next.index);
+        episodes.forEach((entry, entryIndex) => { entry.current = entryIndex === index; });
+        if (Array.isArray(next.voices)) options.voices = next.voices;
+        current = { stream: next.stream, qualities: next.qualities || {}, subtitles: next.subtitles || [] };
+        header();
+        loadSegments();
+        load(pickInitialQuality(), at);
+        toast(`Озвучка: ${voice.name}`);
+      } catch (error) {
+        fail(error?.message === "нет серии" ? `В озвучке «${voice.name}» нет этой серии. Выберите другую.` : "Не удалось переключить озвучку. Попробуйте другую.");
+      }
+    };
     const cancelNext = () => {
       window.clearInterval(nextTimer);
       nextTimer = 0;
@@ -490,10 +526,17 @@
       } else if (kind === "speed") {
         title = "Скорость воспроизведения";
         items = SPEEDS.map((speed) => ({ label: speed === 1 ? "Обычная" : `${speed}×`, active: video.playbackRate === speed, run: () => { video.playbackRate = speed; savePrefs({ speed }); } }));
+      } else if (kind === "voices") {
+        title = "Озвучка";
+        if (options.isMovie) {
+          items = episodes.map((entry, entryIndex) => ({ label: entry.label, note: entry.note || "", active: entryIndex === index, run: () => { if (entryIndex !== index) goTo(entryIndex, video.currentTime); } }));
+        } else {
+          items = (options.voices || []).map((voice) => ({ label: voice.name, note: voice.active ? "Сейчас" : "", active: Boolean(voice.active), run: () => { if (!voice.active) switchVoice(voice); } }));
+        }
+        if (options.onChooseSource) items.push({ label: "Другой источник", note: "Вернуться к выбору источника и озвучки", run: () => { const pick = options.onChooseSource; close(); pick(); } });
       } else if (kind === "list") {
         title = options.listTitle || "Серии";
         items = episodes.map((entry, entryIndex) => ({ label: entry.name ? `${entry.e ? `${entry.e}. ` : ""}${entry.name}` : entry.label, note: entry.name ? entry.label : entry.note || "", still: options.autoNext !== false ? entry.still || "" : undefined, active: entryIndex === index, run: () => { if (entryIndex !== index) goTo(entryIndex, options.keepPosition ? video.currentTime : entry.startAt || 0); } }));
-        if (options.onChooseSource) items.push({ label: "Другой источник или озвучка", note: "Вернуться к выбору", run: () => { const pick = options.onChooseSource; close(); pick(); } });
       }
       panelKind = kind;
       const parent = kind === "fit" || kind === "speed" ? "settings" : "";
@@ -632,6 +675,7 @@
       subs: () => openPanel("subs"),
       settings: () => openPanel("settings"),
       list: () => openPanel("list"),
+      voices: () => openPanel("voices"),
     };
     root.addEventListener("click", (event) => {
       const button = event.target.closest("[data-act]");
