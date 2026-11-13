@@ -149,9 +149,9 @@ fun TvApp(startId: String? = null) {
 
     Box(Modifier.fillMaxSize().background(Hall.Bg)) {
         when (val top = nav.stack.lastOrNull()) {
-            is TvRoute.Play -> TvLampacPlayer(top.request, onBack = { nav.pop() }, onChooseSource = {
+            is TvRoute.Play -> TvLampacPlayer(top.request, onBack = { nav.pop() }, chooseSource = { season, episode ->
                 nav.pop()
-                if (nav.stack.lastOrNull() !is TvRoute.Watch) nav.push(TvRoute.Watch(top.request.item, top.request.season, top.request.episode))
+                nav.push(TvRoute.Watch(top.request.item, season, episode))
             })
             is TvRoute.Watch -> holder.SaveableStateProvider("watch-${top.item.id}") {
                 TvWatch(top.item, top.season, top.episode, onClose = { nav.pop() }, onPlay = { request ->

@@ -13,6 +13,8 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +37,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
@@ -87,7 +91,7 @@ import org.json.JSONObject
 /** An IntroDB mark: intro, recap or credits (outro), in seconds. */
 data class SkipSegment(val type: String, val start: Double, val end: Double)
 
-private enum class PlayerPanel { LIST, QUALITY, SUBTITLES }
+private enum class PlayerPanel { LIST, VOICES, QUALITY, SUBTITLES }
 
 private val SEGMENT_LABELS = mapOf("intro" to "Пропустить интро", "recap" to "Пропустить пересказ", "outro" to "Пропустить титры")
 private const val NEXT_COUNTDOWN = 10
@@ -129,7 +133,7 @@ private fun PlayerSurface(player: Player) {
  * card with its still from the start of the credits, and the episode list with stills.
  */
 @Composable
-fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, onChooseSource: () -> Unit) {
+fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, chooseSource: (Int, Int) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val item = request.item
@@ -157,8 +161,13 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, onChooseSource: () -
     val timelineFocus = remember { FocusRequester() }
     val nextFocus = remember { FocusRequester() }
     val sourceFocus = remember { FocusRequester() }
+    val firstButton = remember { FocusRequester() }
 
-    val entries = request.entries
+    var entries by remember { mutableStateOf(request.entries) }
+    var voices by remember { mutableStateOf(request.voices) }
+    var voiceBusy by remember { mutableStateOf(false) }
+    /** «Другой источник» opens «Где смотреть» on the episode playing now. */
+    val onChooseSource: () -> Unit = { val now = entries[index]; chooseSource(if (request.isMovie) 0 else now.season, if (request.isMovie) 0 else now.episode) }
     val entry = entries[index]
     val hasNext = !request.isMovie && index + 1 < entries.size
     val episodeOf = { at: Int -> entries.getOrNull(at)?.let { stills["${it.season}-${it.episode}"] } }
@@ -214,6 +223,49 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, onChooseSource: () -
         }
     }
 
+    /**
+     * Another voice of this source (a series): its episode list replaces this one, so the next episodes
+     * follow the new voice, and the same episode goes on from the same second, as on the site.
+     */
+    fun switchVoice(choice: JSONObject) {
+        val url = choice.optString("url")
+        val name = choice.optString("name")
+        if (url.isBlank() || voiceBusy) return
+        val now = entries[index]
+        val at = player.currentPosition / 1000.0
+        voiceBusy = true
+        panel = null; controls = false
+        osd = "Переключаю озвучку на «$name»…"
+        scope.launch {
+            try {
+                val node = Lampac.node(url)?.takeIf { it.type == "episode" && it.data.isNotEmpty() } ?: throw IllegalStateException("нет серии")
+                val fresh = node.data.mapIndexed { position, raw ->
+                    val e = raw.optString("e").toIntOrNull() ?: (position + 1)
+                    PlayEntry(raw.optString("name").ifBlank { "$e серия" }, raw.optString("s").toIntOrNull() ?: now.season, e, raw)
+                }
+                val target = fresh.indexOfFirst { it.season == now.season && it.episode == now.episode }
+                if (target < 0) throw IllegalStateException("в этой озвучке нет ${now.episode} серии")
+                val next = Lampac.stream(fresh[target].entry)
+                if (next.url.isBlank()) throw IllegalStateException("источник не отдал ссылку")
+                saveProgress()
+                entries = fresh
+                index = target
+                voices = node.voices
+                voice = name
+                stream = next
+                TvState.rememberLampacChoice(item.id, source = request.sourceId.takeIf(String::isNotBlank), voice = name)
+                val (label, link) = pickQuality(next)
+                qualityLabel = label
+                load(link, at)
+                osd = "Озвучка: $name"
+            } catch (error: Exception) {
+                osd = "Озвучка не переключилась: ${error.message}"
+            } finally {
+                voiceBusy = false
+            }
+        }
+    }
+
     // First start, resume from the second it was left at.
     LaunchedEffect(Unit) { TvState.rememberHistory(item); startCurrent(resume = true); delay(100); runCatching { rootFocus.requestFocus() } }
     DisposableEffect(player) {
@@ -223,7 +275,7 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, onChooseSource: () -
                 if (state == Player.STATE_READY) { connecting = false; slowSource = false }
                 if (state == Player.STATE_ENDED) {
                     saveProgress(completed = true)
-                    if (hasNext) goTo(index + 1) else controls = true
+                    if (!request.isMovie && index + 1 < entries.size) goTo(index + 1) else controls = true
                 }
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = player.playWhenReady }
@@ -400,21 +452,20 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, onChooseSource: () -
                 Box(Modifier.fillMaxWidth().height(140.dp).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.75f), Color.Transparent))))
                 Column(Modifier.padding(start = 48.dp, top = 30.dp, end = 48.dp)) {
                     HText(if (place.isNotBlank()) "${item.title} · $place" else item.title, size = Hall.S2, weight = FontWeight.SemiBold, display = true, maxLines = 1)
-                    HText(listOf(name, voice, request.sourceName, qualityLabel).filter(String::isNotBlank).joinToString(" · "), size = Hall.S0, color = Hall.Text2, maxLines = 1)
+                    HText(listOf(name, voice, request.sourceName, qualityLabel.takeUnless { request.sourceName.contains(it) }.orEmpty()).filter(String::isNotBlank).joinToString(" · "), size = Hall.S0, color = Hall.Text2, maxLines = 1)
                 }
                 Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
                     .padding(horizontal = 48.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Scrubber(position, duration, pendingSeek, timelineFocus, onSeek = { pendingSeek += it; touched = System.currentTimeMillis() }, onToggle = ::toggle)
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        HButton(if (playing) "Пауза" else "Смотреть", ::toggle, icon = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow)
+                    Scrubber(position, duration, pendingSeek, timelineFocus, firstButton, onSeek = { pendingSeek += it; touched = System.currentTimeMillis() }, onToggle = ::toggle)
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        HButton(if (playing) "Пауза" else "Смотреть", ::toggle, icon = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, focus = firstButton)
                         if (activeSegment != null) HButton(SEGMENT_LABELS[activeSegment.type] ?: "Пропустить", { skipSegment() }, primary = true, icon = Icons.Default.SkipNext)
-                        if (entries.size > 1) HButton(if (request.isMovie) "Озвучка" else "Серии", { panel = PlayerPanel.LIST })
+                        if (!request.isMovie && entries.size > 1) HButton("Серии", { panel = PlayerPanel.LIST }, icon = Icons.Default.List)
+                        if (request.isMovie && entries.size > 1 || !request.isMovie && voices.size > 1) HButton("Озвучка", { panel = if (request.isMovie) PlayerPanel.LIST else PlayerPanel.VOICES }, icon = Icons.Default.Mic, busy = voiceBusy)
                         if (stream.qualities.size > 1) HButton("Качество${if (qualityLabel.isNotBlank()) " · $qualityLabel" else ""}", { panel = PlayerPanel.QUALITY })
                         if (stream.subtitles.isNotEmpty()) HButton("Субтитры", { panel = PlayerPanel.SUBTITLES })
                         if (hasNext) HButton("Следующая", { goTo(index + 1) }, icon = Icons.Default.SkipNext)
                         HButton("Источник", onChooseSource)
-                        Spacer(Modifier.weight(1f))
-                        if (duration > 0) HText("${tvClock(duration)} · осталось ${tvClock(duration - position)}", size = Hall.S_1, color = Hall.Muted)
                     }
                 }
             }
@@ -424,6 +475,12 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, onChooseSource: () -
         AnimatedVisibility(panel == PlayerPanel.LIST, enter = fadeIn() + slideInVertically { it / 3 }, exit = fadeOut() + slideOutVertically { it / 3 }, modifier = Modifier.align(Alignment.BottomCenter)) {
             if (request.isMovie) ChoicePanel("Озвучка", entries.map { it.label to it.name }, index) { goTo(it) }
             else EpisodeStrip(item, entries, index, stills) { goTo(it) }
+        }
+        AnimatedVisibility(panel == PlayerPanel.VOICES, enter = slideInHorizontally { it }, exit = slideOutHorizontally { it }, modifier = Modifier.align(Alignment.CenterEnd)) {
+            ChoicePanel("Озвучка", voices.map { it.optString("name") to "" }, voices.indexOfFirst { it.optString("name") == voice }.takeIf { it >= 0 } ?: voices.indexOfFirst { it.optBoolean("active") }) { picked ->
+                val choice = voices[picked]
+                if (choice.optString("name") == voice) panel = null else switchVoice(choice)
+            }
         }
         AnimatedVisibility(panel == PlayerPanel.QUALITY || panel == PlayerPanel.SUBTITLES, enter = slideInHorizontally { it }, exit = slideOutHorizontally { it }, modifier = Modifier.align(Alignment.CenterEnd)) {
             if (panel == PlayerPanel.QUALITY) {
@@ -489,7 +546,7 @@ private fun Timeline(position: Double, duration: Double, modifier: Modifier = Mo
 
 /** The time line with the remote: left and right wind (held, faster), OK plays or pauses. */
 @Composable
-private fun Scrubber(position: Double, duration: Double, pending: Int, focus: FocusRequester, onSeek: (Int) -> Unit, onToggle: () -> Unit) {
+private fun Scrubber(position: Double, duration: Double, pending: Int, focus: FocusRequester, below: FocusRequester, onSeek: (Int) -> Unit, onToggle: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val shown = (position + pending).coerceIn(0.0, maxOf(duration, 0.0))
     Column(Modifier.focusRequester(focus).onFocusChanged { focused = it.isFocused }.focusable().onPreviewKeyEvent { event ->
@@ -497,13 +554,15 @@ private fun Scrubber(position: Double, duration: Double, pending: Int, focus: Fo
         when (event.key) {
             Key.DirectionLeft, Key.DirectionRight -> { val step = if (event.nativeKeyEvent.repeatCount > 2) 30 else 10; onSeek(if (event.key == Key.DirectionRight) step else -step); true }
             Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> { if (event.nativeKeyEvent.repeatCount == 0) onToggle(); true }
+            // Down goes to the first button, not to whichever lies under the middle of the line.
+            Key.DirectionDown -> runCatching { below.requestFocus() }.isSuccess
             else -> false
         }
     }, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth()) {
             HText(tvClock(shown), size = Hall.S0, weight = FontWeight.SemiBold, color = if (focused) Hall.Text else Hall.Text2)
             Spacer(Modifier.weight(1f))
-            HText(tvClock(duration), size = Hall.S0, color = Hall.Muted)
+            if (duration > 0) HText("${tvClock(duration)} · осталось ${tvClock(duration - shown)}", size = Hall.S0, color = Hall.Muted)
         }
         Timeline(shown, duration, focused = focused)
     }
