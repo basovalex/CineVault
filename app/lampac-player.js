@@ -113,7 +113,7 @@
       <div class="cv-player-bottom">
         <div class="cv-player-times"><span class="cv-player-pos">00:00:00</span><span class="cv-player-rest"></span></div>
         <div class="cv-player-bar" role="slider" tabindex="0" aria-label="Позиция">
-          <div class="cv-player-buffered"></div><div class="cv-player-played"></div><div class="cv-player-thumb"></div><div class="cv-player-hover" hidden><div class="cv-player-hover-frame" hidden></div><span></span></div>
+          <div class="cv-player-buffered"></div><div class="cv-player-played"></div><div class="cv-player-thumb"></div><div class="cv-player-hover" hidden><div class="cv-player-hover-frame" hidden></div><span class="cv-player-hover-time"></span></div>
         </div>
         <div class="cv-player-controls">
           <div class="cv-player-group">
@@ -282,49 +282,138 @@
     };
     // A frame over the seek bar, as in Lampa and YouTube: a second, muted copy of the video
     // in its lowest quality seeks to the hovered second. Made on the first hover only.
+    // A frame over the seek bar, as in Lampa and YouTube: a second, muted copy of the video
+    // (its lowest quality) seeks to the hovered second, the frame is drawn into a small picture
+    // and kept, so coming back to that spot is instant. Seeks go one after another, never
+    // waiting for the mouse to stop; until the exact frame is ready the nearest kept one shows
+    // dimmed with a spinner, never a stale frame from somewhere else.
     let previewSource = { stream: "", hls: false };
     let preview = null;
+    const PREVIEW_W = 320;
+    const PREVIEW_H = 180;
     const dropPreview = () => {
       if (!preview) return;
-      window.clearTimeout(preview.timer);
+      preview.dead = true;
       preview.hls?.destroy();
       preview.video.removeAttribute("src");
       preview.video.load();
       preview.video.remove();
       preview = null;
       const frame = $(".cv-player-hover-frame");
-      if (frame) frame.hidden = true;
+      if (frame) { frame.hidden = true; frame.classList.remove("is-waiting"); }
+    };
+    const previewStep = () => {
+      const duration = video.duration || 0;
+      return Math.max(4, Math.min(30, duration / 240));
+    };
+    const showPreviewFrame = (bucket) => {
+      const copy = preview;
+      const frame = $(".cv-player-hover-frame");
+      const canvas = frame?.querySelector("canvas");
+      if (!copy || !canvas) return;
+      const exact = copy.frames.get(bucket);
+      let shown = exact;
+      if (!shown) {
+        let best = -1;
+        copy.frames.forEach((unused, key) => { if (best < 0 || Math.abs(key - bucket) < Math.abs(best - bucket)) best = key; });
+        shown = best >= 0 && Math.abs(best - bucket) * previewStep() <= 90 ? copy.frames.get(best) : null;
+      }
+      const context = canvas.getContext("2d");
+      if (shown) context.drawImage(shown, 0, 0, PREVIEW_W, PREVIEW_H);
+      else { context.fillStyle = "#000"; context.fillRect(0, 0, PREVIEW_W, PREVIEW_H); }
+      frame.hidden = false;
+      frame.classList.toggle("is-waiting", !exact);
+    };
+    const capturePreview = (copy, bucket) => {
+      const shot = document.createElement("canvas");
+      shot.width = PREVIEW_W;
+      shot.height = PREVIEW_H;
+      const context = shot.getContext("2d");
+      const width = copy.video.videoWidth || 16;
+      const height = copy.video.videoHeight || 9;
+      const scale = Math.max(PREVIEW_W / width, PREVIEW_H / height);
+      context.drawImage(copy.video, (PREVIEW_W - width * scale) / 2, (PREVIEW_H - height * scale) / 2, width * scale, height * scale);
+      copy.frames.set(bucket, shot);
+      if (copy.frames.size > 400) copy.frames.delete(copy.frames.keys().next().value);
+    };
+    const runPreviewSeek = () => {
+      const copy = preview;
+      if (!copy || copy.dead || copy.busy || !copy.ready || copy.queued === null) return;
+      const bucket = copy.queued;
+      copy.queued = null;
+      if (copy.frames.has(bucket)) { if (copy.hovered === bucket) showPreviewFrame(bucket); runPreviewSeek(); return; }
+      copy.busy = true;
+      copy.seeking = bucket;
+      const target = Math.min(bucket * previewStep(), Math.max(0, (copy.video.duration || video.duration || 0) - 1));
+      // A slow source may take long to seek: after 20 s the bucket is asked again, but a
+      // late «seeked» still delivers its frame (the listener lives as long as the copy).
+      window.clearTimeout(copy.guard);
+      copy.guard = window.setTimeout(() => {
+        if (copy.dead || copy.seeking !== bucket) return;
+        copy.busy = false;
+        copy.seeking = null;
+        if (copy.hovered === bucket) copy.queued = bucket;
+        runPreviewSeek();
+      }, 8000);
+      copy.video.currentTime = target;
+    };
+    const finishPreviewSeek = (copy) => {
+      if (copy.dead || copy.seeking === null) return;
+      const bucket = copy.seeking;
+      const done = () => {
+        if (copy.dead || copy.seeking !== bucket) return;
+        window.clearTimeout(copy.guard);
+        try { capturePreview(copy, bucket); } catch {}
+        copy.busy = false;
+        copy.seeking = null;
+        if (copy.hovered === bucket) showPreviewFrame(bucket);
+        runPreviewSeek();
+      };
+      if (typeof copy.video.requestVideoFrameCallback === "function") {
+        let fired = false;
+        copy.video.requestVideoFrameCallback(() => { if (!fired) { fired = true; done(); } });
+        window.setTimeout(() => { if (!fired) { fired = true; done(); } }, 250);
+      } else {
+        window.setTimeout(done, 60);
+      }
     };
     const ensurePreview = () => {
       if (preview || !previewSource.stream || !window.matchMedia("(hover: hover)").matches) return preview;
+      const frame = $(".cv-player-hover-frame");
+      if (!frame) return null;
+      if (!frame.querySelector("canvas")) frame.insertAdjacentHTML("afterbegin", `<canvas width="${PREVIEW_W}" height="${PREVIEW_H}"></canvas><span class="cv-player-hover-wait" aria-hidden="true"></span>`);
       const frameVideo = document.createElement("video");
       frameVideo.muted = true;
       frameVideo.playsInline = true;
       frameVideo.preload = "auto";
       frameVideo.className = "cv-player-hover-video";
-      preview = { video: frameVideo, hls: null, timer: 0, ready: false, wanted: -1 };
-      frameVideo.addEventListener("loadedmetadata", () => { if (preview?.video === frameVideo) { preview.ready = true; if (preview.wanted >= 0) frameVideo.currentTime = preview.wanted; } });
-      frameVideo.addEventListener("seeked", () => { const frame = $(".cv-player-hover-frame"); if (frame && preview?.video === frameVideo) frame.hidden = false; });
+      preview = { video: frameVideo, hls: null, ready: false, busy: false, queued: null, hovered: null, frames: new Map(), dead: false, guard: 0 };
+      const copy = preview;
+      // Seek only once the copy has its first data: a seek before that never completes.
+      const markReady = () => { if (!copy.dead && !copy.ready && frameVideo.readyState >= 1) { copy.ready = true; runPreviewSeek(); } };
+      frameVideo.addEventListener("loadedmetadata", markReady);
+      frameVideo.addEventListener("seeked", () => finishPreviewSeek(copy));
+      frameVideo.addEventListener("loadeddata", markReady);
       if (previewSource.hls && window.Hls?.isSupported()) {
-        const copy = new window.Hls({ maxBufferLength: 2, maxMaxBufferLength: 4, startLevel: 0, capLevelToPlayerSize: false, autoStartLoad: true });
-        copy.on(window.Hls.Events.MANIFEST_PARSED, () => { copy.currentLevel = 0; copy.autoLevelEnabled = false; });
-        copy.loadSource(previewSource.stream);
-        copy.attachMedia(frameVideo);
-        preview.hls = copy;
+        const hlsCopy = new window.Hls({ maxBufferLength: 2, maxMaxBufferLength: 4, startLevel: 0, capLevelToPlayerSize: false, autoStartLoad: true, enableWorker: true });
+        hlsCopy.on(window.Hls.Events.MANIFEST_PARSED, () => { hlsCopy.currentLevel = 0; hlsCopy.autoLevelEnabled = false; });
+        hlsCopy.loadSource(previewSource.stream);
+        hlsCopy.attachMedia(frameVideo);
+        copy.hls = hlsCopy;
       } else {
         frameVideo.src = previewSource.stream;
       }
-      $(".cv-player-hover-frame").append(frameVideo);
-      return preview;
+      frame.append(frameVideo);
+      return copy;
     };
     const previewAt = (seconds) => {
       const copy = ensurePreview();
       if (!copy) return;
-      copy.wanted = seconds;
-      window.clearTimeout(copy.timer);
-      copy.timer = window.setTimeout(() => {
-        if (copy.ready && Math.abs(copy.video.currentTime - seconds) > 1) copy.video.currentTime = seconds;
-      }, 120);
+      const bucket = Math.round(seconds / previewStep());
+      copy.hovered = bucket;
+      showPreviewFrame(bucket);
+      if (!copy.frames.has(bucket) && copy.seeking !== bucket) copy.queued = bucket;
+      runPreviewSeek();
     };
     let loadToken = 0;
     const load = async (stream, startAt = 0, autoplay = true) => {
@@ -747,10 +836,10 @@
       const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
       hover.style.left = `${Math.max(90, Math.min(rect.width - 90, x))}px`;
       const seconds = barSeek(event);
-      hover.querySelector("span").textContent = clock(seconds);
+      hover.querySelector(".cv-player-hover-time").textContent = clock(seconds);
       previewAt(seconds);
     });
-    bar.addEventListener("mouseleave", () => { $(".cv-player-hover").hidden = true; });
+    bar.addEventListener("mouseleave", () => { $(".cv-player-hover").hidden = true; if (preview) preview.hovered = null; });
     volume.addEventListener("input", () => setVolume(Number(volume.value)));
 
     const actions = {
