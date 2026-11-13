@@ -166,7 +166,7 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
                                     if (future) "Выйдет ${russianDate(episode.airDate)}" else if (progress?.completed == true) "Просмотрено" else episode.airDate.takeIf(String::isNotBlank)?.let { russianDate(it, true) }.orEmpty(),
                                     { nav.push(TvRoute.Watch(item, episode.season, episode.number)) },
                                     Modifier.remembered("title-${item.id}", "ep-${episode.season}-${episode.number}"), width = 230.dp,
-                                    kicker = "${episode.number} серия${if (episode.rating > 0) " · ${String.format(Locale.US, "%.1f", episode.rating)}" else ""}", progress = progress?.takeIf { !it.completed }?.share ?: 0.0)
+                                    kicker = "${episode.number} серия", rating = episode.rating, progress = progress?.takeIf { !it.completed }?.share ?: 0.0)
                             }
                         }
                     }

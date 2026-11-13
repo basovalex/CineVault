@@ -305,7 +305,7 @@ fun ProgressBar(share: Double, modifier: Modifier = Modifier) {
 /** A landscape card (continue watching, feed, episodes): still or backdrop, a scrim and the copy over it. */
 @Composable
 fun WideCard(image: String, title: String, line: String, onClick: () -> Unit, modifier: Modifier = Modifier, width: Dp = 260.dp,
-             kicker: String = "", progress: Double = 0.0, focus: FocusRequester? = null, fallback: String = "") {
+             kicker: String = "", progress: Double = 0.0, focus: FocusRequester? = null, fallback: String = "", rating: Double = 0.0) {
     val (interaction, focused) = rememberFocused()
     Box(
         modifier.width(width).aspectRatio(16f / 9f).then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
@@ -314,7 +314,15 @@ fun WideCard(image: String, title: String, line: String, onClick: () -> Unit, mo
         TvImage(image, fallback, Modifier.fillMaxSize(), titleSize = Hall.S0)
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.35f to Color.Transparent, 1f to Hall.Bg.copy(alpha = 0.92f))))
         Column(Modifier.align(Alignment.BottomStart).padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            if (kicker.isNotBlank()) HText(kicker, size = Hall.S_1, color = Hall.Accent, weight = FontWeight.SemiBold, maxLines = 1)
+            if (kicker.isNotBlank() || rating > 0) Row(verticalAlignment = Alignment.CenterVertically) {
+                if (kicker.isNotBlank()) HText(kicker, size = Hall.S_1, color = Hall.Accent, weight = FontWeight.SemiBold, maxLines = 1)
+                // The site's .episode-rating: the episode's own rating in the colour of its step, not the interface's.
+                if (rating > 0) {
+                    if (kicker.isNotBlank()) Spacer(Modifier.width(8.dp))
+                    val (fill, ink) = rateColors(rating)
+                    Badge(String.format(java.util.Locale.US, "%.1f", rating), color = ink, background = fill)
+                }
+            }
             HText(title, size = Hall.S0, color = Hall.Text, weight = FontWeight.SemiBold, maxLines = 1, display = true)
             if (line.isNotBlank()) HText(line, size = Hall.S_1, color = Hall.Text2, maxLines = 1)
             if (progress > 0) { Spacer(Modifier.height(4.dp)); ProgressBar(progress, Modifier.fillMaxWidth()) }
@@ -420,4 +428,14 @@ fun Modifier.scrollTopOnFocus(): Modifier {
 @OptIn(ExperimentalFoundationApi::class)
 object TvStillScroll : BringIntoViewSpec {
     override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float = 0f
+}
+
+/** The six-step rating scale of the site (docs/DESIGN.md «Шкала оценок»): (fill, text). */
+internal fun rateColors(rating: Double): Pair<Color, Color> = when {
+    rating >= 9 -> Color(0xFF0F8A4E) to Color(0xFFF5F6F7)
+    rating >= 8 -> Color(0xFF2FBF71) to Color(0xFF04140C)
+    rating >= 7 -> Color(0xFFE3C04D) to Color(0xFF1D1704)
+    rating >= 6 -> Color(0xFFEC8B39) to Color(0xFF1F0F02)
+    rating >= 5 -> Color(0xFFE0524A) to Color(0xFFF5F6F7)
+    else -> Color(0xFF7D2F34) to Color(0xFFF5F6F7)
 }

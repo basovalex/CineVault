@@ -688,7 +688,7 @@ private fun EpisodeStrip(item: TvItem, entries: List<PlayEntry>, current: Int, s
                     val progress = TvState.progressOf(item.id, entry.season, entry.episode)
                     WideCard(info?.still.orEmpty(), info?.name?.ifBlank { null } ?: entry.label,
                         if (position == current) "Сейчас" else if (progress?.completed == true) "Просмотрено" else "${entry.season} сезон",
-                        { onPick(position) }, width = 220.dp, kicker = entry.label, progress = progress?.takeIf { !it.completed }?.share ?: 0.0,
+                        { onPick(position) }, width = 220.dp, kicker = entry.label, rating = info?.rating ?: 0.0, progress = progress?.takeIf { !it.completed }?.share ?: 0.0,
                         focus = if (position == current || (current < 0 && position == 0)) focus else null, fallback = entry.label)
                 }
             }
