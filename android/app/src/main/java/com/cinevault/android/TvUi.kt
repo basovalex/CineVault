@@ -46,6 +46,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.staticCompositionLocalOf
+import kotlinx.coroutines.launch
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -264,8 +269,10 @@ fun TvImage(url: String, title: String, modifier: Modifier = Modifier, scale: Co
 fun TvPosterCard(item: TvItem, onClick: () -> Unit, modifier: Modifier = Modifier, width: Dp? = 132.dp, focus: FocusRequester? = null,
                progress: Double = 0.0, onFocus: () -> Unit = {}) {
     val (interaction, focused) = rememberFocused()
-    if (focused) androidx.compose.runtime.LaunchedEffect(Unit) { onFocus() }
-    Column(modifier.then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    // The whole card — poster and the title under it — comes into view, not only the focused poster.
+    val bring = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
+    if (focused) androidx.compose.runtime.LaunchedEffect(Unit) { onFocus(); kotlinx.coroutines.delay(30); runCatching { bring.bringIntoView() } }
+    Column(modifier.then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth()).bringIntoViewRequester(bring), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
             Modifier.fillMaxWidth().aspectRatio(2f / 3f).then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
                 .hallFocus(RoundedCornerShape(Hall.R), scale = 1.07f, interaction = interaction, onClick = onClick).background(Hall.Surface),
@@ -393,3 +400,24 @@ fun BoxScope.Backdrop(image: String, title: String = "", strength: Float = 0.45f
 
 @Composable
 fun Dot(color: Color = Hall.Accent, size: Dp = 8.dp) { Box(Modifier.size(size).clip(CircleShape).background(color)) }
+
+/** How the page around goes back to its very top (its list or grid state), when there is one. */
+val LocalScrollTop = staticCompositionLocalOf<(suspend () -> Unit)?> { null }
+
+/**
+ * The top of a page (a title's buttons, the catalogue's filters) brings the page back to its very top when the remote
+ * returns to it, not only far enough for the focused button to show.
+ */
+@Composable
+fun Modifier.scrollTopOnFocus(): Modifier {
+    val top = LocalScrollTop.current ?: return this
+    val scope = rememberCoroutineScope()
+    // After the focus' own scroll has run, or that one cancels this.
+    return onFocusChanged { if (it.hasFocus) scope.launch { kotlinx.coroutines.delay(260); runCatching { top() } } }
+}
+
+/** For a list that scrolls itself to the focused row: the focus never drags it along. */
+@OptIn(ExperimentalFoundationApi::class)
+object TvStillScroll : BringIntoViewSpec {
+    override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float = 0f
+}

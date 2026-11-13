@@ -57,6 +57,8 @@ data class LampacPlay(
     val sourceName: String, val season: Int = 0, val episode: Int = 0,
     /** The source's other voices of a series ("name", "url", "active"), switched in the player itself. */
     val voices: List<JSONObject> = emptyList(), val sourceId: String = "",
+    /** The source's seasons of a series, so the player's episode list can switch season, as on the site. */
+    val seasons: List<JSONObject> = emptyList(),
 )
 
 private data class WatchSource(val id: String, val name: String, val node: LampacNode, val lines: Int = 0)
@@ -136,7 +138,7 @@ fun TvWatch(initial: TvItem, season: Int, episode: Int, onClose: () -> Unit, onP
 
     fun sourceName() = sources.firstOrNull { it.id == active }?.name.orEmpty()
 
-    fun play(list: List<PlayEntry>, index: Int, voiceName: String, isMovie: Boolean, voices: List<JSONObject> = emptyList()) {
+    fun play(list: List<PlayEntry>, index: Int, voiceName: String, isMovie: Boolean, voices: List<JSONObject> = emptyList(), seasons: List<JSONObject> = emptyList()) {
         val mine = ++token
         val target = list[index]
         busy("Открываю видео: ${target.label}${if (voiceName.isNotBlank() && !isMovie) ", $voiceName" else ""}…")
@@ -149,7 +151,7 @@ fun TvWatch(initial: TvItem, season: Int, episode: Int, onClose: () -> Unit, onP
                 return@launch
             }
             TvState.rememberLampacChoice(item.id, source = active, voice = voiceName)
-            onPlay(LampacPlay(item, list, index, first, voiceName, isMovie, sourceName(), target.season, target.episode, voices, active))
+            onPlay(LampacPlay(item, list, index, first, voiceName, isMovie, sourceName(), target.season, target.episode, voices, active, seasons))
         }
     }
 
@@ -432,7 +434,7 @@ fun TvWatch(initial: TvItem, season: Int, episode: Int, onClose: () -> Unit, onP
                                     val progress = TvState.progressOf(item.id, start.season, start.episode)
                                     val resuming = progress != null && !progress.completed && progress.real
                                     HButton("${if (resuming) "Продолжить" else "Смотреть"} · ${start.season} сезон, ${start.label}${if (shown.activeVoice.isNotBlank()) ", ${shown.activeVoice}" else ""}",
-                                        { touched = true; play(shown.list, shown.start, shown.activeVoice, false, shown.voices) }, primary = true, icon = Icons.Default.PlayArrow,
+                                        { touched = true; play(shown.list, shown.start, shown.activeVoice, false, shown.voices, shown.seasons) }, primary = true, icon = Icons.Default.PlayArrow,
                                         focus = startFocus, big = true, busy = statusBusy && status.startsWith("Открываю"),
                                         note = listOfNotNull(sourceName(), progress?.takeIf { resuming }?.let { "остановились на ${tvClock(it.position)}" }).joinToString(" · "))
                                 }
@@ -469,7 +471,7 @@ fun TvWatch(initial: TvItem, season: Int, episode: Int, onClose: () -> Unit, onP
                                             shown.list.forEachIndexed { index, entry ->
                                                 val progress = TvState.progressOf(item.id, entry.season, entry.episode)
                                                 EpisodeCell(entry.episode, entry.label, index == shown.start, progress?.completed == true, progress?.takeIf { !it.completed }?.share ?: 0.0, false, null) {
-                                                    play(shown.list, index, shown.activeVoice, false, shown.voices)
+                                                    play(shown.list, index, shown.activeVoice, false, shown.voices, shown.seasons)
                                                 }
                                             }
                                         }

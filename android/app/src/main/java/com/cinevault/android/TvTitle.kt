@@ -86,10 +86,10 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
 
     Box(Modifier.fillMaxSize().background(Hall.Bg)) {
         Backdrop(Tmdb.image(item.backdrop, "w1280"), strength = 0.75f)
-        CompositionLocalProvider(LocalBringIntoViewSpec provides remember { TvPageScroll(top = 0.05f, bottom = 0.05f, target = 0.08f) }) {
+        CompositionLocalProvider(LocalBringIntoViewSpec provides remember { TvPageScroll(top = 0.05f, bottom = 0.05f, target = 0.08f) }, LocalScrollTop provides { list.animateScrollToItem(0) }) {
             LazyColumn(Modifier.fillMaxSize(), list, contentPadding = PaddingValues(bottom = 60.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
                 item(key = "hero") {
-                    Column(Modifier.fillMaxWidth().padding(start = Hall.Gutter, end = 280.dp, top = 70.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(Modifier.fillMaxWidth().scrollTopOnFocus().padding(start = Hall.Gutter, end = 280.dp, top = 70.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         HText(if (item.isSeries) "Сериал" else "Фильм", size = Hall.S_1, color = Hall.Accent, weight = FontWeight.SemiBold)
                         HText(item.title, size = Hall.STitle, weight = FontWeight.Bold, display = true, maxLines = 2, lineHeight = Hall.STitle * 1.08f)
                         if (item.originalTitle.isNotBlank() && item.originalTitle != item.title) HText(item.originalTitle, size = Hall.S0, color = Hall.Muted, maxLines = 1)
@@ -159,6 +159,33 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
                         }
                     }
                 }
+                // «О фильме», the site's facts block.
+                item(key = "about") {
+                    val facts = listOf(
+                        "Оригинальное название" to item.originalTitle.takeIf { it != item.title }.orEmpty(),
+                        "Год" to (if (item.year > 0) "${item.year}" else ""),
+                        "Премьера" to (if (item.premiere.length == 10) russianDate(item.premiere, withYear = true) else ""),
+                        "Страна" to item.countries.joinToString(", "),
+                        (if (item.isSeries) "Создатели" else "Режиссёр") to item.directors.joinToString(", "),
+                        "Возраст" to (if (item.age.isNotBlank()) "${item.age}+" else ""),
+                        (if (item.isSeries) "Сезоны" else "Хронометраж") to (if (item.isSeries) (if (seasons.isNotEmpty()) "${countWord(seasons.size, "сезон", "сезона", "сезонов")}, ${countWord(seasons.sumOf { it.episodes }, "серия", "серии", "серий")}" else "") else if (item.runtime > 0) runtimeLabel(item.runtime) else ""),
+                        "Рейтинг TMDB" to (if (item.rating > 0) "${String.format(Locale.US, "%.1f", item.rating)} · ${countWord(item.votes, "оценка", "оценки", "оценок")}" else ""),
+                    ).filter { it.second.isNotBlank() }
+                    if (facts.isNotEmpty()) Column(Modifier.padding(horizontal = Hall.Gutter), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        HText(if (item.isSeries) "О сериале" else "О фильме", size = Hall.S2, weight = FontWeight.SemiBold, display = true)
+                        facts.chunked(2).forEach { pair ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                                pair.forEach { (label, value) ->
+                                    Row(Modifier.weight(1f)) {
+                                        HText(label, Modifier.width(190.dp), size = Hall.S0, color = Hall.Muted)
+                                        HText(value, size = Hall.S0, color = Hall.Text, maxLines = 2)
+                                    }
+                                }
+                                if (pair.size == 1) Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
                 if (item.people.isNotEmpty()) item(key = "cast") {
                     TvShelf("В ролях") {
                         items(item.people, key = { it.id }) { person -> PersonCard(person) { nav.push(TvRoute.Person(person.id, person.name)) } }
@@ -196,8 +223,9 @@ fun TvPersonScreen(id: Int, name: String, nav: TvNav) {
     var attempt by remember { mutableIntStateOf(0) }
     LaunchedEffect(attempt) { failed = false; runCatching { Tmdb.person(id) }.onSuccess { page = it }.onFailure { failed = true } }
     val shown = page
-    CompositionLocalProvider(LocalBringIntoViewSpec provides remember { TvPageScroll() }) {
-        LazyColumn(Modifier.fillMaxSize().background(Hall.Bg), contentPadding = PaddingValues(top = 40.dp, bottom = 60.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
+    val personList = rememberLazyListState()
+    CompositionLocalProvider(LocalBringIntoViewSpec provides remember { TvPageScroll() }, LocalScrollTop provides { personList.animateScrollToItem(0) }) {
+        LazyColumn(Modifier.fillMaxSize().background(Hall.Bg), personList, contentPadding = PaddingValues(top = 40.dp, bottom = 60.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
             item(key = "head") {
                 Row(Modifier.padding(horizontal = Hall.Gutter), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
                     Box(Modifier.width(150.dp).aspectRatio(2f / 3f).clip(RoundedCornerShape(Hall.RLg)).background(Hall.Surface)) {

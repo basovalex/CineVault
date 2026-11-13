@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DynamicFeed
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
@@ -115,6 +116,7 @@ object TvMemory {
     val rows = mutableMapOf<String, List<TvRow>>()
     val genreRows = mutableMapOf<String, MutableList<TvRow>>()
     val genreCursor = mutableMapOf<String, Int>()
+    var catalogLoaded: List<TvItem> = emptyList()
 }
 
 @Composable
@@ -238,9 +240,10 @@ fun tvClock(seconds: Double): String {
 
 /** The focused title above the rows, as Lampa and the site's hero: its frame, name, facts and a few lines. */
 @Composable
-private fun FocusInfo(item: TvItem?, modifier: Modifier = Modifier) {
-    Column(modifier.height(196.dp).padding(start = Hall.Gutter, end = 240.dp, top = 34.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+private fun FocusInfo(item: TvItem?, modifier: Modifier = Modifier, chip: String = "") {
+    Column(modifier.height(196.dp).padding(start = Hall.Gutter, end = 240.dp, top = if (chip.isNotBlank()) 16.dp else 34.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (item == null) return@Column
+        if (chip.isNotBlank()) Badge(chip, color = Hall.Text, background = Hall.Glass)
         HText(item.title, size = Hall.S3, weight = FontWeight.Bold, display = true, maxLines = 1)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             if (item.rating > 0) Badge(String.format(java.util.Locale.US, "%.1f", item.rating), color = Hall.OnAccent, background = Hall.Accent)
@@ -286,30 +289,73 @@ fun TvRowsPage(view: String, nav: TvNav) {
     }
     val meta = Tmdb.SECTION_TITLES[view]
     val continueList = if (view == "home") TvState.continueWatching().mapNotNull { record -> TvState.known[record.titleId]?.let { it to record } }.take(12) else emptyList()
+    // «Для вас» opens, as the site's home, on a big pick of the day with its own buttons and «Далее в подборке».
+    val picks = if (view == "home") rows?.firstOrNull { it.key == "trend-day" }?.items.orEmpty().filter { it.backdrop.isNotBlank() }.take(6) else emptyList()
+    var pickIndex by rememberSaveable { mutableIntStateOf(0) }
+    val pick = picks.getOrNull(pickIndex % maxOf(1, picks.size))
+    LaunchedEffect(pick?.id) { if (pick != null && (focused == null || focused == picks.getOrNull((pickIndex + picks.size - 1) % maxOf(1, picks.size)) || focused == picks.firstOrNull())) focused = pick }
+    val chip = when {
+        pick == null || focused != pick -> ""
+        TvState.latest(pick.id)?.let { !it.completed && it.real } == true -> "Вы остановились здесь"
+        else -> "Рекомендация на сегодня"
+    }
     Box(Modifier.fillMaxSize()) {
         Backdrop(Tmdb.image(focused?.backdrop.orEmpty(), "w1280"), strength = 0.5f)
         Column(Modifier.fillMaxSize()) {
             if (meta != null && focused == null) PageHeading(meta.first, meta.second, Modifier.padding(start = Hall.Gutter, top = 34.dp))
-            FocusInfo(focused)
-            CompositionLocalProvider(LocalBringIntoViewSpec provides remember { TvPageScroll(top = 0.02f, bottom = 0.02f, target = 0.0f) }) {
+            FocusInfo(focused, chip = chip)
+            // As in Lampa: the row with the focus always stands right under the description, whole — its heading,
+            // posters and their titles — so the page itself never scrolls by the focused poster alone.
+            val rowScope = rememberCoroutineScope()
+            // The list's order, so a row is found even while it is still off screen.
+            val order = buildList {
+                if (meta != null) add("section-title")
+                if (pick != null) add("hero")
+                if (continueList.isNotEmpty()) add("continue")
+                addAll((rows.orEmpty() + genreRows).map { it.key })
+            }
+            val anchor: (Any) -> Modifier = { key -> Modifier.onFocusChanged { state ->
+                if (state.hasFocus) rowScope.launch { order.indexOf(key).takeIf { it >= 0 }?.let { list.animateScrollToItem(if (it == 1 && order.first() == "section-title") 0 else it) } }
+            } }
+            CompositionLocalProvider(LocalBringIntoViewSpec provides remember { TvStillScroll }) {
                 LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(bottom = 60.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     if (meta != null) item(key = "section-title") {
                         HText(meta.first, Modifier.padding(start = Hall.Gutter), size = Hall.S_1, color = Hall.Accent, weight = FontWeight.SemiBold)
                     }
+                    if (pick != null) item(key = "hero") {
+                        val record = TvState.latest(pick.id)
+                        val resumable = record != null && !record.completed && record.real
+                        val favorite = TvState.isFavorite(pick.id)
+                        Row(Modifier.then(anchor("hero")).padding(horizontal = Hall.Gutter, vertical = 4.dp).onFocusChanged { if (it.hasFocus) focused = pick },
+                            horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            HButton(if (resumable) "Продолжить" else "Смотреть", { TvState.remember(pick); nav.push(TvRoute.Watch(pick, record?.season ?: 0, record?.episode ?: 0)) },
+                                Modifier.remembered(view, "hero-play"), primary = true, icon = Icons.Default.PlayArrow)
+                            HButton("Подробнее", { nav.open(pick) })
+                            HButton(if (favorite) "В избранном" else "В избранное", { TvState.toggleFavorite(pick) }, icon = if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder)
+                            if (picks.size > 1) {
+                                val next = picks[(pickIndex + 1) % picks.size]
+                                HButton("Далее: ${next.title}", { pickIndex = (pickIndex + 1) % picks.size }, note = "Далее в подборке · ${pickIndex % picks.size + 1} из ${picks.size}")
+                            }
+                        }
+                    }
                     if (continueList.isNotEmpty()) item(key = "continue") {
-                        TvShelf("Продолжить просмотр") {
-                            items(continueList, key = { it.second.key }) { (item, record) ->
-                                WideCard(Tmdb.image(item.backdrop.ifBlank { item.poster }, "w780"), item.title, episodeLine(record), {
-                                    nav.push(TvRoute.Watch(item, record.season, record.episode))
-                                }, Modifier.remembered(view, "continue/${record.key}").onFocusChanged { if (it.hasFocus) focused = item }, progress = record.share)
+                        Box(anchor("continue")) {
+                            TvShelf("Продолжить просмотр") {
+                                items(continueList, key = { it.second.key }) { (item, record) ->
+                                    WideCard(Tmdb.image(item.backdrop.ifBlank { item.poster }, "w780"), item.title, episodeLine(record), {
+                                        nav.push(TvRoute.Watch(item, record.season, record.episode))
+                                    }, Modifier.remembered(view, "continue/${record.key}").onFocusChanged { if (it.hasFocus) focused = item }, progress = record.share)
+                                }
                             }
                         }
                     }
                     val all = rows.orEmpty() + genreRows
-                    items(all, key = { it.key }) { row ->
-                        TvShelf(row.title, row.description) {
-                            items(row.items, key = { it.id }) { item ->
-                                TvPosterCard(item, { nav.open(item) }, Modifier.remembered(view, "${row.key}/${item.id}"), onFocus = { focused = item })
+                    itemsIndexed(all, key = { _, row -> row.key }) { position, row ->
+                        Box(anchor(row.key)) {
+                            TvShelf(row.title, row.description) {
+                                items(row.items, key = { it.id }) { item ->
+                                    TvPosterCard(item, { nav.open(item) }, Modifier.remembered(view, "${row.key}/${item.id}"), onFocus = { focused = item })
+                                }
                             }
                         }
                     }
@@ -332,7 +378,7 @@ fun TvPosterGrid(
     state: androidx.compose.foundation.lazy.grid.LazyGridState = rememberLazyGridState(), columns: Int = 6,
     badge: (TvItem) -> String? = { null }, onFocus: (TvItem) -> Unit = {}, footer: LazyGridScope.() -> Unit = {}, header: LazyGridScope.() -> Unit = {},
 ) {
-    CompositionLocalProvider(LocalBringIntoViewSpec provides remember { TvPageScroll() }) {
+    CompositionLocalProvider(LocalBringIntoViewSpec provides remember { TvPageScroll() }, LocalScrollTop provides { state.animateScrollToItem(0) }) {
         LazyVerticalGrid(GridCells.Fixed(columns), modifier, state = state,
             contentPadding = PaddingValues(start = Hall.Gutter, end = Hall.Gutter, top = 12.dp, bottom = 48.dp),
             horizontalArrangement = Arrangement.spacedBy(18.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
@@ -350,8 +396,8 @@ fun TvPosterGrid(
     }
 }
 
-private fun LazyGridScope.fullWidth(key: String, content: @Composable () -> Unit) {
-    item(key = key, span = { GridItemSpan(maxLineSpan) }) { content() }
+private fun LazyGridScope.fullWidth(key: String, top: Boolean = true, content: @Composable () -> Unit) {
+    item(key = key, span = { GridItemSpan(maxLineSpan) }) { Box(if (top) Modifier.scrollTopOnFocus() else Modifier) { content() } }
 }
 
 @Composable
@@ -381,6 +427,9 @@ fun TvCatalogPage(nav: TvNav) {
                     items(listOf("" to "Всё", "movie" to "Фильмы", "tv" to "Сериалы")) { (value, label) -> HChip(label, kind == value, { kind = value }) }
                     item { Spacer(Modifier.width(18.dp)) }
                     items(Tmdb.CATALOG_SORTS) { (value, label) -> HChip(label, sort == value && collection.isBlank(), { sort = value; collection = "" }) }
+                    item { Spacer(Modifier.width(18.dp)) }
+                    // «Случайный», as on the site: a title picked at random from what the filters show.
+                    item { HChip("Случайный", false, { TvMemory.catalogLoaded.randomOrNull()?.let(nav::open) }) }
                 }
             }
             fullWidth("genres") {
@@ -427,7 +476,7 @@ private fun TvDiscoverGrid(
         busy = true
         scope.launch {
             runCatching { load(kinds, loaded + 1) }
-                .onSuccess { (found, total) -> val known = items.map { it.id }.toSet(); items.addAll(found.filter { it.id !in known }); pages = total; loaded++; error = null }
+                .onSuccess { (found, total) -> val known = items.map { it.id }.toSet(); items.addAll(found.filter { it.id !in known }); pages = total; loaded++; error = null; if (page == "catalog") TvMemory.catalogLoaded = items.toList() }
                 .onFailure { error = it.message ?: "ошибка" }
             busy = false
         }
@@ -441,7 +490,7 @@ private fun TvDiscoverGrid(
         fullWidth("top-space") { Spacer(Modifier.height(18.dp)) }
         header()
     }, footer = {
-        fullWidth("status") {
+        fullWidth("status", top = false) {
             when {
                 error != null -> EmptyBlock("Каталог не загрузился", "TMDB не ответил: ${error}.") { HButton("Повторить", { error = null; more() }, primary = true) }
                 busy -> StatusLine(if (items.isEmpty()) "Загружаю каталог…" else "Загружаю ещё…")
@@ -681,7 +730,7 @@ fun TvFeedPage(nav: TvNav) {
         else -> entries?.filter { it.type == filter }
     }
     val grid = rememberLazyGridState()
-    CompositionLocalProvider(LocalBringIntoViewSpec provides remember { TvPageScroll() }) {
+    CompositionLocalProvider(LocalBringIntoViewSpec provides remember { TvPageScroll() }, LocalScrollTop provides { grid.animateScrollToItem(0) }) {
         LazyVerticalGrid(GridCells.Fixed(3), Modifier.fillMaxSize(), grid, contentPadding = PaddingValues(start = Hall.Gutter, end = Hall.Gutter, top = 30.dp, bottom = 48.dp),
             horizontalArrangement = Arrangement.spacedBy(18.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             fullWidth("heading") { PageHeading("Лента", "Новые серии, релизы в высоком качестве и новинки — как в Lampa.") }

@@ -182,6 +182,14 @@ object TvState {
         get() = prefs.getInt("lines", 0)
         set(value) { prefs.edit().putInt("lines", value).apply() }
 
+    /** The player's settings, as the site keeps them: speed and how the picture fills the screen. */
+    var playerSpeed: Float
+        get() = prefs.getFloat("speed", 1f)
+        set(value) { prefs.edit().putFloat("speed", value).apply() }
+    var playerFit: String
+        get() = prefs.getString("fit", "contain").orEmpty()
+        set(value) { prefs.edit().putString("fit", value).apply() }
+
     // ---- Account.
     private fun accountUrl(route: String) = "${TvNet.server}/api/account/$route"
 
