@@ -239,9 +239,7 @@ private fun TvRail(view: TvView, onSelect: (TvGroup) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(Modifier.padding(start = 8.dp, bottom = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).background(Hall.Accent), contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.PlayArrow, null, tint = Hall.OnAccent, modifier = Modifier.size(20.dp))
-            }
+            androidx.compose.foundation.Image(androidx.compose.ui.res.painterResource(com.cinevault.android.R.drawable.cv_mark), null, Modifier.size(30.dp))
             if (open) { Spacer(Modifier.width(10.dp)); HText("CineVault", size = Hall.S1, weight = FontWeight.Bold, display = true, maxLines = 1) }
         }
         TV_GROUPS.forEach { item ->
