@@ -5177,11 +5177,27 @@
   // so a slow or blocked image host never leaves the hero without a name.
   const titleLogoUrls = new Map();
   const titleLogoReady = new Set();
-  function titleLogoUrl(id, title = "") {
+  // A catalogue card that is not a TMDB one (history, «Продолжить», the old Kinopoisk catalogue) is found on TMDB
+  // by its stored tmdbId or by name and year, so «Гравити Фолз» and «Во все тяжкие» get their logos too.
+  async function tmdbRefFor(id) {
     const parsed = parseTmdbItemId(id);
-    if (!parsed) return Promise.resolve("");
+    if (parsed) return parsed;
+    const item = getTitle(id);
+    if (!item || !["movie", "series"].includes(item.kind)) return null;
+    const type = item.kind === "series" ? "tv" : "movie";
+    let tmdbId = Number(item.tmdbId || 0);
+    if (!tmdbId) {
+      const query = encodeURIComponent(item.originalTitle || item.title || "");
+      const yearKey = type === "tv" ? "first_air_date_year" : "year";
+      const found = await cvTmdb(`search/${type}?query=${query}&language=ru-RU${item.year ? `&${yearKey}=${Number(item.year)}` : ""}`, 6000).catch(() => null);
+      tmdbId = Number(found?.results?.[0]?.id || 0);
+    }
+    return tmdbId ? { kind: item.kind, tmdbId } : null;
+  }
+  function titleLogoUrl(id, title = "") {
+    if (!id || !(parseTmdbItemId(id) || getTitle(id))) return Promise.resolve("");
     if (titleLogoUrls.has(id)) return titleLogoUrls.get(id);
-    const job = cvTmdb(`${parsed.kind === "series" ? "tv" : "movie"}/${parsed.tmdbId}/images?include_image_language=ru,en,null`, 6000)
+    const job = tmdbRefFor(id).then((parsed) => parsed ? cvTmdb(`${parsed.kind === "series" ? "tv" : "movie"}/${parsed.tmdbId}/images?include_image_language=ru,en,null`, 6000) : null)
       .then((data) => {
         // An English logo only for a title that is in Latin letters in Russian too («Stick»): «Полтора шпиона»
         // must not show up as «Central Intelligence». Otherwise Russian, a wordless one, or the text title.
@@ -5201,7 +5217,7 @@
   }
   // Whether the heading should wait (blank, its place kept) for a logo that may come: not when the answer is known.
   function titleLogoPending(id) {
-    if (!parseTmdbItemId(id)) return false;
+    if (!parseTmdbItemId(id) && !getTitle(id)) return false;
     const known = titleLogoUrls.get(id);
     return !(typeof known === "string" && (known === "" || titleLogoReady.has(known)));
   }
@@ -8255,6 +8271,9 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const actorAll = actors.length > 8 ? `<details class="detail-more"><summary>Показать всех актёров (${actors.length})</summary><div class="detail-people">${actors.map((actor) => `<span class="detail-person">${escapeHtml(actor)}</span>`).join("")}</div></details>` : "";
     const catalogReturnView = ["catalog", "movies", "series", "favorites", "evening", "history", "home"].includes(state.view) ? state.view : "catalog";
     const backLabel = `${uiIcon("arrow-left")}${catalogReturnView === "home" ? "Назад" : "Назад к списку"}`;
+    // The page is drawn again as TMDB details, episodes and ratings arrive: the logo that is already shown stays
+    // (the same picture element), so the title does not blink on every pass.
+    const keptLogo = enteringTitle ? null : page.querySelector(".detail-title .title-logo");
     page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell${frame ? " has-backdrop" : ""}"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}</div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"}</div><h1 class="detail-title${item.title.length > 24 ? " is-long" : ""}${titleLogoPending(item.id) ? " is-logo-pending" : ""}" data-logo-for="${escapeHtml(item.id)}">${titleLogoMarkup(item.id, item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">${uiIcon("star")}</span><strong>${ratingKinopoisk}</strong><small>${item.source === "tmdb" ? "TMDB" : "КиноПоиск"}</small></div>${item.source === "tmdb" && !Number(item.imdbRating || 0) ? "" : `<div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div>`}<div class="detail-status-card"><span class="detail-status-dot ${hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${hasPlayableSource(item) ? "Можно смотреть" : "Видео пока нет"}</strong><small>${item.kind === "series" ? seasonsLabel(item) : formatRuntime(item.runtime)}</small></div></div>${(() => {
       // As in Lampa: when the next episode comes out, or when a film is released.
       const today = new Date().toISOString().slice(0, 10);
@@ -8262,6 +8281,10 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       if (item.kind === "movie" && item.source === "tmdb" && String(item.premiere || "") > today && !upcomingPremiere(item)) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Премьера ${escapeHtml(airDateLabel(item.premiere))}</span></p>`;
       return "";
     })()}<div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${detailWatch}${`<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button">${uiIcon("play")}<span>Трейлер</span></button>`}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button>${parseTmdbItemId(item.id) && (item.kind === "series" || String(item.premiere || "") > new Date().toISOString().slice(0, 10) || isSubscribed(item.id)) ? subscribeButtonMarkup(item.id) : ""}</div>${randomBarMarkup(item)}</div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section>${actors.length ? `<section class="section detail-cast"><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}</div>`;
+    if (keptLogo) {
+      const heading = page.querySelector(".detail-title");
+      if (heading && heading.dataset.logoFor === id) { heading.replaceChildren(keptLogo); heading.classList.remove("is-logo-pending"); heading.classList.add("has-logo"); }
+    }
     progressiveBackground($(".detail-shell"), "--detail-backdrop", backdropUrl);
     if (awaitingPlayback) {
       const status = page.querySelector('.detail-status-card strong');
@@ -9071,13 +9094,31 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
 
   // Posters and frames fade in once they arrive instead of popping in line by line. Only a picture that is
   // not in the cache yet is hidden, and only until it loads or fails, so nothing can stay invisible.
+  // Episode stills of one list come up together (when all have loaded, or after 1.5 s at most), not one by one.
+  const stillGroups = new WeakMap();
   function fadeInImage(image) {
     if (!(image instanceof HTMLImageElement) || image.dataset.fade || image.complete || image.closest(".title-logo, .cv-player")) return;
     image.dataset.fade = "1";
     image.classList.add("img-fading");
-    const done = () => image.classList.remove("img-fading");
-    image.addEventListener("load", done, { once: true });
-    image.addEventListener("error", done, { once: true });
+    const group = image.hasAttribute("data-episode-poster") ? image.closest("section, .page") : null;
+    if (!group) {
+      const done = () => image.classList.remove("img-fading");
+      image.addEventListener("load", done, { once: true });
+      image.addEventListener("error", done, { once: true });
+      return;
+    }
+    let entry = stillGroups.get(group);
+    if (!entry || entry.shown) {
+      entry = { images: [], waiting: 0, shown: false };
+      entry.show = () => { if (entry.shown) return; entry.shown = true; entry.images.forEach((one) => one.classList.remove("img-fading")); };
+      entry.timer = window.setTimeout(entry.show, 1500);
+      stillGroups.set(group, entry);
+    }
+    entry.images.push(image);
+    entry.waiting += 1;
+    const settled = () => { entry.waiting -= 1; if (entry.waiting <= 0) { window.clearTimeout(entry.timer); entry.show(); } };
+    image.addEventListener("load", settled, { once: true });
+    image.addEventListener("error", settled, { once: true });
   }
   new MutationObserver((records) => {
     for (const record of records) for (const node of record.addedNodes) {
