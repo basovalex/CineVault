@@ -9465,12 +9465,21 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
 
   // The search window: opened over the page as soon as the field gets the focus. Before anything is typed it
   // offers ways in — sections and genres, the last searches, what is popular today; while typing, results.
-  const RECENT_SEARCHES_KEY = "cinevault.recentSearches";
-  function recentSearches() { try { return (JSON.parse(localStorage.getItem(RECENT_SEARCHES_KEY) || "[]") || []).filter((one) => typeof one === "string").slice(0, 6); } catch { return []; } }
-  function rememberSearch(query) {
-    const text = String(query || "").trim();
-    if (text.length < 2) return;
-    try { localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify([text, ...recentSearches().filter((one) => one.toLowerCase() !== text.toLowerCase())].slice(0, 6))); } catch {}
+  // «Вы искали» keeps the titles opened from search (not the typed words): poster, name, year.
+  const RECENT_SEARCHES_KEY = "cinevault.recentSearchTitles";
+  const searchShown = new Map();
+  function recentSearches() { try { return (JSON.parse(localStorage.getItem(RECENT_SEARCHES_KEY) || "[]") || []).filter((one) => one && one.id && one.title).slice(0, 6); } catch { return []; } }
+  function rememberSearchTitle(id) {
+    const item = searchShown.get(id) || getTitle(id);
+    if (!item?.title) return;
+    const entry = { id, title: item.title, year: item.year || "", kind: item.kind || "", genre: genresForItem(item)[0] || "", posterImage: item.posterImage || "" };
+    try { localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify([entry, ...recentSearches().filter((one) => one.id !== id)].slice(0, 6))); } catch {}
+  }
+  function searchResultRow(item, extra = "") {
+    searchShown.set(item.id, item);
+    const kind = item.kind === "series" ? "сериал" : "фильм";
+    const facts = [item.year, kind, item.genre || genresForItem(item)[0]].filter(Boolean).join(" · ");
+    return `<a class="search-suggestion" ${extra} href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}"><span class="search-suggestion-poster" style="${item.posterImage ? `background-image:url('${escapeHtml(previewImageUrl(item.posterImage))}')` : ""}" aria-hidden="true"></span><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(facts)}</small></span></a>`;
   }
   const SEARCH_SECTIONS = [["movies", "Фильмы"], ["series", "Сериалы"], ["cartoons", "Мультфильмы"], ["anime", "Аниме"], ["upcoming", "Скоро"]];
   const SEARCH_GENRES = [["комедия", "Комедии"], ["ужасы", "Ужасы"], ["фантастика", "Фантастика"], ["триллер", "Триллеры"], ["драма", "Драмы"], ["мелодрама", "Про любовь"], ["детектив", "Детективы"]];
@@ -9483,15 +9492,14 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     popup.innerHTML = `<div class="search-start">
       <p class="search-start-title">Разделы</p>
       <div class="search-chips">${SEARCH_SECTIONS.map(([view, label]) => `<a class="search-chip" href="${routeForView(view)}" data-search-view="${view}">${escapeHtml(label)}</a>`).join("")}${SEARCH_GENRES.map(([genre, label]) => `<button class="search-chip" type="button" data-search-genre="${escapeHtml(genre)}">${escapeHtml(label)}</button>`).join("")}</div>
-      ${recent.length ? `<p class="search-start-title">Вы искали</p><div class="search-recent">${recent.map((query) => `<button class="search-recent-item" type="button" data-search-query="${escapeHtml(query)}">${uiIcon("search")}<span>${escapeHtml(query)}</span></button>`).join("")}</div>` : ""}
-      ${trending.length ? `<p class="search-start-title">Сейчас ищут</p><div class="search-suggestions-list">${trending.map((item) => `<a class="search-suggestion" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}"><span class="search-suggestion-poster" style="background-image:url('${escapeHtml(previewImageUrl(item.posterImage))}')" aria-hidden="true"></span><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml([item.year, kindLabel(item), ...genresForItem(item).slice(0, 1)].filter(Boolean).join(" · "))}</small></span></a>`).join("")}</div>` : ""}
+      ${recent.length ? `<p class="search-start-title">Вы искали</p><div class="search-suggestions-list">${recent.map((item) => searchResultRow(item)).join("")}</div>` : ""}
+      ${trending.length ? `<p class="search-start-title">Сейчас ищут</p><div class="search-suggestions-list">${trending.filter((item) => !recent.some((one) => one.id === item.id)).slice(0, Math.max(3, 6 - recent.length)).map((item) => searchResultRow(item)).join("")}</div>` : ""}
     </div>`;
     popup.hidden = false;
     openSearchWindow();
   }
   function runSearch(query) {
     const text = String(query || "").trim();
-    rememberSearch(text);
     state.query = text;
     state.catalogCollection = "";
     state.catalogGenre = "";
@@ -9513,7 +9521,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     popup.innerHTML = failed
       ? `<p class="search-suggestions-empty">Поиск сейчас не отвечает. Enter откроет полный поиск.</p>`
       : results.length
-        ? `<div class="search-suggestions-list" role="listbox" aria-label="Подсказки поиска">${results.map((item) => `<a class="search-suggestion" role="option" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}"><span class="search-suggestion-poster" style="${item.posterImage ? `background-image:url('${escapeHtml(previewImageUrl(item.posterImage))}')` : ""}" aria-hidden="true"></span><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml([item.year, kindLabel(item), ...genresForItem(item).slice(0, 1)].filter(Boolean).join(" · "))}</small></span></a>`).join("")}</div><p class="search-suggestions-title">Enter — все результаты</p>`
+        ? `<div class="search-suggestions-list" role="listbox" aria-label="Подсказки поиска">${results.map((item) => searchResultRow(item, 'role="option"')).join("")}</div><p class="search-suggestions-title">Enter — все результаты</p>`
         : `<p class="search-suggestions-empty">По запросу «${escapeHtml(query)}» ничего не нашлось.</p>`;
   }
   function requestSearchSuggestions() {
@@ -9582,7 +9590,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const genre = event.target.closest("[data-search-genre]");
     const query = event.target.closest("[data-search-query]");
     const title = event.target.closest("[data-open-title]");
-    if (title) { rememberSearch(searchDraft); window.setTimeout(() => { hideSearchSuggestions(); $("#search")?.blur(); }, 0); return; }
+    if (title) { rememberSearchTitle(title.dataset.openTitle); window.setTimeout(() => { hideSearchSuggestions(); $("#search")?.blur(); }, 0); return; }
     if (!view && !genre && !query) return;
     event.preventDefault();
     if (query) { $("#search").value = searchDraft = query.dataset.searchQuery; runSearch(searchDraft); return; }
