@@ -5172,6 +5172,52 @@
     if (!path) return "";
     return `${cvTmdbLocal() ? "https://image.tmdb.org/t/p" : "/tmdb/t/p"}/${size}${path}`;
   }
+  // The film's own title art (TMDB «logos»), Russian first, then English or a wordless one, as the big
+  // services show «Кольца власти» or «Одиссея». The text title stays until the picture has loaded,
+  // so a slow or blocked image host never leaves the hero without a name.
+  const titleLogoUrls = new Map();
+  const titleLogoReady = new Set();
+  function titleLogoUrl(id) {
+    const parsed = parseTmdbItemId(id);
+    if (!parsed) return Promise.resolve("");
+    if (titleLogoUrls.has(id)) return titleLogoUrls.get(id);
+    const job = cvTmdb(`${parsed.kind === "series" ? "tv" : "movie"}/${parsed.tmdbId}/images?include_image_language=ru,en,null`, 6000)
+      .then((data) => {
+        const rank = (logo) => ({ ru: 0, en: 1 })[logo.iso_639_1] ?? 2;
+        const best = (data?.logos || []).filter((logo) => logo.file_path && !/\.svg$/i.test(logo.file_path))
+          .sort((left, right) => rank(left) - rank(right) || (right.vote_average || 0) - (left.vote_average || 0))[0];
+        return best ? tmdbImage(best.file_path, "w500") : "";
+      })
+      .catch(() => "");
+    titleLogoUrls.set(id, job);
+    return job;
+  }
+  function titleLogoMarkup(id, title) {
+    const known = titleLogoUrls.get(id);
+    return typeof known === "string" && titleLogoReady.has(known) ? `<img class="title-logo" src="${escapeHtml(known)}" alt="${escapeHtml(title)}" decoding="async">` : escapeHtml(title);
+  }
+  function hydrateTitleLogos(root = document) {
+    root.querySelectorAll?.("[data-logo-for]").forEach((heading) => {
+      const id = heading.dataset.logoFor;
+      if (heading.querySelector(".title-logo")) return;
+      titleLogoUrl(id).then((url) => {
+        titleLogoUrls.set(id, url);
+        if (!url) return;
+        const image = new Image();
+        image.className = "title-logo is-entering";
+        image.alt = heading.textContent;
+        image.decoding = "async";
+        image.onload = () => {
+          titleLogoReady.add(url);
+          if (!heading.isConnected || heading.dataset.logoFor !== id) return;
+          heading.replaceChildren(image);
+          heading.classList.add("has-logo");
+          requestAnimationFrame(() => image.classList.remove("is-entering"));
+        };
+        image.src = url;
+      });
+    });
+  }
   // «15 ноября» (this year) or «15 ноября 2027»; «сегодня»/«завтра» close by, as Lampa says it.
   function airDateLabel(date) {
     const value = String(date || "");
@@ -6544,8 +6590,9 @@
     const progress = progressForTitle(pick);
     const resumable = progress && !progress.completed && progress.duration > 0;
     const chip = upcomingPremiere(pick) ? "Скоро" : resumable ? "Вы остановились здесь" : pick.popularRank && pick.popularRank <= 10 ? `№${pick.popularRank} в популярном сейчас` : isNewRelease(pick) ? "Новинка" : "Рекомендация на сегодня";
-    // The title is always text: logos from TMDB load late or not at all in some networks.
-    const title = `<h1 id="home-feature-title">${escapeHtml(pick.title)}</h1>`;
+    const known = titleLogoUrls.get(pick.id);
+    const hasLogo = typeof known === "string" && titleLogoReady.has(known);
+    const title = `<h1 id="home-feature-title" class="feature-title${hasLogo ? " has-logo" : ""}${pick.title.length > 24 ? " is-long" : ""}" data-logo-for="${escapeHtml(pick.id)}">${titleLogoMarkup(pick.id, pick.title)}</h1>`;
     const meta = [ratingStar(pick), imdb ? `<span>IMDb ${imdb.toFixed(1)}</span>` : "", ...itemMetaLine(pick).map((value) => `<span>${escapeHtml(value)}</span>`), age ? `<span class="feature-age">${escapeHtml(age)}</span>` : ""].filter(Boolean).join("");
     const activeIndex = Math.max(0, picks.indexOf(pick));
     const nextIndex = (activeIndex + 1) % picks.length;
@@ -8181,7 +8228,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const actorAll = actors.length > 8 ? `<details class="detail-more"><summary>Показать всех актёров (${actors.length})</summary><div class="detail-people">${actors.map((actor) => `<span class="detail-person">${escapeHtml(actor)}</span>`).join("")}</div></details>` : "";
     const catalogReturnView = ["catalog", "movies", "series", "favorites", "evening", "history", "home"].includes(state.view) ? state.view : "catalog";
     const backLabel = `${uiIcon("arrow-left")}${catalogReturnView === "home" ? "Назад" : "Назад к списку"}`;
-    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell${frame ? " has-backdrop" : ""}"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}</div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"}</div><h1>${escapeHtml(item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">${uiIcon("star")}</span><strong>${ratingKinopoisk}</strong><small>${item.source === "tmdb" ? "TMDB" : "КиноПоиск"}</small></div>${item.source === "tmdb" && !Number(item.imdbRating || 0) ? "" : `<div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div>`}<div class="detail-status-card"><span class="detail-status-dot ${hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${hasPlayableSource(item) ? "Можно смотреть" : "Видео пока нет"}</strong><small>${item.kind === "series" ? seasonsLabel(item) : formatRuntime(item.runtime)}</small></div></div>${(() => {
+    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell${frame ? " has-backdrop" : ""}"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}</div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"}</div><h1 class="detail-title${item.title.length > 24 ? " is-long" : ""}" data-logo-for="${escapeHtml(item.id)}">${titleLogoMarkup(item.id, item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">${uiIcon("star")}</span><strong>${ratingKinopoisk}</strong><small>${item.source === "tmdb" ? "TMDB" : "КиноПоиск"}</small></div>${item.source === "tmdb" && !Number(item.imdbRating || 0) ? "" : `<div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div>`}<div class="detail-status-card"><span class="detail-status-dot ${hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${hasPlayableSource(item) ? "Можно смотреть" : "Видео пока нет"}</strong><small>${item.kind === "series" ? seasonsLabel(item) : formatRuntime(item.runtime)}</small></div></div>${(() => {
       // As in Lampa: when the next episode comes out, or when a film is released.
       const today = new Date().toISOString().slice(0, 10);
       if (item.kind === "series" && item.nextEpisode?.airDate >= today) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Новая серия ${escapeHtml(airDateLabel(item.nextEpisode.airDate))}</span><small>${item.nextEpisode.season} сезон, ${item.nextEpisode.episode} серия${item.nextEpisode.name && !/^(Эпизод|Серия|Episode)\s*\d+$/i.test(item.nextEpisode.name) ? ` · ${escapeHtml(item.nextEpisode.name)}` : ""}</small></p>`;
@@ -8995,7 +9042,27 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     } catch (error) { if (feedback) feedback.textContent = `Комнату создать не удалось: ${error.message}`; }
   }
 
+  // Posters and frames fade in once they arrive instead of popping in line by line. Only a picture that is
+  // not in the cache yet is hidden, and only until it loads or fails, so nothing can stay invisible.
+  function fadeInImage(image) {
+    if (!(image instanceof HTMLImageElement) || image.dataset.fade || image.complete || image.closest(".title-logo, .cv-player")) return;
+    image.dataset.fade = "1";
+    image.classList.add("img-fading");
+    const done = () => image.classList.remove("img-fading");
+    image.addEventListener("load", done, { once: true });
+    image.addEventListener("error", done, { once: true });
+  }
+  new MutationObserver((records) => {
+    for (const record of records) for (const node of record.addedNodes) {
+      if (node.nodeType !== 1) continue;
+      if (node.tagName === "IMG") fadeInImage(node);
+      else node.querySelectorAll?.("img").forEach(fadeInImage);
+      if (node.matches?.("[data-logo-for]") || node.querySelector?.("[data-logo-for]")) hydrateTitleLogos(node.parentNode || node);
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+
   function bindPageActions(root = document) {
+    hydrateTitleLogos(root);
     const $ = (selector, parent = root) => parent.querySelector(selector);
     const $$ = (selector, parent = root) => [...parent.querySelectorAll(selector)];
     $$('[data-open-source-import]').forEach((button) => button.addEventListener("click", () => { const item = getTitle(button.dataset.openSourceImport); if (item) openCatalogSourceImport(item); }));
