@@ -137,6 +137,25 @@ object Tmdb {
 
     fun image(path: String, size: String = "w500"): String = if (path.isBlank()) "" else "${TvNet.server}/tmdb/t/p/$size$path"
 
+    private val logos = java.util.concurrent.ConcurrentHashMap<String, String>()
+    /** The title's own lettering (TMDB «logos»): Russian first, then English or a wordless one; "" when there is none. */
+    fun knownLogo(item: TvItem): String? = logos[item.id]
+    suspend fun logo(item: TvItem): String {
+        logos[item.id]?.let { return it }
+        val url = runCatching {
+            val all = get("${if (item.isSeries) "tv" else "movie"}/${item.tmdbId}/images?include_image_language=ru,en,null", 8_000).optJSONArray("logos")
+            // English lettering only for a title written in Latin in Russian too: «Полтора шпиона», not «Central Intelligence».
+            val latin = item.title.none { it in 'а'..'я' || it in 'А'..'Я' || it == 'ё' || it == 'Ё' }
+            val list = (0 until (all?.length() ?: 0)).mapNotNull { all!!.optJSONObject(it) }
+                .filter { it.optString("file_path").let { path -> path.isNotBlank() && !path.endsWith(".svg", true) } && (it.optString("iso_639_1") != "en" || latin) }
+            fun rank(logo: JSONObject) = when (logo.optString("iso_639_1")) { "ru" -> 0; "en" -> 1; else -> 2 }
+            list.sortedWith(compareBy<JSONObject> { rank(it) }.thenByDescending { it.optDouble("vote_average", 0.0) }).firstOrNull()
+                ?.let { image(it.optString("file_path"), "w500") }.orEmpty()
+        }.getOrElse { return "" }
+        logos[item.id] = url
+        return url
+    }
+
     /** The same picture straight from TMDB, for when our server's copy does not come. */
     fun directImage(url: String): String = url.replace("${TvNet.server}/tmdb/t/p", "https://image.tmdb.org/t/p")
 

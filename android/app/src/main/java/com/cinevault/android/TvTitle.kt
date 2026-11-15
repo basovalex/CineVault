@@ -101,7 +101,7 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
                 item(key = "hero") {
                     Column(Modifier.fillMaxWidth().scrollTopOnFocus().padding(start = Hall.Gutter, end = Hall.Gutter, top = 70.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         HText(if (item.isSeries) "Сериал" else "Фильм", size = Hall.S_1, color = Hall.Accent, weight = FontWeight.SemiBold)
-                        HText(item.title, Modifier.fillMaxWidth(0.75f), size = Hall.STitle, weight = FontWeight.Bold, display = true, maxLines = 2, lineHeight = Hall.STitle * 1.08f)
+                        TitleArt(item, height = 96.dp, textSize = Hall.STitle, modifier = Modifier.fillMaxWidth(0.55f))
                         if (item.originalTitle.isNotBlank() && item.originalTitle != item.title) HText(item.originalTitle, size = Hall.S0, color = Hall.Muted, maxLines = 1)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                             if (item.rating > 0) Badge(String.format(Locale.US, "%.1f", item.rating), color = Hall.OnAccent, background = Hall.Accent)

@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -50,6 +51,7 @@ import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.staticCompositionLocalOf
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
@@ -452,3 +454,48 @@ fun KeepScreenOn(active: Boolean = true) {
         onDispose { view.keepScreenOn = false }
     }
 }
+
+/**
+ * A title as the big services show it: the film's own lettering when TMDB has one (it fades in once loaded),
+ * the text title meanwhile and whenever there is none or the picture fails.
+ */
+@Composable
+fun TitleArt(item: TvItem, height: Dp, textSize: TextUnit, modifier: Modifier = Modifier, maxLines: Int = 2) {
+    var url by remember(item.id) { androidx.compose.runtime.mutableStateOf<String?>(Tmdb.knownLogo(item)) }
+    var shown by remember(item.id) { androidx.compose.runtime.mutableStateOf(false) }
+    var failed by remember(item.id) { androidx.compose.runtime.mutableStateOf(false) }
+    // The text only if no logo comes within a moment: no flash of text replaced by the picture.
+    var waited by remember(item.id) { androidx.compose.runtime.mutableStateOf(Tmdb.knownLogo(item) == "") }
+    androidx.compose.runtime.LaunchedEffect(item.id) { if (url == null) url = Tmdb.logo(item); if (url.isNullOrBlank()) waited = true }
+    androidx.compose.runtime.LaunchedEffect(item.id) { kotlinx.coroutines.delay(1_200); waited = true }
+    val alpha by animateFloatAsState(if (shown) 1f else 0f, androidx.compose.animation.core.tween(450), label = "logo")
+    val textAlpha by animateFloatAsState(if (!shown && (waited || failed)) 1f else 0f, androidx.compose.animation.core.tween(350), label = "title")
+    Box(modifier.heightIn(min = height * 0.6f)) {
+        val logo = url
+        if (!shown) HText(item.title, Modifier.graphicsLayer { this.alpha = textAlpha }, size = textSize, weight = FontWeight.Bold, display = true, maxLines = maxLines, lineHeight = textSize * 1.08f)
+        if (!logo.isNullOrBlank() && !failed) {
+            val context = LocalContext.current
+            val request = remember(logo) {
+                ImageRequest.Builder(context).data(logo).apply { TvNet.serverHeaders(logo).forEach { (name, value) -> if (name == "Authorization") addHeader(name, value) } }.build()
+            }
+            AsyncImage(request, item.title, Modifier.height(height).fillMaxWidth().graphicsLayer { this.alpha = alpha },
+                contentScale = ContentScale.Fit, alignment = Alignment.CenterStart,
+                onSuccess = { shown = true }, onError = { failed = true; shown = false })
+        }
+    }
+}
+
+/** Fetches the logos of the first rows ahead (four at a time), so moving the focus shows them at once. */
+suspend fun prefetchLogos(context: android.content.Context, items: List<TvItem>): Unit = kotlinx.coroutines.coroutineScope {
+    items.distinctBy { it.id }.take(40).chunked(4).forEach { batch ->
+        batch.map { item ->
+            async {
+                val url = Tmdb.logo(item)
+                if (url.isNotBlank()) coil.Coil.imageLoader(context).enqueue(ImageRequest.Builder(context).data(url).apply {
+                    TvNet.serverHeaders(url).forEach { (name, value) -> if (name == "Authorization") addHeader(name, value) }
+                }.build())
+            }
+        }.forEach { it.await() }
+    }
+}
+

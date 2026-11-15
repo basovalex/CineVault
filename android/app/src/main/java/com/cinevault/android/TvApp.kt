@@ -283,7 +283,7 @@ private fun FocusInfo(item: TvItem?, modifier: Modifier = Modifier, chip: String
     Column(modifier.height(196.dp).padding(start = Hall.Gutter, end = 240.dp, top = if (chip.isNotBlank()) 16.dp else 34.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (item == null) return@Column
         if (chip.isNotBlank()) Badge(chip, color = Hall.Text, background = Hall.Glass)
-        HText(item.title, size = Hall.S3, weight = FontWeight.Bold, display = true, maxLines = 1)
+        TitleArt(item, height = 56.dp, textSize = Hall.S3, maxLines = 1)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             if (item.rating > 0) Badge(String.format(java.util.Locale.US, "%.1f", item.rating), color = Hall.OnAccent, background = Hall.Accent)
             val facts = listOfNotNull(item.year.takeIf { it > 0 }?.toString(), if (item.isSeries) "Сериал" else "Фильм", item.genres.take(3).joinToString(", ").ifBlank { null })
@@ -301,6 +301,7 @@ fun TvRowsPage(view: String, nav: TvNav) {
     var attempt by remember { mutableIntStateOf(0) }
     var focused by remember { mutableStateOf<TvItem?>(null) }
     val list = rememberLazyListState()
+    val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(attempt) {
         if (rows != null) return@LaunchedEffect
         error = false
@@ -309,6 +310,7 @@ fun TvRowsPage(view: String, nav: TvNav) {
         TvMemory.rows[view] = loaded
         rows = loaded
         if (focused == null) focused = loaded.first().items.firstOrNull()
+        prefetchLogos(context, loaded.take(3).flatMap { it.items.take(12) })
     }
     // Endless genre rows: the next one comes while the last rows are in view.
     LaunchedEffect(rows) {
