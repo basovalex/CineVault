@@ -439,3 +439,16 @@ internal fun rateColors(rating: Double): Pair<Color, Color> = when {
     rating >= 5 -> Color(0xFFE0524A) to Color(0xFFF5F6F7)
     else -> Color(0xFF7D2F34) to Color(0xFFF5F6F7)
 }
+
+/**
+ * Keeps the TV (and a phone) awake while a film plays: without it the TV starts its screensaver or switches
+ * itself off after its idle timer, since the remote is not touched for an hour.
+ */
+@androidx.compose.runtime.Composable
+fun KeepScreenOn(active: Boolean = true) {
+    val view = androidx.compose.ui.platform.LocalView.current
+    androidx.compose.runtime.DisposableEffect(view, active) {
+        view.keepScreenOn = active
+        onDispose { view.keepScreenOn = false }
+    }
+}

@@ -508,6 +508,7 @@ internal val TvGold = Color(0xFFE9B46A)
  */
 @Composable
 fun TvEmbedPlayer(request: PlayRequest) {
+    KeepScreenOn()
     val url = request.embedUrl ?: return
     if (android.net.Uri.parse(url).host?.let { it == "stravers.live" || it.endsWith(".stravers.live") } == true) return TvAllohaPlayer(request, url)
     val remote = remember(url) { EmbedRemote() }

@@ -80,6 +80,7 @@ fun TvTrailerScreen(item: TvItem, onBack: () -> Unit) {
         val http = DefaultHttpDataSource.Factory().setUserAgent("CineVault Android TV/1.0").setAllowCrossProtocolRedirects(true)
         buildExoPlayer(context, DefaultDataSource.Factory(context, http)).apply { playWhenReady = true }
     }
+    KeepScreenOn()
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {

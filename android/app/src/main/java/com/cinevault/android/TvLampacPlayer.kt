@@ -333,21 +333,27 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, chooseSource: (Int, 
                 // for this very episode and go on from the same second, a few times, before giving up on the quality.
                 val network = error.errorCode in setOf(PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS, PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
                     PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT, PlaybackException.ERROR_CODE_IO_UNSPECIFIED, PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE)
-                if (network && refreshes < 3) {
+                // Unsteady internet: up to 8 tries in a row, the pause growing to 15 s, every other one with a fresh link.
+                // The quality stays: a dropped connection is not a quality the TV cannot play.
+                if (network && refreshes < 8) {
                     refreshes++
-                    osd = "Обновляю ссылку на видео…"
+                    playedTicks = 0
+                    val attempt = refreshes
+                    osd = if (attempt == 1) "Связь прервалась, переподключаюсь…" else "Переподключаюсь… ($attempt из 8)"
                     val target = index
                     scope.launch {
-                        val fresh = runCatching { Lampac.stream(entries[target].entry) }.getOrNull()
-                        if (fresh != null && fresh.url.isNotBlank() && target == index) {
+                        delay(minOf(1_000L shl (attempt - 1), 15_000L))
+                        if (target != index) return@launch
+                        val fresh = if (attempt % 2 == 1) runCatching { Lampac.stream(entries[target].entry) }.getOrNull() else null
+                        if (target != index) return@launch
+                        if (fresh != null && fresh.url.isNotBlank()) {
                             stream = fresh
-                            val (label, link) = pickQuality(fresh)
-                            qualityLabel = label.ifBlank { qualityLabel }
-                            load(link, at0)
-                        } else { delay(1_500); load(pickQuality(stream).second, at0) }
+                            load(fresh.qualities[qualityLabel] ?: pickQuality(fresh).also { qualityLabel = it.first.ifBlank { qualityLabel } }.second, at0)
+                        } else load(stream.qualities[qualityLabel] ?: pickQuality(stream).second, at0)
                     }
                     return
                 }
+                if (network) { failure = "Связь с источником пропала. Проверьте интернет и нажмите «Источник» или откройте серию заново."; return }
                 // A quality that will not play: the next one down, then the stream as given.
                 val labels = stream.qualities.keys.sortedByDescending(Lampac::lines)
                 val lower = labels.dropWhile { it != qualityLabel }.drop(1).firstOrNull()
@@ -465,6 +471,7 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, chooseSource: (Int, 
             }
         },
     ) {
+        KeepScreenOn(playing || buffering)
         PlayerSurface(player, fit)
 
         val place = if (!request.isMovie) "${entry.season} сезон, ${entry.label}" else ""

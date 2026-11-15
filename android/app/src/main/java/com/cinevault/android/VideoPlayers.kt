@@ -221,6 +221,7 @@ fun PlayerScreen(request: PlayRequest, onBack: () -> Unit, tvMode: Boolean = fal
     var exitVisible by remember { mutableStateOf(false) }
     var touches by remember { mutableIntStateOf(0) }
     PlayerOrientation(tvMode, forceLandscape, orientationRequest)
+    KeepScreenOn()
     ImmersiveSystemBars(landscape || tvMode)
     LaunchedEffect(landscape) { if (landscape) touches++ else exitVisible = false }
     LaunchedEffect(touches) {
@@ -305,7 +306,14 @@ private object DecoderLog : AnalyticsListener {
  */
 internal fun buildExoPlayer(context: Context, dataSource: DataSource.Factory): ExoPlayer =
     ExoPlayer.Builder(context, DefaultRenderersFactory(context).setMediaCodecSelector(emulatorSafeCodecs).setEnableDecoderFallback(true))
-        .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource))
+        // Unsteady internet: each piece of video is retried many times before the player gives up on it.
+        .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource).setLoadErrorHandlingPolicy(androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy(10)))
+        // A larger reserve (up to two minutes) rides out short drops; the byte limit keeps the memory of weak TV boxes in check.
+        .setLoadControl(androidx.media3.exoplayer.DefaultLoadControl.Builder()
+            .setBufferDurationsMs(30_000, 120_000, 2_500, 5_000)
+            .setTargetBufferBytes(96 * 1024 * 1024)
+            .setPrioritizeTimeOverSizeThresholds(false)
+            .build())
         .build().also { it.addAnalyticsListener(DecoderLog) }
 
 /**
