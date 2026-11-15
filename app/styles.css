@@ -1662,3 +1662,10 @@ img.img-fading { opacity: 0; }
   .search-chip { height: 40px; }
   .search-box:focus-within { top: calc(env(safe-area-inset-top) + 15px); }
 }
+
+/* The window scrolls on its own; the page under it never moves along. The dark layer reaches far past the screen,
+   so the iPhone keyboard (which lifts fixed layers) never uncovers the page. */
+.search-suggestions { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.search-scrim { inset: -60vh 0; }
+@media (max-width: 720px) { .search-scrim { background: var(--bg); } .app-shell.is-searching .search-scrim { opacity: 1; } }
+@media (max-width: 720px) { .search-suggestions { bottom: max(calc(66px + env(safe-area-inset-bottom)), calc(var(--keyboard-h, 0px) + 8px)); } }

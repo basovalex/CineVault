@@ -9432,6 +9432,35 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const popup = $("#search-suggestions");
     if (popup) popup.hidden = true;
     app.classList.remove("is-searching");
+    unlockPageForSearch();
+  }
+  // While the search window is open the page under it stands still: on iPhone the finger otherwise scrolls the
+  // page through the window, and the keyboard pushes everything up. The page is pinned where it was and put back.
+  let searchLockedAt = null;
+  function lockPageForSearch() {
+    if (searchLockedAt !== null) return;
+    searchLockedAt = window.scrollY;
+    Object.assign(document.body.style, { position: "fixed", top: `-${searchLockedAt}px`, left: "0", right: "0", width: "100%" });
+  }
+  function unlockPageForSearch() {
+    if (searchLockedAt === null) return;
+    const at = searchLockedAt;
+    searchLockedAt = null;
+    Object.assign(document.body.style, { position: "", top: "", left: "", right: "", width: "" });
+    window.scrollTo(0, at);
+  }
+  // The list ends right above the on-screen keyboard (iPhone), so its last lines can be scrolled to.
+  if (window.visualViewport) {
+    const fitAboveKeyboard = () => {
+      const keyboard = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
+      document.documentElement.style.setProperty("--keyboard-h", `${Math.round(keyboard)}px`);
+    };
+    window.visualViewport.addEventListener("resize", fitAboveKeyboard);
+    window.visualViewport.addEventListener("scroll", fitAboveKeyboard);
+  }
+  function openSearchWindow() {
+    app.classList.add("is-searching");
+    if (window.matchMedia("(max-width: 720px)").matches) lockPageForSearch();
   }
 
   // The search window: opened over the page as soon as the field gets the focus. Before anything is typed it
@@ -9458,7 +9487,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       ${trending.length ? `<p class="search-start-title">Сейчас ищут</p><div class="search-suggestions-list">${trending.map((item) => `<a class="search-suggestion" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}"><span class="search-suggestion-poster" style="background-image:url('${escapeHtml(previewImageUrl(item.posterImage))}')" aria-hidden="true"></span><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml([item.year, kindLabel(item), ...genresForItem(item).slice(0, 1)].filter(Boolean).join(" · "))}</small></span></a>`).join("")}</div>` : ""}
     </div>`;
     popup.hidden = false;
-    app.classList.add("is-searching");
+    openSearchWindow();
   }
   function runSearch(query) {
     const text = String(query || "").trim();
@@ -9479,7 +9508,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     if (!popup) return;
     if (query.length < 2) return document.activeElement === $("#search") ? renderSearchStart() : hideSearchSuggestions();
     popup.hidden = false;
-    app.classList.add("is-searching");
+    openSearchWindow();
     const kindLabel = (item) => item.kind === "series" ? "сериал" : "фильм";
     popup.innerHTML = failed
       ? `<p class="search-suggestions-empty">Поиск сейчас не отвечает. Enter откроет полный поиск.</p>`
