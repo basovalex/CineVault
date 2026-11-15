@@ -165,6 +165,8 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, chooseSource: (Int, 
     var nextHiddenFor by remember { mutableIntStateOf(-1) }
     var osd by remember { mutableStateOf("") }
     var subtitle by remember { mutableIntStateOf(-1) }
+    var refreshes by remember { mutableIntStateOf(0) }
+    var playedTicks by remember { mutableIntStateOf(0) }
     val rootFocus = remember { FocusRequester() }
     val timelineFocus = remember { FocusRequester() }
     val nextFocus = remember { FocusRequester() }
@@ -231,6 +233,7 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, chooseSource: (Int, 
         saveProgress()
         val keep = if (request.isMovie) player.currentPosition / 1000.0 else 0.0
         index = target
+        refreshes = 0
         panel = null; controls = false
         connecting = true; buffering = true; segments = emptyList()
         scope.launch {
@@ -325,6 +328,26 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, chooseSource: (Int, 
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = player.playWhenReady }
             override fun onPlayerError(error: PlaybackException) {
+                val at0 = player.currentPosition / 1000.0
+                // A link that went stale in the middle of a film (HTTP 4xx/5xx, a timeout): ask the source for a fresh one
+                // for this very episode and go on from the same second, a few times, before giving up on the quality.
+                val network = error.errorCode in setOf(PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS, PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+                    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT, PlaybackException.ERROR_CODE_IO_UNSPECIFIED, PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE)
+                if (network && refreshes < 3) {
+                    refreshes++
+                    osd = "Обновляю ссылку на видео…"
+                    val target = index
+                    scope.launch {
+                        val fresh = runCatching { Lampac.stream(entries[target].entry) }.getOrNull()
+                        if (fresh != null && fresh.url.isNotBlank() && target == index) {
+                            stream = fresh
+                            val (label, link) = pickQuality(fresh)
+                            qualityLabel = label.ifBlank { qualityLabel }
+                            load(link, at0)
+                        } else { delay(1_500); load(pickQuality(stream).second, at0) }
+                    }
+                    return
+                }
                 // A quality that will not play: the next one down, then the stream as given.
                 val labels = stream.qualities.keys.sortedByDescending(Lampac::lines)
                 val lower = labels.dropWhile { it != qualityLabel }.drop(1).firstOrNull()
@@ -343,6 +366,7 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, chooseSource: (Int, 
             duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 }?.div(1000.0) ?: 0.0
             playing = player.playWhenReady
             now = System.currentTimeMillis()
+            if (player.isPlaying) { playedTicks++; if (playedTicks > 300) { refreshes = 0; playedTicks = 0 } }
             videoSize = player.videoSize.takeIf { it.width > 0 }?.let { "${it.width}×${it.height}" }.orEmpty()
             audioTracks = player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }.mapIndexed { number, group ->
                 val format = group.getTrackFormat(0)

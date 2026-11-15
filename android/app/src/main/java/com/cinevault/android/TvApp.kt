@@ -96,10 +96,40 @@ import org.json.JSONObject
 
 /** The site's menu, in its order. */
 enum class TvView(val title: String, val icon: ImageVector) {
-    HOME("Для вас", Icons.Default.Home), FEED("Лента", Icons.Default.DynamicFeed), MOVIES("Фильмы", Icons.Default.Movie),
+    HOME("Главная", Icons.Default.Home), FEED("Лента", Icons.Default.DynamicFeed), MOVIES("Фильмы", Icons.Default.Movie),
     SERIES("Сериалы", Icons.Default.Tv), CARTOONS("Мультфильмы", Icons.Default.SentimentSatisfied), ANIME("Аниме", Icons.Default.AutoAwesome),
     CATALOG("Каталог", Icons.Default.GridView), UPCOMING("Скоро", Icons.Default.Event), FAVORITES("Избранное", Icons.Default.Favorite),
-    HISTORY("История", Icons.Default.History), SEARCH("Поиск", Icons.Default.Search), ACCOUNT("Аккаунт", Icons.Default.Person),
+    HISTORY("История", Icons.Default.History), SEARCH("Поиск", Icons.Default.Search), ACCOUNT("Аккаунт", Icons.Default.Person);
+
+    /** The label on the tab row inside a group («Всё» is the catalogue grid itself). */
+    val tab: String get() = title
+}
+
+/** A rail item: a few pages of one kind behind one icon, switched with a tab row at the top of each page. */
+class TvGroup(val title: String, val icon: ImageVector, val views: List<TvView>)
+
+val TV_GROUPS = listOf(
+    TvGroup("Главная", Icons.Default.Home, listOf(TvView.HOME)),
+    TvGroup("Каталог", Icons.Default.GridView, listOf(TvView.CATALOG, TvView.MOVIES, TvView.SERIES, TvView.CARTOONS, TvView.ANIME, TvView.UPCOMING, TvView.FEED)),
+    TvGroup("Поиск", Icons.Default.Search, listOf(TvView.SEARCH)),
+    TvGroup("Моё", Icons.Default.Favorite, listOf(TvView.FAVORITES, TvView.HISTORY)),
+    TvGroup("Аккаунт", Icons.Default.Person, listOf(TvView.ACCOUNT)),
+)
+
+val LocalTvView = androidx.compose.runtime.staticCompositionLocalOf { TvView.HOME }
+val LocalTvSwitch = androidx.compose.runtime.staticCompositionLocalOf<(TvView) -> Unit> { {} }
+
+/** The tab row of the page's group (Фильмы · Сериалы · … in «Каталог», Избранное · История in «Моё»); nothing for a lone page. */
+@Composable
+fun GroupTabs(modifier: Modifier = Modifier) {
+    val current = LocalTvView.current
+    val switch = LocalTvSwitch.current
+    val group = TV_GROUPS.firstOrNull { current in it.views }?.takeIf { it.views.size > 1 } ?: return
+    CompositionLocalProvider(LocalBringIntoViewSpec provides TvRowScroll) {
+        LazyRow(modifier, horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp)) {
+            items(group.views) { tab -> HChip(tab.tab, tab == current, { switch(tab) }) }
+        }
+    }
 }
 
 sealed interface TvRoute {
@@ -143,10 +173,19 @@ class TvNav {
 fun TvApp(startId: String? = null) {
     val nav = remember { TvNav() }
     // A card opened from outside (an intent's "open" extra, e.g. tmdb-tv-456).
-    LaunchedEffect(startId) { startId?.let { id -> runCatching { Tmdb.title(id) }.getOrNull()?.let(nav::open) } }
+    LaunchedEffect(startId) {
+        startId ?: return@LaunchedEffect
+        if (startId.startsWith("person-")) startId.removePrefix("person-").toIntOrNull()?.let { nav.push(TvRoute.Person(it, "")) }
+        else runCatching { Tmdb.title(startId) }.getOrNull()?.let(nav::open)
+    }
     var view by rememberSaveable { mutableStateOf(TvView.HOME) }
     val holder = rememberSaveableStateHolder()
-    LaunchedEffect(Unit) { TvState.sync() }
+    val lastInGroup = remember { mutableMapOf<String, TvView>() }
+    LaunchedEffect(view) { TV_GROUPS.firstOrNull { view in it.views }?.let { lastInGroup[it.title] = view } }
+    LaunchedEffect(Unit) { TvState.sync(); TvUpdate.check() }
+    // A TV app lives in the background for days: look for a new version every time it comes back.
+    val updateScope = rememberCoroutineScope()
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { updateScope.launch { TvUpdate.check() } }
     BackHandler(enabled = nav.stack.isNotEmpty()) { nav.pop() }
     BackHandler(enabled = nav.stack.isEmpty() && view != TvView.HOME) { view = TvView.HOME }
 
@@ -164,8 +203,8 @@ fun TvApp(startId: String? = null) {
             is TvRoute.Title -> holder.SaveableStateProvider("title-${top.item.id}") { TvTitleScreen(top.item, nav, top.season) }
             is TvRoute.Trailer -> TvTrailerScreen(top.item, onBack = { nav.pop() })
             is TvRoute.Person -> holder.SaveableStateProvider("person-${top.id}") { TvPersonScreen(top.id, top.name, nav) }
-            null -> Row(Modifier.fillMaxSize()) {
-                TvRail(view) { view = it }
+            null -> CompositionLocalProvider(LocalTvView provides view, LocalTvSwitch provides { view = it }) { Row(Modifier.fillMaxSize()) {
+                TvRail(view) { group -> if (view !in group.views) view = lastInGroup[group.title] ?: group.views.first() }
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     holder.SaveableStateProvider(view.name) {
                         when (view) {
@@ -184,34 +223,34 @@ fun TvApp(startId: String? = null) {
                         }
                     }
                 }
-            }
+            } }
         }
     }
 }
 
 /** The site's header menu as a slim rail of icons; it opens with labels while the remote is in it. */
 @Composable
-private fun TvRail(view: TvView, onSelect: (TvView) -> Unit) {
+private fun TvRail(view: TvView, onSelect: (TvGroup) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val width by animateDpAsState(if (open) 210.dp else Hall.RailWidth, label = "rail")
     Column(
         Modifier.width(width).fillMaxHeight().onFocusChanged { open = it.hasFocus }
             .background(if (open) Hall.Surface else Hall.Bg).padding(vertical = 18.dp, horizontal = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Row(Modifier.padding(start = 8.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 8.dp, bottom = 22.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).background(Hall.Accent), contentAlignment = Alignment.Center) {
                 Icon(Icons.Default.PlayArrow, null, tint = Hall.OnAccent, modifier = Modifier.size(20.dp))
             }
             if (open) { Spacer(Modifier.width(10.dp)); HText("CineVault", size = Hall.S1, weight = FontWeight.Bold, display = true, maxLines = 1) }
         }
-        TvView.entries.forEach { item ->
-            val selected = item == view
+        TV_GROUPS.forEach { item ->
+            val selected = view in item.views
             val (interaction, focused) = rememberFocused()
             Row(
                 Modifier.fillMaxWidth().hallFocus(RoundedCornerShape(Hall.R), scale = 1.03f, interaction = interaction) { onSelect(item) }
                     .background(if (focused) Hall.Text else if (selected) Hall.Surface2 else Color.Transparent)
-                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(item.icon, item.title, tint = when { focused -> Hall.Bg; selected -> Hall.Accent; else -> Hall.Muted }, modifier = Modifier.size(22.dp))
@@ -304,7 +343,8 @@ fun TvRowsPage(view: String, nav: TvNav) {
     Box(Modifier.fillMaxSize()) {
         Backdrop(Tmdb.image(focused?.backdrop.orEmpty(), "w1280"), strength = 0.5f)
         Column(Modifier.fillMaxSize()) {
-            if (meta != null && focused == null) PageHeading(meta.first, meta.second, Modifier.padding(start = Hall.Gutter, top = 34.dp))
+            GroupTabs(Modifier.padding(start = Hall.Gutter - 4.dp, top = 12.dp))
+            if (meta != null && focused == null) PageHeading(meta.first, meta.second, Modifier.padding(start = Hall.Gutter, top = 10.dp))
             FocusInfo(focused, chip = chip)
             // As in Lampa: the row with the focus always stands right under the description, whole — its heading,
             // posters and their titles — so the page itself never scrolls by the focused poster alone.
@@ -313,6 +353,7 @@ fun TvRowsPage(view: String, nav: TvNav) {
             val order = buildList {
                 if (meta != null) add("section-title")
                 if (pick != null) add("hero")
+                if (view == "home" && TvUpdate.state !is UpdateState.Idle && !TvUpdate.dismissed) add("update")
                 if (continueList.isNotEmpty()) add("continue")
                 addAll((rows.orEmpty() + genreRows).map { it.key })
             }
@@ -339,6 +380,9 @@ fun TvRowsPage(view: String, nav: TvNav) {
                                 HButton("Далее: ${next.title}", { pickIndex = (pickIndex + 1) % picks.size }, note = "Далее в подборке · ${pickIndex % picks.size + 1} из ${picks.size}")
                             }
                         }
+                    }
+                    if (view == "home" && TvUpdate.state !is UpdateState.Idle && !TvUpdate.dismissed) item(key = "update") {
+                        Box(anchor("update")) { UpdateBanner(Modifier.padding(horizontal = Hall.Gutter, vertical = 4.dp)) }
                     }
                     if (continueList.isNotEmpty()) item(key = "continue") {
                         Box(anchor("continue")) {
@@ -421,12 +465,12 @@ fun TvCatalogPage(nav: TvNav) {
         kinds = when (kind) { "movie" -> listOf("movie"); "tv" -> listOf("tv"); else -> listOf("movie", "tv") },
         load = { kinds, number -> Tmdb.catalogPage(kinds, number, genre, sort, collection) },
         header = {
-            fullWidth("heading") { PageHeading("Каталог", "Фильмы и сериалы TMDB: жанры, подборки и сортировки.") }
+            fullWidth("tabs") { GroupTabs() }
             fullWidth("collections") {
                 ChipRow {
                     items(Tmdb.CATALOG_COLLECTIONS) { (value, label) -> HChip(label, collection == value, { collection = value }) }
                     item { Spacer(Modifier.width(18.dp)) }
-                    items(listOf("" to "Всё", "movie" to "Фильмы", "tv" to "Сериалы")) { (value, label) -> HChip(label, kind == value, { kind = value }) }
+                    items(listOf("" to "Фильмы и сериалы", "movie" to "Только фильмы", "tv" to "Только сериалы")) { (value, label) -> HChip(label, kind == value, { kind = value }) }
                     item { Spacer(Modifier.width(18.dp)) }
                     items(Tmdb.CATALOG_SORTS) { (value, label) -> HChip(label, sort == value && collection.isBlank(), { sort = value; collection = "" }) }
                     item { Spacer(Modifier.width(18.dp)) }
@@ -453,6 +497,7 @@ fun TvUpcomingPage(nav: TvNav) {
         load = { kinds, number -> Tmdb.catalogPage(kinds, number, "", "now", "", upcoming = order) },
         badge = { item -> item.premiere.takeIf(String::isNotBlank)?.let(::russianDate) },
         header = {
+            fullWidth("tabs") { GroupTabs() }
             fullWidth("heading") { PageHeading("Скоро", "Ожидаемые премьеры, отдельно от фильмов, которые уже вышли.") }
             fullWidth("order") {
                 ChipRow { items(listOf("await" to "Самые ожидаемые", "soon" to "Ближайшие")) { (value, label) -> HChip(label, order == value, { order = value }) } }
@@ -520,13 +565,15 @@ fun TvFavoritesPage(nav: TvNav) {
     val items = rememberSavedItems(ids)
     if (ids.isEmpty()) {
         Column(Modifier.padding(Hall.Gutter), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            GroupTabs()
             PageHeading("Избранное", "Фильмы и сериалы, отложенные на потом.")
             EmptyBlock("Здесь пока пусто", "Нажмите «В избранное» на странице фильма или сериала — он появится здесь.")
         }
         return
     }
     TvPosterGrid(items, "favorites", nav, Modifier.fillMaxSize(), header = {
-        fullWidth("heading") { Column(Modifier.padding(top = 18.dp)) { PageHeading("Избранное", "${countWord(ids.size, "тайтл", "тайтла", "тайтлов")} · ${if (TvState.user != null) "общие с аккаунтом" else "на этом телевизоре"}") } }
+        fullWidth("tabs") { GroupTabs() }
+        fullWidth("heading") { Column(Modifier.padding(top = 4.dp)) { PageHeading("Избранное", "${countWord(ids.size, "тайтл", "тайтла", "тайтлов")} · ${if (TvState.user != null) "общие с аккаунтом" else "на этом телевизоре"}") } }
     })
 }
 
@@ -537,7 +584,8 @@ fun TvHistoryPage(nav: TvNav) {
     val items = rememberSavedItems(ids)
     val list = rememberLazyListState()
     Column(Modifier.fillMaxSize()) {
-        PageHeading("История просмотра", "Последнее просмотренное — сверху. Продолжить можно с того же места.", Modifier.padding(start = Hall.Gutter, top = 34.dp, bottom = 12.dp))
+        GroupTabs(Modifier.padding(start = Hall.Gutter - 4.dp, top = 12.dp))
+        PageHeading("История просмотра", "Последнее просмотренное — сверху. Продолжить можно с того же места.", Modifier.padding(start = Hall.Gutter, top = 6.dp, bottom = 12.dp))
         if (ids.isEmpty()) {
             EmptyBlock("Здесь пока пусто", "Начните смотреть фильм или сериал — он появится в истории.", Modifier.padding(horizontal = Hall.Gutter))
             return
@@ -735,6 +783,7 @@ fun TvFeedPage(nav: TvNav) {
     CompositionLocalProvider(LocalBringIntoViewSpec provides remember { TvPageScroll() }, LocalScrollTop provides { grid.animateScrollToItem(0) }) {
         LazyVerticalGrid(GridCells.Fixed(3), Modifier.fillMaxSize(), grid, contentPadding = PaddingValues(start = Hall.Gutter, end = Hall.Gutter, top = 30.dp, bottom = 48.dp),
             horizontalArrangement = Arrangement.spacedBy(18.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            fullWidth("tabs") { GroupTabs() }
             fullWidth("heading") { PageHeading("Лента", "Новые серии, релизы в высоком качестве и новинки — как в Lampa.") }
             fullWidth("filters") { ChipRow { items(FEED_FILTERS) { (value, label) -> HChip(label, filter == value, { filter = value }) } } }
             when {
@@ -800,6 +849,7 @@ fun TvAccountPage() {
                 HText("Без входа избранное и история хранятся только на этом телевизоре.", size = Hall.S_1, color = Hall.Muted)
             }
         }
+        UpdateBanner(always = true)
         if (message.isNotBlank()) HText(message, size = Hall.S0, color = Hall.Text2)
     }
 }

@@ -262,7 +262,18 @@ fun TvPersonScreen(id: Int, name: String, nav: TvNav) {
             }
             if (shown != null) {
                 if (shown.upcoming.isNotEmpty()) item(key = "upcoming") { PosterShelf(TvRow("upcoming", "Скоро выйдут", "", shown.upcoming), nav::open) }
+                if (shown.popular.isNotEmpty()) item(key = "popular") { PosterShelf(TvRow("popular", "Известные работы", "Самые популярные фильмы и сериалы", shown.popular), nav::open) }
                 if (shown.recent.isNotEmpty()) item(key = "recent") { PosterShelf(TvRow("recent", "Последние роли", "Новые сверху", shown.recent), nav::open) }
+                if (shown.all.size > shown.recent.size) item(key = "all") {
+                    var open by remember { mutableStateOf(false) }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.padding(horizontal = Hall.Gutter), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            HText("Вся фильмография", size = Hall.S2, weight = FontWeight.SemiBold, display = true)
+                            HButton(if (open) "Свернуть" else "Показать все: ${shown.all.size}", { open = !open })
+                        }
+                        if (open) shown.all.chunked(40).forEachIndexed { index, chunk -> PosterShelf(TvRow("all-$index", "", "", chunk), nav::open) }
+                    }
+                }
                 if (shown.upcoming.isEmpty() && shown.recent.isEmpty()) item { EmptyBlock("Ролей нет", "TMDB не знает фильмов и сериалов с этим человеком.", Modifier.padding(horizontal = Hall.Gutter)) }
             }
         }

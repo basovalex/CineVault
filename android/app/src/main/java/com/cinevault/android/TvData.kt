@@ -68,7 +68,7 @@ data class TvRow(val key: String, val title: String, val description: String, va
 
 @Immutable
 data class TvPersonPage(val name: String, val department: String, val dates: String, val place: String, val bio: String, val photo: String,
-                        val upcoming: List<TvItem>, val recent: List<TvItem>)
+                        val upcoming: List<TvItem>, val recent: List<TvItem>, val popular: List<TvItem> = emptyList(), val all: List<TvItem> = emptyList())
 
 internal fun JSONArray?.strings(): List<String> = (0 until (this?.length() ?: 0)).mapNotNull { this?.optString(it)?.takeIf(String::isNotBlank) }
 internal fun JSONArray?.objects(): List<JSONObject> = (0 until (this?.length() ?: 0)).mapNotNull { this?.optJSONObject(it) }
@@ -463,6 +463,9 @@ object Tmdb {
         fun items(list: List<JSONObject>) = list.map { item(it) }.filter { it.poster.isNotBlank() }
         val upcoming = items(unique.filter { dateOf(it).isBlank() || dateOf(it) > today }.sortedBy { dateOf(it).ifBlank { "9999" } })
         val recent = items(unique.filter { dateOf(it).isNotBlank() && dateOf(it) <= today }.sortedByDescending(::dateOf)).take(40)
+        // The best-known works: the most voted first, whenever they came out; and the whole filmography, newest first.
+        val popular = items(unique.filter { dateOf(it).isNotBlank() && dateOf(it) <= today }.sortedByDescending { it.optInt("vote_count") }).take(40)
+        val everything = items(unique.filter { dateOf(it).isNotBlank() && dateOf(it) <= today }.sortedByDescending(::dateOf))
         val birthday = person.optString("birthday").takeIf { it.length == 10 && it != "null" }
         val deathday = person.optString("deathday").takeIf { it.length == 10 && it != "null" }
         val dates = birthday?.let {
@@ -471,7 +474,7 @@ object Tmdb {
         }.orEmpty()
         val department = mapOf("Acting" to "Актёр", "Directing" to "Режиссёр", "Writing" to "Сценарист", "Production" to "Продюсер")[person.optString("known_for_department")] ?: "Персона"
         return TvPersonPage(person.optString("name"), department, dates, person.optString("place_of_birth").takeIf { it != "null" }.orEmpty(),
-            bio.replace("**", "").replace("__", "").trim(), image(person.optString("profile_path").takeIf { it != "null" }.orEmpty(), "w500"), upcoming, recent)
+            bio.replace("**", "").replace("__", "").trim(), image(person.optString("profile_path").takeIf { it != "null" }.orEmpty(), "w500"), upcoming, recent, popular, everything)
     }
 }
 
