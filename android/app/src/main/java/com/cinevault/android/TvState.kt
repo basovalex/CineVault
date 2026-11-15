@@ -169,6 +169,16 @@ object TvState {
         else seasons.firstOrNull { it.number > record.season }?.let { it.number to 1 } ?: (0 to 0)
     }
 
+    /** Everything watched, newest first, with weights: finished and favourite titles count more. */
+    fun personalSeeds(): List<Pair<String, Double>> {
+        val records = progress.values.sortedByDescending { it.updatedAt }
+        val finished = records.filter { it.completed || (it.duration > 0 && it.position / it.duration > 0.6) }.map { it.titleId }.toSet()
+        val ids = LinkedHashSet<String>().apply { records.forEach { add(it.titleId) }; addAll(history); addAll(favorites) }.toList().take(24)
+        return ids.mapIndexed { index, id ->
+            id to (1.0 / (1 + index * 0.12)) * (if (id in finished) 1.3 else 1.0) * (if (id in favorites) 1.4 else 1.0)
+        }
+    }
+
     /** «Продолжить просмотр»: one card per title with its latest unfinished episode. */
     fun continueWatching(): List<TvProgress> = progress.values.filter { !it.completed && it.real }
         .sortedByDescending { it.updatedAt }.distinctBy { it.titleId }

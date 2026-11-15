@@ -262,6 +262,42 @@ object Tmdb {
         )) { items -> items }.map { row -> if (row.key == "upcoming") row.copy(items = row.items.filter { it.premiere.isBlank() || it.premiere >= today }) else row }
     }
 
+    /** The viewer's «Для вас» and «Похоже на «…»» rows (as on the site): see [TvState.personalSeeds]. */
+    suspend fun personalRows(seeds: List<Pair<String, Double>>, titleOf: (String) -> String): List<TvRow> = kotlinx.coroutines.coroutineScope {
+        if (seeds.isEmpty()) return@coroutineScope emptyList()
+        val seen = seeds.map { it.first }.toSet()
+        val lists = seeds.take(24).map { (id, weight) ->
+            async {
+                val ref = parseId(id) ?: return@async null
+                val type = if (ref.first == "series") "tv" else "movie"
+                val items = runCatching { list(get("$type/${ref.second}/recommendations?language=ru-RU", 8_000), type) }.getOrDefault(emptyList())
+                Triple(id, weight, items)
+            }
+        }.awaitAll().filterNotNull().filter { it.third.isNotEmpty() }
+        val score = HashMap<String, Double>()
+        val byId = HashMap<String, TvItem>()
+        lists.forEach { (_, weight, items) ->
+            items.forEachIndexed { rank, item ->
+                if (item.id in seen) return@forEachIndexed
+                score[item.id] = (score[item.id] ?: 0.0) + weight * (1 - rank / 25.0)
+                byId[item.id] = item
+            }
+        }
+        // A well-rated, widely voted title rises; an obscure or weak one sinks.
+        fun quality(item: TvItem): Double {
+            val rating = if (item.rating > 0) ((item.rating - 4.5) / 3).coerceIn(0.35, 1.25) else 0.5
+            return rating * (1 + 0.08 * kotlin.math.log10(1.0 + item.votes)) * (if (item.votes < 40) 0.5 else 1.0)
+        }
+        val top = score.entries.sortedByDescending { it.value * quality(byId.getValue(it.key)) }.map { byId.getValue(it.key) }
+        buildList {
+            if (top.size >= 6) add(TvRow("for-you", "Для вас", "По тому, что вы смотрели", top.take(20)))
+            lists.take(3).mapNotNull { (id, _, items) ->
+                val name = titleOf(id).ifBlank { return@mapNotNull null }
+                items.filter { it.id !in seen && it.votes >= 40 }.take(16).takeIf { it.size >= 5 }?.let { TvRow("because-$id", "Похоже на «$name»", "", it) }
+            }.take(2).forEach(::add)
+        }
+    }
+
     private val HOME_GENRES = listOf(28 to "Боевики", 35 to "Комедии", 18 to "Драмы", 878 to "Фантастика", 53 to "Триллеры", 16 to "Мультфильмы",
         27 to "Ужасы", 10749 to "Мелодрамы", 80 to "Криминал", 12 to "Приключения", 14 to "Фэнтези", 9648 to "Детективы", 10751 to "Семейные",
         36 to "Исторические", 10752 to "Военные", 99 to "Документальные", 37 to "Вестерны", 10402 to "Музыкальные")

@@ -310,6 +310,10 @@ fun TvRowsPage(view: String, nav: TvNav) {
         TvMemory.rows[view] = loaded
         rows = loaded
         if (focused == null) focused = loaded.first().items.firstOrNull()
+        if (view == "home") launch {
+            val personal = runCatching { Tmdb.personalRows(TvState.personalSeeds()) { id -> TvState.known[id]?.title.orEmpty() } }.getOrDefault(emptyList())
+            if (personal.isNotEmpty()) { val merged = personal + loaded; TvMemory.rows[view] = merged; rows = merged }
+        }
         prefetchLogos(context, loaded.take(3).flatMap { it.items.take(12) })
     }
     // Endless genre rows: the next one comes while the last rows are in view.
@@ -331,14 +335,19 @@ fun TvRowsPage(view: String, nav: TvNav) {
     val meta = Tmdb.SECTION_TITLES[view]
     val continueList = if (view == "home") TvState.continueWatching().mapNotNull { record -> TvState.known[record.titleId]?.let { it to record } }.take(12) else emptyList()
     // «Для вас» opens, as the site's home, on a big pick of the day with its own buttons and «Далее в подборке».
-    val picks = if (view == "home") rows?.firstOrNull { it.key == "trend-day" }?.items.orEmpty().filter { it.backdrop.isNotBlank() }.take(6) else emptyList()
+    // Three of the six are the viewer's own picks (from «Для вас») when there is a history; the rest, the day's trends.
+    val picks = if (view == "home") {
+        val personal = rows?.firstOrNull { it.key == "for-you" }?.items.orEmpty().filter { it.backdrop.isNotBlank() }.take(3)
+        (personal + rows?.firstOrNull { it.key == "trend-day" }?.items.orEmpty().filter { it.backdrop.isNotBlank() && personal.none { one -> one.id == it.id } }).take(6)
+    } else emptyList()
     var pickIndex by rememberSaveable { mutableIntStateOf(0) }
     val pick = picks.getOrNull(pickIndex % maxOf(1, picks.size))
     LaunchedEffect(pick?.id) { if (pick != null && (focused == null || focused == picks.getOrNull((pickIndex + picks.size - 1) % maxOf(1, picks.size)) || focused == picks.firstOrNull())) focused = pick }
     val chip = when {
         pick == null || focused != pick -> ""
         TvState.latest(pick.id)?.let { !it.completed && it.real } == true -> "Вы остановились здесь"
-        else -> "Рекомендация на сегодня"
+        rows?.firstOrNull { it.key == "for-you" }?.items?.any { it.id == pick.id } == true -> "Для вас"
+        else -> "В тренде сегодня"
     }
     Box(Modifier.fillMaxSize()) {
         Backdrop(Tmdb.image(focused?.backdrop.orEmpty(), "w1280"), strength = 0.5f)
