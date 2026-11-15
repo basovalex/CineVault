@@ -6570,13 +6570,17 @@
   let homeShelvesReleased = false;
   function homeFeaturePicks(count = 5) {
     if (lampacOrigin() && tmdbHome) {
-      // As in Lampa: the day's trends with a frame and a description, unwatched first.
+      // As in Lampa: the day's trends with a frame and a description, unwatched first — and, when there is a
+      // history, three of the five are picked for the viewer from what they watched (changing daily).
       const trends = (tmdbHome.find((row) => row.key === "trend-day")?.items || []).filter((item) => item.backdropImage && String(item.description || "").length >= 60);
       const unseen = trends.filter((item) => !hasSharedHistory(item));
       const pool = (unseen.length >= count ? unseen : trends).slice(0, 12);
       const seed = new Date().toISOString().slice(0, 10);
-      const daily = [...pool].sort((left, right) => stableHash(`${seed}:${left.id}`) - stableHash(`${seed}:${right.id}`)).slice(0, count);
-      if (daily.length) return daily;
+      const daily = [...pool].sort((left, right) => stableHash(`${seed}:${left.id}`) - stableHash(`${seed}:${right.id}`));
+      const personal = (personalRecs?.top || []).filter((item) => item.backdropImage && String(item.description || "").length >= 60).slice(0, 10)
+        .sort((left, right) => stableHash(`${seed}:${left.id}`) - stableHash(`${seed}:${right.id}`)).slice(0, 3);
+      const mixed = [...personal, ...daily.filter((item) => !personal.some((one) => one.id === item.id))].slice(0, count);
+      if (mixed.length) return mixed;
     }
     // Until the day's trends arrive there is nothing real to show: a placeholder frame, not a film
     // from the old catalogue (it flashed «Бойцовский клуб» and the like for a second).
@@ -6663,7 +6667,7 @@
     const favorite = state.favorites.includes(pick.id);
     const progress = progressForTitle(pick);
     const resumable = progress && !progress.completed && progress.duration > 0;
-    const chip = upcomingPremiere(pick) ? "Скоро" : resumable ? "Вы остановились здесь" : pick.popularRank && pick.popularRank <= 10 ? `№${pick.popularRank} в популярном сейчас` : isNewRelease(pick) ? "Новинка" : "Рекомендация на сегодня";
+    const chip = upcomingPremiere(pick) ? "Скоро" : resumable ? "Вы остановились здесь" : pick.personalBecause ? `Похоже на «${pick.personalBecause}»` : pick.popularRank && pick.popularRank <= 10 ? `№${pick.popularRank} в популярном сейчас` : isNewRelease(pick) ? "Новинка" : "В тренде сегодня";
     const known = titleLogoUrls.get(pick.id);
     const hasLogo = typeof known === "string" && titleLogoReady.has(known);
     prefetchTitleLogos(picks);
@@ -7964,7 +7968,77 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       loadTmdbHome().then(() => { if (state.view === "home" && readRouteFromLocation().type === "view" && readRouteFromLocation().view === "home") { renderHome(); hydrateLazyPosters(); } }).catch(() => {});
       return `${continueShelf || ""}<div class="home-rows-loading" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю подборки…</div>`;
     }
-    return `${continueShelf || ""}${tmdbHome.map(tmdbHomeRowMarkup).join("")}${tmdbHomeGenreRows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-tmdb-home-more aria-hidden="true"></div>`;
+    if (personalRecsKey !== personalSeeds().map((seed) => seed.id).join(",") || (!personalRecs && !personalRecsLoading)) {
+      loadPersonalRecs().then(() => { if (state.view === "home" && readRouteFromLocation().type === "view" && readRouteFromLocation().view === "home") { renderHome(); hydrateLazyPosters(); } }).catch(() => {});
+    }
+    return `${continueShelf || ""}${personalShelvesMarkup()}${tmdbHome.map(tmdbHomeRowMarkup).join("")}${tmdbHomeGenreRows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-tmdb-home-more aria-hidden="true"></div>`;
+  }
+  // «Для вас» from everything watched: every title in the history, the progress and the favourites is a seed
+  // (newer and finished ones weigh more); TMDB's «recommendations» of each seed are pooled, a title liked by
+  // several seeds rises, a well-rated and popular one rises, an obscure or weak one sinks; nothing seen is shown.
+  let personalRecs = null;
+  let personalRecsKey = "";
+  let personalRecsLoading = null;
+  function personalSeeds() {
+    const progress = Object.values(state.progress || {}).filter((entry) => entry?.titleId).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    const finished = new Set(progress.filter((entry) => entry.completed || (entry.duration && entry.position / entry.duration > 0.6)).map((entry) => String(entry.titleId)));
+    const ordered = [...new Set([...progress.map((entry) => String(entry.titleId)), ...(state.history || []).map(String), ...(state.favorites || []).map(String)])];
+    const favorites = new Set((state.favorites || []).map(String));
+    return ordered.slice(0, 24).map((id, index) => ({ id, weight: (1 / (1 + index * 0.12)) * (finished.has(id) ? 1.3 : 1) * (favorites.has(id) ? 1.4 : 1) }));
+  }
+  function loadPersonalRecs() {
+    const seeds = personalSeeds();
+    const key = seeds.map((seed) => seed.id).join(",");
+    if (personalRecs && personalRecsKey === key) return Promise.resolve(personalRecs);
+    if (personalRecsLoading && personalRecsKey === key) return personalRecsLoading;
+    personalRecsKey = key;
+    if (!seeds.length) { personalRecs = { top: [], because: [] }; return Promise.resolve(personalRecs); }
+    personalRecsLoading = (async () => {
+      const seen = new Set(seeds.map((seed) => seed.id));
+      const resolved = await Promise.all(seeds.map(async (seed) => {
+        const ref = await tmdbRefFor(seed.id).catch(() => null);
+        if (!ref) return null;
+        const type = ref.kind === "series" ? "tv" : "movie";
+        seen.add(`tmdb-${type}-${ref.tmdbId}`);
+        const json = await cvTmdb(`${type}/${ref.tmdbId}/recommendations?language=ru-RU`, 8000).catch(() => null);
+        return { ...seed, title: getTitle(seed.id)?.title || "", items: tmdbListItems(json, type) };
+      }));
+      const pool = new Map();
+      const usable = resolved.filter((entry) => entry && entry.items.length);
+      for (const seed of usable) {
+        seed.items.forEach((item, rank) => {
+          if (seen.has(item.id) || hasSharedHistory(item)) return;
+          const entry = pool.get(item.id) || { item, score: 0, seeds: [] };
+          entry.score += seed.weight * (1 - rank / 25);
+          entry.seeds.push(seed);
+          pool.set(item.id, entry);
+        });
+      }
+      const quality = (item) => {
+        const rating = Number(item.rating || 0);
+        const votes = Number(item.votes || 0);
+        const ratingFactor = rating ? Math.max(0.35, Math.min(1.25, (rating - 4.5) / 3)) : 0.5;
+        const popularity = 1 + 0.12 * Math.log10(1 + Number(item.popularity || 0)) + 0.08 * Math.log10(1 + votes);
+        return ratingFactor * popularity * (votes < 40 ? 0.5 : 1);
+      };
+      const ranked = [...pool.values()].map((entry) => ({ ...entry, final: entry.score * quality(entry.item) })).sort((a, b) => b.final - a.final);
+      const top = ranked.map((entry) => ({ ...entry.item, personalBecause: entry.seeds.sort((a, b) => b.weight - a.weight)[0]?.title || "" }));
+      const because = usable.slice(0, 3).filter((seed) => seed.title).map((seed) => ({
+        title: seed.title,
+        items: seed.items.filter((item) => !seen.has(item.id) && !hasSharedHistory(item) && Number(item.votes || 0) >= 40).slice(0, 16),
+      })).filter((row) => row.items.length >= 5);
+      rememberLooseTitles([...top, ...because.flatMap((row) => row.items)]);
+      personalRecs = { top: top.slice(0, 40), because };
+      return personalRecs;
+    })().finally(() => { personalRecsLoading = null; });
+    return personalRecsLoading;
+  }
+  function personalShelvesMarkup() {
+    if (!personalRecs?.top?.length) return "";
+    const rows = [];
+    if (personalRecs.top.length >= 6) rows.push({ key: "for-you", title: "Для вас", description: "По тому, что вы смотрели", items: personalRecs.top.slice(0, 20) });
+    personalRecs.because.slice(0, 2).forEach((row, index) => rows.push({ key: `because-${index}`, title: `Похоже на «${row.title}»`, description: "", items: row.items }));
+    return rows.map(tmdbHomeRowMarkup).join("");
   }
   let tmdbHomeObserver = null;
   let tmdbHomeMoreBusy = false;
