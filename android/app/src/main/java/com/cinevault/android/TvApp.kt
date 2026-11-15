@@ -240,7 +240,7 @@ private fun TvRail(view: TvView, onSelect: (TvGroup) -> Unit) {
     ) {
         Row(Modifier.padding(start = 8.dp, bottom = 22.dp), verticalAlignment = Alignment.CenterVertically) {
             androidx.compose.foundation.Image(androidx.compose.ui.res.painterResource(com.cinevault.android.R.drawable.cv_mark), null, Modifier.size(30.dp))
-            if (open) { Spacer(Modifier.width(10.dp)); HText("CineVault", size = Hall.S1, weight = FontWeight.Bold, display = true, maxLines = 1) }
+            if (open) { Spacer(Modifier.width(10.dp)); HText("Lumo Film", size = Hall.S1, weight = FontWeight.Bold, display = true, maxLines = 1) }
         }
         TV_GROUPS.forEach { item ->
             val selected = view in item.views
@@ -879,7 +879,7 @@ fun TvAccountPage() {
             var switched by remember { mutableStateOf(false) }
             LaunchedEffect(mode) { if (switched) { delay(80); runCatching { first.requestFocus() } }; switched = true }
             Column(Modifier.fillMaxWidth(0.6f).clip(RoundedCornerShape(Hall.RLg)).background(Hall.Surface).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                HText(when (mode) { AccountMode.LOGIN -> "Войти в CineVault"; AccountMode.REGISTER -> "Создать аккаунт"; AccountMode.RECOVER -> "Восстановить доступ" },
+                HText(when (mode) { AccountMode.LOGIN -> "Войти в Lumo Film"; AccountMode.REGISTER -> "Создать аккаунт"; AccountMode.RECOVER -> "Восстановить доступ" },
                     size = Hall.S2, weight = FontWeight.SemiBold, display = true)
                 TvField(username, { username = it }, "Логин", Modifier.fillMaxWidth(), focus = first)
                 if (mode == AccountMode.REGISTER) TvField(displayName, { displayName = it }, "Ваше имя", Modifier.fillMaxWidth())

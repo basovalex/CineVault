@@ -126,7 +126,7 @@ private fun Hero(onOpen: (CatalogTitle) -> Unit, onSearch: () -> Unit, onSetting
                 Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(18.dp))
             }
             Spacer(Modifier.width(9.dp))
-            Text("CineVault", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text("Lumo Film", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             OverlayButton(Icons.Default.Search, "Поиск", onSearch)
             Spacer(Modifier.width(10.dp))
             OverlayButton(Icons.Default.Settings, "Настройки", onSettings)

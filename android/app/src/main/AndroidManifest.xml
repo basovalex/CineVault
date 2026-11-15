@@ -7,7 +7,7 @@
     <application
         android:name=".CineVaultApplication"
         android:allowBackup="false"
-        android:label="CineVault"
+        android:label="Lumo Film"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:banner="@drawable/tv_banner"
@@ -35,7 +35,7 @@
             android:name=".TvActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="true"
-            android:label="CineVault для ТВ"
+            android:label="Lumo Film"
             android:screenOrientation="unspecified">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

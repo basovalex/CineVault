@@ -208,7 +208,7 @@ fun UpdateBanner(modifier: Modifier = Modifier, always: Boolean = false, focus: 
                 is UpdateState.Ready -> {
                     HText("Обновление ${state.info.versionName} загружено", size = Hall.S1, weight = FontWeight.SemiBold, maxLines = 1)
                     HText(
-                        if (state.needsPermission) "Телевизор попросит разрешить CineVault устанавливать приложения. Разрешите, вернитесь «Назад» и нажмите «Установить» ещё раз."
+                        if (state.needsPermission) "Телевизор попросит разрешить Lumo Film устанавливать приложения. Разрешите, вернитесь «Назад» и нажмите «Установить» ещё раз."
                         else "Нажмите «Установить» и подтвердите. Приложение перезапустится само.",
                         size = Hall.S_1, color = if (state.needsPermission) Hall.Gold else Hall.Muted, maxLines = 3,
                     )

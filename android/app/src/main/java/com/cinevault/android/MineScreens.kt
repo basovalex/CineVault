@@ -214,7 +214,7 @@ fun SettingsDialog(onDismiss: () -> Unit) {
         title = { Text("Настройки") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Сервер CineVault", color = Cine.Muted, fontSize = 13.sp)
+                Text("Сервер Lumo Film", color = Cine.Muted, fontSize = 13.sp)
                 Text(BuildConfig.SERVER_URL, color = Color.White)
                 Text(status ?: "Избранное и история просмотра хранятся на этом телефоне. Скачанные серии доступны без интернета.", color = Cine.Muted, fontSize = 13.sp)
             }
