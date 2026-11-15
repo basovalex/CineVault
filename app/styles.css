@@ -1639,3 +1639,26 @@ img.img-fading { opacity: 0; }
 /* The frame fades in from the dark once it has fully loaded: no blurred half-loaded picture first. */
 .home-feature .feature-backdrop, .detail-shell .detail-backdrop { transition: opacity .6s var(--ease), filter .6s var(--ease), transform .6s var(--ease); }
 .home-feature.is-blurred .feature-backdrop, .detail-shell.is-blurred .detail-backdrop { filter: none; transform: none; opacity: 0; }
+
+/* ----- Окно поиска ----- */
+.search-scrim { position: fixed; inset: 0; z-index: calc(var(--z-header) - 1); background: rgba(8, 9, 11, .62); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); opacity: 0; pointer-events: none; transition: opacity .25s var(--ease); }
+.app-shell.is-searching .search-scrim { opacity: 1; pointer-events: auto; }
+.search-suggestions { width: min(560px, calc(100vw - 2 * var(--gutter))); max-height: min(76vh, 680px); padding: var(--sp-3); box-shadow: 0 24px 60px rgba(0, 0, 0, .45); transform-origin: top right; animation: search-open .22s var(--ease) both; }
+@keyframes search-open { from { opacity: 0; transform: translateY(-8px) scale(.98); } to { opacity: 1; transform: none; } }
+.app-shell.is-searching .search-box { background: var(--surface-2); box-shadow: 0 0 0 2px var(--accent); }
+.search-start { display: grid; gap: var(--sp-2); }
+.search-start-title { margin: var(--sp-2) var(--sp-2) 0; color: var(--muted); font: 600 var(--s-1)/1.2 var(--body); letter-spacing: .02em; }
+.search-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 var(--sp-1); }
+.search-chip { display: inline-flex; align-items: center; height: 36px; padding: 0 14px; border: 0; border-radius: var(--r-pill); background: var(--glass); color: var(--text); font: 500 var(--s0)/1 var(--body); text-decoration: none; cursor: pointer; transition: background-color var(--t) var(--ease); }
+.search-chip:hover, .search-chip:focus-visible { background: var(--glass-hover); }
+.search-recent { display: grid; }
+.search-recent-item { display: flex; align-items: center; gap: 12px; padding: 10px var(--sp-2); border: 0; border-radius: var(--r); background: none; color: var(--text-2); font: 400 var(--s0)/1.2 var(--body); text-align: left; cursor: pointer; }
+.search-recent-item:hover, .search-recent-item:focus-visible { background: var(--glass); color: var(--text); }
+.search-recent-item .ui-icon { width: 16px; height: 16px; color: var(--muted); }
+@media (max-width: 720px) {
+  /* On a phone the window takes the screen under the field, as the search screen of an app. */
+  .search-suggestions { top: calc(env(safe-area-inset-top) + 15px + 42px + 10px); left: var(--gutter); right: var(--gutter); bottom: calc(66px + env(safe-area-inset-bottom)); width: auto; max-height: none; border: 0; background: transparent; box-shadow: none; padding: 0; transform-origin: top center; }
+  .search-scrim { background: rgba(8, 9, 11, .94); }
+  .search-chip { height: 40px; }
+  .search-box:focus-within { top: calc(env(safe-area-inset-top) + 15px); }
+}

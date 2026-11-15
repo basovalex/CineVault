@@ -9431,13 +9431,55 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   function hideSearchSuggestions() {
     const popup = $("#search-suggestions");
     if (popup) popup.hidden = true;
+    app.classList.remove("is-searching");
+  }
+
+  // The search window: opened over the page as soon as the field gets the focus. Before anything is typed it
+  // offers ways in — sections and genres, the last searches, what is popular today; while typing, results.
+  const RECENT_SEARCHES_KEY = "cinevault.recentSearches";
+  function recentSearches() { try { return (JSON.parse(localStorage.getItem(RECENT_SEARCHES_KEY) || "[]") || []).filter((one) => typeof one === "string").slice(0, 6); } catch { return []; } }
+  function rememberSearch(query) {
+    const text = String(query || "").trim();
+    if (text.length < 2) return;
+    try { localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify([text, ...recentSearches().filter((one) => one.toLowerCase() !== text.toLowerCase())].slice(0, 6))); } catch {}
+  }
+  const SEARCH_SECTIONS = [["movies", "Фильмы"], ["series", "Сериалы"], ["cartoons", "Мультфильмы"], ["anime", "Аниме"], ["upcoming", "Скоро"]];
+  const SEARCH_GENRES = [["комедия", "Комедии"], ["ужасы", "Ужасы"], ["фантастика", "Фантастика"], ["триллер", "Триллеры"], ["драма", "Драмы"], ["мелодрама", "Про любовь"], ["детектив", "Детективы"]];
+  function renderSearchStart() {
+    const popup = $("#search-suggestions");
+    if (!popup) return;
+    const recent = recentSearches();
+    const trending = (tmdbHome?.find((row) => row.key === "trend-day")?.items || []).filter((item) => item.posterImage).slice(0, 6);
+    const kindLabel = (item) => item.kind === "series" ? "сериал" : "фильм";
+    popup.innerHTML = `<div class="search-start">
+      <p class="search-start-title">Разделы</p>
+      <div class="search-chips">${SEARCH_SECTIONS.map(([view, label]) => `<a class="search-chip" href="${routeForView(view)}" data-search-view="${view}">${escapeHtml(label)}</a>`).join("")}${SEARCH_GENRES.map(([genre, label]) => `<button class="search-chip" type="button" data-search-genre="${escapeHtml(genre)}">${escapeHtml(label)}</button>`).join("")}</div>
+      ${recent.length ? `<p class="search-start-title">Вы искали</p><div class="search-recent">${recent.map((query) => `<button class="search-recent-item" type="button" data-search-query="${escapeHtml(query)}">${uiIcon("search")}<span>${escapeHtml(query)}</span></button>`).join("")}</div>` : ""}
+      ${trending.length ? `<p class="search-start-title">Сейчас ищут</p><div class="search-suggestions-list">${trending.map((item) => `<a class="search-suggestion" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}"><span class="search-suggestion-poster" style="background-image:url('${escapeHtml(previewImageUrl(item.posterImage))}')" aria-hidden="true"></span><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml([item.year, kindLabel(item), ...genresForItem(item).slice(0, 1)].filter(Boolean).join(" · "))}</small></span></a>`).join("")}</div>` : ""}
+    </div>`;
+    popup.hidden = false;
+    app.classList.add("is-searching");
+  }
+  function runSearch(query) {
+    const text = String(query || "").trim();
+    rememberSearch(text);
+    state.query = text;
+    state.catalogCollection = "";
+    state.catalogGenre = "";
+    resetCatalogPage();
+    saveState();
+    hideSearchSuggestions();
+    $("#search")?.blur();
+    navigateToView("catalog", { replace: true, preserveCatalogFilters: true });
   }
 
   // Live suggestions ask the server: the browser holds only a slice of the catalogue.
   function renderSearchSuggestions(query = searchDraft.trim(), results = searchSuggestionCatalog, failed = false) {
     const popup = $("#search-suggestions");
-    if (!popup || query.length < 2) return hideSearchSuggestions();
+    if (!popup) return;
+    if (query.length < 2) return document.activeElement === $("#search") ? renderSearchStart() : hideSearchSuggestions();
     popup.hidden = false;
+    app.classList.add("is-searching");
     const kindLabel = (item) => item.kind === "series" ? "сериал" : "фильм";
     popup.innerHTML = failed
       ? `<p class="search-suggestions-empty">Поиск сейчас не отвечает. Enter откроет полный поиск.</p>`
@@ -9449,7 +9491,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     window.clearTimeout(searchSuggestionTimer);
     searchSuggestionRequest?.abort();
     const query = searchDraft.trim();
-    if (query.length < 2) return hideSearchSuggestions();
+    if (query.length < 2) return document.activeElement === $("#search") ? renderSearchStart() : hideSearchSuggestions();
     searchSuggestionTimer = window.setTimeout(async () => {
       const controller = new AbortController();
       searchSuggestionRequest = controller;
@@ -9489,13 +9531,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     if (event.key !== "Enter") return;
     window.clearTimeout(searchSuggestionTimer);
     event.preventDefault();
-    state.query = searchDraft.trim();
-    state.catalogCollection = "";
-    state.catalogGenre = "";
-    resetCatalogPage();
-    saveState();
-    hideSearchSuggestions();
-    navigateToView("catalog", { replace: true, preserveCatalogFilters: true });
+    runSearch(searchDraft);
   });
   $("[data-search-tab]")?.addEventListener("click", () => $("#search").focus());
   // Without a connection the site keeps working from the saved copy; say so once.
@@ -9508,7 +9544,30 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   window.addEventListener("offline", updateConnectionNotice);
   window.addEventListener("online", updateConnectionNotice);
   updateConnectionNotice();
-  $("#search").addEventListener("focus", () => { if (searchDraft.trim().length >= 2) requestSearchSuggestions(); });
+  $("#search").addEventListener("focus", () => { if (searchDraft.trim().length >= 2) requestSearchSuggestions(); else renderSearchStart(); });
+  // Taps inside the window must not take the focus from the field (iPhone gives buttons no focus, so the window
+  // would close before the tap lands); the chosen action closes it itself.
+  $("#search-suggestions")?.addEventListener("mousedown", (event) => { if (event.target.closest("a, button")) event.preventDefault(); });
+  $("#search-suggestions")?.addEventListener("click", (event) => {
+    const view = event.target.closest("[data-search-view]");
+    const genre = event.target.closest("[data-search-genre]");
+    const query = event.target.closest("[data-search-query]");
+    const title = event.target.closest("[data-open-title]");
+    if (title) { rememberSearch(searchDraft); window.setTimeout(() => { hideSearchSuggestions(); $("#search")?.blur(); }, 0); return; }
+    if (!view && !genre && !query) return;
+    event.preventDefault();
+    if (query) { $("#search").value = searchDraft = query.dataset.searchQuery; runSearch(searchDraft); return; }
+    hideSearchSuggestions();
+    $("#search")?.blur();
+    if (view) { navigateToView(view.dataset.searchView); return; }
+    state.query = "";
+    state.catalogCollection = "";
+    state.catalogGenre = genre.dataset.searchGenre;
+    resetCatalogPage();
+    saveState();
+    navigateToView("catalog", { preserveCatalogFilters: true });
+  });
+  document.addEventListener("click", (event) => { if (event.target.classList?.contains("search-scrim")) hideSearchSuggestions(); });
   $("#search").addEventListener("blur", () => window.setTimeout(() => { if (!$("#search-suggestions")?.contains(document.activeElement)) hideSearchSuggestions(); }, 120));
   $("#search-suggestions")?.addEventListener("keydown", (event) => {
     const links = $$("#search-suggestions .search-suggestion");
