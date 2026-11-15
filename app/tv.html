@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>CineVault для телевизора</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--body); }
+  main { max-width: 760px; margin: 0 auto; padding: var(--sp-7) var(--gutter) var(--sp-8); }
+  h1 { margin: 0 0 var(--sp-2); font: 600 var(--s3)/1.15 var(--display); letter-spacing: -.025em; }
+  h2 { margin: var(--sp-7) 0 var(--sp-3); font: 600 var(--s2)/1.2 var(--display); letter-spacing: -.02em; }
+  p { color: var(--text-2); font-size: var(--s1); line-height: 1.55; margin: 0 0 var(--sp-3); }
+  .muted { color: var(--muted); font-size: var(--s0); }
+  .card { background: var(--surface); border-radius: var(--r-lg); padding: var(--sp-5); margin-bottom: var(--sp-4); }
+  .actions { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-top: var(--sp-4); }
+  ol { margin: 0; padding-left: var(--sp-5); color: var(--text-2); font-size: var(--s1); line-height: 1.6; }
+  ol li { margin-bottom: var(--sp-2); }
+  code, .link { display: block; overflow-wrap: anywhere; background: var(--surface-2); border-radius: var(--r); padding: var(--sp-3); font: 500 var(--s0)/1.4 var(--body); color: var(--text); user-select: all; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>CineVault для телевизора</h1>
+  <p class="muted" id="version">Ищу последнюю версию…</p>
+
+  <section class="card">
+    <p id="lead">Приложение для Android TV и приставок на Android: те же разделы, что и на сайте, и управление пультом.</p>
+    <div class="actions">
+      <a class="primary-button" id="download" href="/tv/CineVault-android.apk" download>Скачать APK</a>
+    </div>
+    <p class="muted" style="margin-top: var(--sp-3)" id="notes" hidden></p>
+  </section>
+
+  <h2>Поставить на телевизор за минуту</h2>
+  <section class="card">
+    <p><strong>Способ 1. Через Downloader</strong> — самый простой, ничего не нужно пересылать.</p>
+    <ol>
+      <li>На телевизоре откройте Google Play, найдите <strong>Downloader</strong> (оранжевый значок) и установите.</li>
+      <li>Откройте Downloader, разрешите ему доступ к файлам, если спросит.</li>
+      <li>В строке адреса введите код, который вам прислали (или ссылку ниже) и нажмите «Go».</li>
+      <li>Когда файл скачается, нажмите «Установить». Если телевизор спросит про неизвестные источники, разрешите их для Downloader.</li>
+    </ol>
+    <div id="share" hidden style="margin-top: var(--sp-4)">
+      <p class="muted">Ссылка для Downloader. Не публикуйте её: по ней скачивается приложение с доступом к серверу.</p>
+      <span class="link" id="shareUrl"></span>
+      <div class="actions"><button class="secondary-button" id="copy" type="button">Скопировать ссылку</button></div>
+    </div>
+  </section>
+  <section class="card">
+    <p><strong>Способ 2. Через телефон</strong> — если на телевизоре есть Google Play.</p>
+    <ol>
+      <li>Скачайте APK на телефон (кнопка выше).</li>
+      <li>Установите «Send Files to TV» на телефон и на телевизор.</li>
+      <li>На телевизоре нажмите «Получить», на телефоне «Отправить» и выберите файл.</li>
+      <li>На телевизоре откройте полученный файл и нажмите «Установить».</li>
+    </ol>
+  </section>
+  <section class="card">
+    <p><strong>Способ 3. Через флешку</strong> — если Google Play на телевизоре нет.</p>
+    <ol>
+      <li>Скопируйте APK на флешку и вставьте её в телевизор.</li>
+      <li>Откройте флешку в приложении «Файлы» или «Менеджер файлов» и нажмите на APK.</li>
+      <li>Разрешите установку из неизвестных источников и нажмите «Установить».</li>
+    </ol>
+  </section>
+
+  <h2>Обновления</h2>
+  <p>Дальше обновляться не нужно вручную: при запуске приложение само проверяет новую версию и предлагает «Обновить». Один раз разрешите ему установку обновлений, когда телевизор спросит.</p>
+</main>
+<script>
+(async () => {
+  const set = (id, text) => { const el = document.getElementById(id); if (el) { el.textContent = text; el.hidden = !text; } };
+  try {
+    const response = await fetch("/tv/latest.json", { cache: "no-store", credentials: "same-origin" });
+    if (!response.ok) throw new Error(String(response.status));
+    const info = await response.json();
+    const size = info.size ? ` · ${(info.size / 1048576).toFixed(1).replace(".", ",")} МБ` : "";
+    set("version", `Версия ${info.versionName}${size}`);
+    set("notes", info.notes || "");
+    if (info.shareUrl) {
+      set("shareUrl", info.shareUrl);
+      document.getElementById("share").hidden = false;
+      document.getElementById("copy").addEventListener("click", async (event) => {
+        try { await navigator.clipboard.writeText(info.shareUrl); event.target.textContent = "Скопировано"; }
+        catch { const range = document.createRange(); range.selectNodeContents(document.getElementById("shareUrl")); getSelection().removeAllRanges(); getSelection().addRange(range); event.target.textContent = "Выделено, скопируйте вручную"; }
+      });
+    }
+  } catch {
+    set("version", "Приложение ещё не выложено");
+    document.getElementById("download").hidden = true;
+  }
+})();
+</script>
+</body>
+</html>
