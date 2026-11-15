@@ -28,39 +28,59 @@
   <p class="muted" id="version">Ищу последнюю версию…</p>
 
   <section class="card">
-    <p id="lead">Приложение для Android TV и приставок на Android: те же разделы, что и на сайте, и управление пультом.</p>
+    <p id="lead">Приложение для Android TV, Google TV и приставок на Android: те же разделы, что и на сайте, управление пультом, общие с сайтом избранное и история после входа в аккаунт.</p>
     <div class="actions">
       <a class="primary-button" id="download" href="/tv/CineVault-android.apk" download>Скачать APK</a>
     </div>
     <p class="muted" style="margin-top: var(--sp-3)" id="notes" hidden></p>
   </section>
 
-  <h2>Поставить на телевизор за минуту</h2>
-  <section class="card">
-    <p><strong>Способ 1. Через Downloader</strong> — самый простой, ничего не нужно пересылать.</p>
-    <ol>
-      <li>На телевизоре откройте Google Play, найдите <strong>Downloader</strong> (оранжевый значок) и установите.</li>
-      <li>Откройте Downloader, разрешите ему доступ к файлам, если спросит.</li>
-      <li>В строке адреса наберите пультом ссылку, которую вам прислали, точно как в сообщении (большие и маленькие буквы важны), и нажмите «Go».</li>
-      <li>Когда файл скачается, нажмите «Установить». Если телевизор спросит про неизвестные источники, разрешите их для Downloader.</li>
-    </ol>
-    <div id="share" hidden style="margin-top: var(--sp-4)">
-      <p class="muted">Ссылка для Downloader. Не публикуйте её: по ней скачивается приложение с доступом к серверу.</p>
-      <span class="link" id="shareUrl"></span>
-      <div class="actions"><button class="secondary-button" id="copy" type="button">Скопировать ссылку</button></div>
+  <section class="card" id="share" hidden>
+    <p><strong>Ссылка для телевизора</strong> — её набирают пультом в Downloader или в браузере телевизора. Все буквы маленькие, «https://» не нужен.</p>
+    <span class="link" id="shareUrl"></span>
+    <div class="actions">
+      <button class="primary-button" id="copyMessage" type="button">Скопировать сообщение для друга</button>
+      <button class="secondary-button" id="copy" type="button">Скопировать ссылку</button>
     </div>
+    <p class="muted" style="margin-top: var(--sp-3)">Не публикуйте ссылку: по ней скачивается приложение с доступом к серверу. Пересылайте только своим.</p>
+  </section>
+
+  <h2>Какой телевизор подойдёт</h2>
+  <p>Телевизор или приставка на Android TV / Google TV: Sony, Philips, TCL, Haier, Xiaomi Mi Box, Chromecast с Google TV, Яндекс ТВ, Сбер и другие. Samsung (Tizen) и LG (webOS) — не Android: на них приложение не встанет, нужна Android-приставка.</p>
+
+  <h2>Установка, 3–5 минут</h2>
+  <section class="card">
+    <p><strong>Способ 1. Через Downloader</strong> — если на телевизоре есть Google Play.</p>
+    <ol>
+      <li>На телевизоре откройте Google Play, найдите <strong>Downloader</strong> (оранжевый значок, автор AFTVnews) и установите.</li>
+      <li>Откройте Downloader. Если спросит доступ к файлам — «Разрешить».</li>
+      <li>В строке адреса наберите пультом ссылку для телевизора и нажмите «Go».</li>
+      <li>Файл скачается сам. Нажмите «Установить».</li>
+      <li>Если телевизор скажет, что установка из неизвестных источников запрещена: «Настройки» → включите переключатель напротив Downloader → «Назад» → снова «Установить».</li>
+    </ol>
   </section>
   <section class="card">
-    <p><strong>Способ 2. Через флешку</strong> — если Google Play на телевизоре нет.</p>
+    <p><strong>Способ 2. Google Play нет, но есть браузер или другой магазин</strong></p>
     <ol>
-      <li>Скопируйте APK на флешку и вставьте её в телевизор.</li>
-      <li>Откройте флешку в приложении «Файлы» или «Менеджер файлов» и нажмите на APK.</li>
-      <li>Разрешите установку из неизвестных источников и нажмите «Установить».</li>
+      <li>Наберите ту же ссылку в браузере телевизора — файл скачается, откройте его и нажмите «Установить».</li>
+      <li>На Fire TV (Amazon) Downloader есть в магазине Amazon — дальше как в способе 1.</li>
+      <li>На телевизорах с RuStore или «Магазином приложений» найдите там Downloader или любой браузер.</li>
+    </ol>
+  </section>
+  <section class="card">
+    <p><strong>Способ 3. Через флешку</strong> — подходит любому Android-телевизору.</p>
+    <ol>
+      <li>Скачайте APK (кнопка выше) и скопируйте на флешку.</li>
+      <li>Вставьте флешку в телевизор и откройте её в приложении «Файлы», «Менеджер файлов», «Проводник» или «USB».</li>
+      <li>Нажмите на CineVault-android.apk. Если телевизор спросит про неизвестные источники — разрешите этому приложению, вернитесь «Назад» и нажмите «Установить».</li>
     </ol>
   </section>
 
-  <h2>Обновления</h2>
-  <p>Дальше обновляться не нужно вручную: при запуске приложение само проверяет новую версию и предлагает «Обновить». Один раз разрешите ему установку обновлений, когда телевизор спросит.</p>
+  <h2>Обновления — сами</h2>
+  <p>При запуске приложение проверяет новую версию и показывает «Доступна новая версия → Обновить». Нажмите «Обновить», затем «Установить». В первый раз телевизор попросит разрешить CineVault устанавливать приложения: включите переключатель, «Назад», и ещё раз «Установить». История и избранное сохранятся.</p>
+
+  <h2>Если что-то не так</h2>
+  <p>«Файл не скачивается» — проверьте ссылку буква в букву. «Установка запрещена» — разрешите неизвестные источники для приложения, которым скачивали. «Приложение не установлено» — удалите старую копию CineVault, если она ставилась из другого источника, и поставьте заново.</p>
 </main>
 <script>
 (async () => {
@@ -73,12 +93,36 @@
     set("version", `Версия ${info.versionName}${size}`);
     set("notes", info.notes || "");
     if (info.shareUrl) {
-      set("shareUrl", info.shareUrl);
+      const typed = info.shareUrl.replace(/^https?:\/\//, "");
+      set("shareUrl", typed);
       document.getElementById("share").hidden = false;
-      document.getElementById("copy").addEventListener("click", async (event) => {
-        try { await navigator.clipboard.writeText(info.shareUrl); event.target.textContent = "Скопировано"; }
-        catch { const range = document.createRange(); range.selectNodeContents(document.getElementById("shareUrl")); getSelection().removeAllRanges(); getSelection().addRange(range); event.target.textContent = "Выделено, скопируйте вручную"; }
-      });
+      const message = [
+        "CineVault на телевизор (Android TV / Google TV):",
+        "1. На телевизоре в Google Play установите Downloader (оранжевый значок).",
+        "2. В Downloader наберите пультом адрес и нажмите Go:",
+        typed,
+        "3. Нажмите «Установить». Если спросит про неизвестные источники — разрешите для Downloader и снова «Установить».",
+        "Нет Google Play — наберите тот же адрес в браузере телевизора. Дальше приложение обновляется само.",
+        "Ссылку никому не пересылайте.",
+      ].join("\n");
+      const copy = async (button, text, label) => {
+        try { await navigator.clipboard.writeText(text); button.textContent = "Скопировано"; }
+        catch {
+          // No clipboard access (an old browser, a page not on https): copy through a hidden text field.
+          const field = document.createElement("textarea");
+          field.value = text;
+          field.setAttribute("readonly", "");
+          field.style.cssText = "position:fixed;opacity:0;top:0;left:0";
+          document.body.append(field);
+          field.select();
+          const done = document.execCommand?.("copy");
+          field.remove();
+          button.textContent = done ? "Скопировано" : "Не получилось — выделите текст вручную";
+        }
+        window.setTimeout(() => { button.textContent = label; }, 2500);
+      };
+      document.getElementById("copy").addEventListener("click", (event) => copy(event.currentTarget, typed, "Скопировать ссылку"));
+      document.getElementById("copyMessage").addEventListener("click", (event) => copy(event.currentTarget, message, "Скопировать сообщение для друга"));
     }
   } catch {
     set("version", "Приложение ещё не выложено");
