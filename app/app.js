@@ -5196,7 +5196,8 @@
   }
   function titleLogoUrl(id, title = "") {
     if (!id || !(parseTmdbItemId(id) || getTitle(id))) return Promise.resolve("");
-    if (titleLogoUrls.has(id)) return titleLogoUrls.get(id);
+    // Holds a finished answer (a string) or the request still on its way: always hand back a promise.
+    if (titleLogoUrls.has(id)) return Promise.resolve(titleLogoUrls.get(id));
     const job = tmdbRefFor(id).then((parsed) => parsed ? cvTmdb(`${parsed.kind === "series" ? "tv" : "movie"}/${parsed.tmdbId}/images?include_image_language=ru,en,null`, 6000) : null)
       .then(async (data) => {
         const fromTmdb = pickTitleLogo(data, title);
