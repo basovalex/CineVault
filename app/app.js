@@ -5198,18 +5198,35 @@
     if (!id || !(parseTmdbItemId(id) || getTitle(id))) return Promise.resolve("");
     if (titleLogoUrls.has(id)) return titleLogoUrls.get(id);
     const job = tmdbRefFor(id).then((parsed) => parsed ? cvTmdb(`${parsed.kind === "series" ? "tv" : "movie"}/${parsed.tmdbId}/images?include_image_language=ru,en,null`, 6000) : null)
-      .then((data) => {
-        // An English logo only for a title that is in Latin letters in Russian too («Stick»): «Полтора шпиона»
-        // must not show up as «Central Intelligence». Otherwise Russian, a wordless one, or the text title.
-        const latin = title && !/[а-яё]/i.test(title);
-        const rank = (logo) => ({ ru: 0, en: latin ? 1 : 3 })[logo.iso_639_1] ?? 2;
-        const best = (data?.logos || []).filter((logo) => logo.file_path && !/\.svg$/i.test(logo.file_path) && (logo.iso_639_1 !== "en" || latin))
-          .sort((left, right) => rank(left) - rank(right) || (right.vote_average || 0) - (left.vote_average || 0))[0];
-        return best ? tmdbImage(best.file_path, "w500") : "";
+      .then(async (data) => {
+        const fromTmdb = pickTitleLogo(data, title);
+        if (fromTmdb.russian) return fromTmdb.url;
+        // No Russian lettering on TMDB: Kinopoisk has one for most films (through our server, which remembers it).
+        const ref = await tmdbRefFor(id).catch(() => null);
+        const item = getTitle(id);
+        const kp = Number(item?.kinopoiskId || item?.kinopoisk_id || 0);
+        if (ref || kp) {
+          const params = new URLSearchParams({ type: ref?.kind === "series" || item?.kind === "series" ? "tv" : "movie" });
+          if (ref?.tmdbId) params.set("tmdb", ref.tmdbId);
+          if (kp) params.set("kp", kp);
+          const answer = await apiFetch(`/api/title-logo?${params}`, { headers: { accept: "application/json" } }).then((response) => (response.ok ? response.json() : null)).catch(() => null);
+          const url = String(answer?.url || "");
+          if (url) return /^https:\/\/image\.tmdb\.org\/t\/p\/\w+(\/.+)$/.test(url) ? tmdbImage(url.replace(/^https:\/\/image\.tmdb\.org\/t\/p\/\w+/, ""), "w500") : url;
+        }
+        return fromTmdb.url;
       })
       .catch(() => "");
     titleLogoUrls.set(id, job);
     return job;
+  }
+  function pickTitleLogo(data, title) {
+    // An English logo only for a title that is in Latin letters in Russian too («Stick»): «Полтора шпиона»
+    // must not show up as «Central Intelligence». Otherwise Russian, a wordless one, or the text title.
+    const latin = Boolean(title) && !/[а-яё]/i.test(title);
+    const rank = (logo) => ({ ru: 0, en: latin ? 1 : 3 })[logo.iso_639_1] ?? 2;
+    const best = (data?.logos || []).filter((logo) => logo.file_path && !/\.svg$/i.test(logo.file_path) && (logo.iso_639_1 !== "en" || latin))
+      .sort((left, right) => rank(left) - rank(right) || (right.vote_average || 0) - (left.vote_average || 0))[0];
+    return { url: best ? tmdbImage(best.file_path, "w500") : "", russian: best?.iso_639_1 === "ru" || (latin && Boolean(best)) };
   }
   function titleLogoMarkup(id, title) {
     const known = titleLogoUrls.get(id);
@@ -5232,6 +5249,20 @@
       image.src = url;
     }));
   }
+  // A logo starts loading the moment a card is pointed at or touched, so the title page opens with it ready.
+  ["pointerover", "focusin", "touchstart"].forEach((type) => document.addEventListener(type, (event) => {
+    const card = event.target?.closest?.("[data-open-title]");
+    const id = card?.dataset.openTitle;
+    if (!id || titleLogoUrls.has(id)) return;
+    const title = getTitle(id)?.title || "";
+    titleLogoUrl(id, title).then((url) => {
+      titleLogoUrls.set(id, url);
+      if (!url || titleLogoReady.has(url)) return;
+      const image = new Image();
+      image.onload = () => titleLogoReady.add(url);
+      image.src = url;
+    });
+  }, { passive: true, capture: true }));
   function hydrateTitleLogos(root = document) {
     root.querySelectorAll?.("[data-logo-for]").forEach((heading) => {
       const id = heading.dataset.logoFor;
@@ -8274,7 +8305,10 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     // The page is drawn again as TMDB details, episodes and ratings arrive: the logo that is already shown stays
     // (the same picture element), so the title does not blink on every pass.
     const keptLogo = enteringTitle ? null : page.querySelector(".detail-title .title-logo");
-    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell${frame ? " has-backdrop" : ""}"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}</div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"}</div><h1 class="detail-title${item.title.length > 24 ? " is-long" : ""}${titleLogoPending(item.id) ? " is-logo-pending" : ""}" data-logo-for="${escapeHtml(item.id)}">${titleLogoMarkup(item.id, item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">${uiIcon("star")}</span><strong>${ratingKinopoisk}</strong><small>${item.source === "tmdb" ? "TMDB" : "КиноПоиск"}</small></div>${item.source === "tmdb" && !Number(item.imdbRating || 0) ? "" : `<div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div>`}<div class="detail-status-card"><span class="detail-status-dot ${hasPlayableSource(item) ? "is-ready" : ""}"></span><strong>${hasPlayableSource(item) ? "Можно смотреть" : "Видео пока нет"}</strong><small>${item.kind === "series" ? seasonsLabel(item) : formatRuntime(item.runtime)}</small></div></div>${(() => {
+    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell${frame ? " has-backdrop" : ""}"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}</div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"}</div><h1 class="detail-title${item.title.length > 24 ? " is-long" : ""}${titleLogoPending(item.id) ? " is-logo-pending" : ""}" data-logo-for="${escapeHtml(item.id)}">${titleLogoMarkup(item.id, item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">${uiIcon("star")}</span><strong>${ratingKinopoisk}</strong><small>${item.source === "tmdb" ? "TMDB" : "КиноПоиск"}</small></div>${item.source === "tmdb" && !Number(item.imdbRating || 0) ? "" : `<div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div>`}${hasPlayableSource(item) && !awaitingPlayback
+      // Less to read: the seasons are listed below, so a playable series says nothing here; a film shows its length.
+      ? (item.kind === "series" || !formatRuntime(item.runtime) ? "" : `<div class="detail-status-card is-plain"><strong>${escapeHtml(formatRuntime(item.runtime))}</strong></div>`)
+      : `<div class="detail-status-card"><span class="detail-status-dot"></span><strong>Видео пока нет</strong><small>${item.kind === "series" ? seasonsLabel(item) : formatRuntime(item.runtime)}</small></div>`}</div>${(() => {
       // As in Lampa: when the next episode comes out, or when a film is released.
       const today = new Date().toISOString().slice(0, 10);
       if (item.kind === "series" && item.nextEpisode?.airDate >= today) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Новая серия ${escapeHtml(airDateLabel(item.nextEpisode.airDate))}</span><small>${item.nextEpisode.season} сезон, ${item.nextEpisode.episode} серия${item.nextEpisode.name && !/^(Эпизод|Серия|Episode)\s*\d+$/i.test(item.nextEpisode.name) ? ` · ${escapeHtml(item.nextEpisode.name)}` : ""}</small></p>`;

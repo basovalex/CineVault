@@ -22,6 +22,7 @@ services:
       CINEVAULT_LAMPAC_UID: ${CINEVAULT_LAMPAC_UID:-}
       # The site address: links and images in device notifications, and the push signature.
       CINEVAULT_PUBLIC_URL: ${CINEVAULT_PUBLIC_URL:-}
+      CINEVAULT_KINOPOISK_DEV_TOKEN: ${CINEVAULT_KINOPOISK_DEV_TOKEN:-}
       CINEVAULT_SERVICE_DIR: /opt/cinevault
       CINEVAULT_KINOPOISK_UPDATER_DIR: /opt/cinevault/kinopoisk_media_system_fixed
       CINEVAULT_APBUGALL_TOKEN: ${CINEVAULT_APBUGALL_TOKEN:-}
