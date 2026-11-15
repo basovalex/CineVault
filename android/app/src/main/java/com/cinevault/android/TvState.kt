@@ -61,6 +61,7 @@ object TvState {
         savedMarks = json.optJSONObject("savedMarks") ?: JSONObject()
         json.optJSONObject("progress")?.let(::readProgress)?.let(progress::putAll)
         json.optJSONObject("known")?.let { all -> all.keys().forEach { id -> all.optJSONObject(id)?.let { known[id] = TvItem.fromBrief(it) } } }
+        pendingRecovery = prefs.getString("recovery", null)
         user = prefs.getString("user", null)
         csrf = prefs.getString("csrf", "").orEmpty()
     }
@@ -154,6 +155,20 @@ object TvState {
     /** The title's latest record: the episode to go on with. */
     fun latest(id: String): TvProgress? = progress.values.filter { it.titleId == id }.maxByOrNull { it.updatedAt }
 
+    /**
+     * Where «Смотреть» goes, as on the site: the unfinished episode, or the one after a finished episode. (0, 0) opens the
+     * episode step, which itself offers «Дальше» when the seasons were not known here.
+     */
+    fun nextUp(item: TvItem): Pair<Int, Int> {
+        val record = latest(item.id) ?: return 0 to 0
+        if (record.season <= 0) return 0 to 0
+        if (!record.completed) return record.season to record.episode
+        val seasons = (known[item.id]?.takeIf { it.seasons.isNotEmpty() } ?: item).seasons
+        val count = seasons.firstOrNull { it.number == record.season }?.episodes ?: return 0 to 0
+        return if (record.episode < count) record.season to record.episode + 1
+        else seasons.firstOrNull { it.number > record.season }?.let { it.number to 1 } ?: (0 to 0)
+    }
+
     /** «Продолжить просмотр»: one card per title with its latest unfinished episode. */
     fun continueWatching(): List<TvProgress> = progress.values.filter { !it.completed && it.real }
         .sortedByDescending { it.updatedAt }.distinctBy { it.titleId }
@@ -230,12 +245,34 @@ object TvState {
         prefs.edit().putString("user", user).putString("csrf", csrf).apply()
     }
 
-    suspend fun login(username: String, password: String) {
-        val answer = JSONObject(TvNet.post(accountUrl("login"), JSONObject().put("username", username).put("password", password).toString()))
+    /** The recovery code of a new account (or after a reset), kept until the viewer says it is written down. */
+    var pendingRecovery by mutableStateOf<String?>(null)
+        private set
+
+    private suspend fun finishSignIn(answer: JSONObject, fallbackName: String) {
         csrf = answer.optString("csrf")
-        user = answer.optJSONObject("user")?.let { it.optString("display_name").ifBlank { it.optString("username") } } ?: username
+        user = answer.optJSONObject("user")?.let { it.optString("display_name").ifBlank { it.optString("username") } } ?: fallbackName
+        answer.optString("recovery_code").takeIf(String::isNotBlank)?.let { pendingRecovery = it; prefs.edit().putString("recovery", it).apply() }
         persistAccount()
         sync(force = true)
+    }
+
+    fun acknowledgeRecovery() { pendingRecovery = null; prefs.edit().remove("recovery").apply() }
+
+    suspend fun login(username: String, password: String) {
+        finishSignIn(JSONObject(TvNet.post(accountUrl("login"), JSONObject().put("username", username).put("password", password).toString())), username)
+    }
+
+    /** A new account, as the site's «Создать аккаунт»; the answer carries the recovery code shown once. */
+    suspend fun register(username: String, displayName: String, password: String) {
+        finishSignIn(JSONObject(TvNet.post(accountUrl("register"),
+            JSONObject().put("username", username).put("display_name", displayName).put("password", password).toString())), displayName)
+    }
+
+    /** A new password with the recovery code; the answer carries a fresh code. */
+    suspend fun recover(username: String, recoveryCode: String, newPassword: String) {
+        finishSignIn(JSONObject(TvNet.post(accountUrl("recover"),
+            JSONObject().put("username", username).put("recovery_code", recoveryCode.trim()).put("new_password", newPassword).toString())), username)
     }
 
     suspend fun logout() {

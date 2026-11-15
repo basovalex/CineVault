@@ -371,7 +371,9 @@ fun TvRowsPage(view: String, nav: TvNav) {
                         val favorite = TvState.isFavorite(pick.id)
                         Row(Modifier.then(anchor("hero")).padding(horizontal = Hall.Gutter, vertical = 4.dp).onFocusChanged { if (it.hasFocus) focused = pick },
                             horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            HButton(if (resumable) "Продолжить" else "Смотреть", { TvState.remember(pick); nav.push(TvRoute.Watch(pick, record?.season ?: 0, record?.episode ?: 0)) },
+                            HButton(if (resumable) "Продолжить" else if (record?.completed == true && record.season > 0) "Смотреть дальше" else "Смотреть", {
+                                TvState.remember(pick); val (s, e) = TvState.nextUp(pick); nav.push(TvRoute.Watch(pick, s, e))
+                            },
                                 Modifier.remembered(view, "hero-play"), primary = true, icon = Icons.Default.PlayArrow)
                             HButton("Подробнее", { nav.open(pick) })
                             HButton(if (favorite) "В избранном" else "В избранное", { TvState.toggleFavorite(pick) }, icon = if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder)
@@ -609,8 +611,8 @@ fun TvHistoryPage(nav: TvNav) {
                             }
                             HText(note, size = Hall.S0, color = Hall.Muted, maxLines = 1)
                         }
-                        HButton(if (record != null && !record.completed && record.real) "Продолжить" else "Смотреть", {
-                            nav.push(TvRoute.Watch(item, record?.season ?: 0, record?.episode ?: 0))
+                        HButton(if (record != null && !record.completed && record.real) "Продолжить" else if (record?.completed == true && record.season > 0) "Смотреть дальше" else "Смотреть", {
+                            val (s, e) = TvState.nextUp(item); nav.push(TvRoute.Watch(item, s, e))
                         }, Modifier.remembered("history", item.id), primary = true, icon = Icons.Default.PlayArrow)
                         HButton("Карточка", { nav.open(item) })
                         HButton("Удалить", { TvState.removeHistory(item.id) }, icon = Icons.Default.Close)
@@ -812,17 +814,56 @@ fun TvFeedPage(nav: TvNav) {
 
 // ---------------------------------------------------------------- Account
 
+private enum class AccountMode { LOGIN, REGISTER, RECOVER }
+
+/** Sign in, create an account or get back in with the recovery code; the same account as the site and the phone. */
 @Composable
 fun TvAccountPage() {
     val scope = rememberCoroutineScope()
+    var mode by rememberSaveable { mutableStateOf(AccountMode.LOGIN) }
     var username by rememberSaveable { mutableStateOf("") }
+    var displayName by rememberSaveable { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var recoveryCode by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
-    Column(Modifier.fillMaxSize().padding(start = Hall.Gutter, top = 34.dp, end = Hall.Gutter).animateContentSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        PageHeading("Аккаунт", "Избранное, история и «Продолжить» общие с сайтом и телефоном, когда вы вошли.")
-        val user = TvState.user
-        if (user != null) {
+    val user = TvState.user
+    val loginRule = Regex("[\\w.-]{3,32}")
+    val ready = when (mode) {
+        AccountMode.LOGIN -> username.isNotBlank() && password.isNotBlank()
+        AccountMode.REGISTER -> loginRule.matches(username.trim()) && displayName.isNotBlank() && password.length >= 10
+        AccountMode.RECOVER -> username.isNotBlank() && recoveryCode.isNotBlank() && password.length >= 10
+    }
+    fun submit() {
+        busy = true; message = ""
+        scope.launch {
+            runCatching {
+                when (mode) {
+                    AccountMode.LOGIN -> TvState.login(username.trim(), password)
+                    AccountMode.REGISTER -> TvState.register(username.trim(), displayName.trim(), password)
+                    AccountMode.RECOVER -> TvState.recover(username.trim(), recoveryCode, password)
+                }
+            }.onSuccess {
+                message = if (mode == AccountMode.LOGIN) "Вы вошли. Списки объединены с аккаунтом." else "Готово, вы вошли."
+                password = ""; recoveryCode = ""
+            }.onFailure { message = it.message ?: "Не получилось" }
+            busy = false
+        }
+    }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = Hall.Gutter, top = 34.dp, end = Hall.Gutter, bottom = 48.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        item { PageHeading("Аккаунт", "Избранное, история и «Продолжить» общие с сайтом и телефоном, когда вы вошли.") }
+        val code = TvState.pendingRecovery
+        if (code != null) item(key = "recovery") {
+            val focus = remember { FocusRequester() }
+            LaunchedEffect(Unit) { delay(200); runCatching { focus.requestFocus() } }
+            Column(Modifier.clip(RoundedCornerShape(Hall.RLg)).background(Hall.Surface).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                HText("Запишите код восстановления", size = Hall.S2, weight = FontWeight.SemiBold, display = true)
+                HText("Это единственный способ вернуть доступ, если забудете пароль. Он показывается сейчас. Сфотографируйте экран или запишите код.", size = Hall.S0, color = Hall.Text2)
+                HText(code, Modifier.clip(RoundedCornerShape(Hall.R)).background(Hall.Surface2).padding(horizontal = 18.dp, vertical = 14.dp), size = Hall.S2, weight = FontWeight.SemiBold)
+                HButton("Я сохранил код", { TvState.acknowledgeRecovery() }, primary = true, focus = focus)
+            }
+        }
+        if (user != null) item(key = "signed") {
             Column(Modifier.clip(RoundedCornerShape(Hall.RLg)).background(Hall.Surface).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 HText(user, size = Hall.S2, weight = FontWeight.SemiBold, display = true)
                 HText(if (TvState.syncing) "Синхронизирую…" else "Избранное: ${TvState.favorites.size} · История: ${TvState.history.size} · Подписки: ${TvState.subscriptions.size}",
@@ -832,25 +873,32 @@ fun TvAccountPage() {
                     HButton("Выйти", { scope.launch { TvState.logout(); message = "Вы вышли. Списки остались на телевизоре." } })
                 }
             }
-        } else {
+        } else item(key = "form") {
+            // Switching login / register / recovery removes the focused chip: the focus goes to the first field, not the rail.
+            val first = remember { FocusRequester() }
+            var switched by remember { mutableStateOf(false) }
+            LaunchedEffect(mode) { if (switched) { delay(80); runCatching { first.requestFocus() } }; switched = true }
             Column(Modifier.fillMaxWidth(0.6f).clip(RoundedCornerShape(Hall.RLg)).background(Hall.Surface).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                HText("Войти в CineVault", size = Hall.S2, weight = FontWeight.SemiBold, display = true)
-                TvField(username, { username = it }, "Логин", Modifier.fillMaxWidth())
-                TvField(password, { password = it }, "Пароль", Modifier.fillMaxWidth(), password = true)
-                HButton("Войти", {
-                    busy = true; message = ""
-                    scope.launch {
-                        runCatching { TvState.login(username.trim(), password) }
-                            .onSuccess { message = "Вы вошли. Списки объединены с аккаунтом."; password = "" }
-                            .onFailure { message = it.message ?: "Не получилось войти" }
-                        busy = false
-                    }
-                }, primary = true, busy = busy, enabled = username.isNotBlank() && password.isNotBlank())
+                HText(when (mode) { AccountMode.LOGIN -> "Войти в CineVault"; AccountMode.REGISTER -> "Создать аккаунт"; AccountMode.RECOVER -> "Восстановить доступ" },
+                    size = Hall.S2, weight = FontWeight.SemiBold, display = true)
+                TvField(username, { username = it }, "Логин", Modifier.fillMaxWidth(), focus = first)
+                if (mode == AccountMode.REGISTER) TvField(displayName, { displayName = it }, "Ваше имя", Modifier.fillMaxWidth())
+                if (mode == AccountMode.RECOVER) TvField(recoveryCode, { recoveryCode = it }, "Код восстановления", Modifier.fillMaxWidth())
+                TvField(password, { password = it }, if (mode == AccountMode.RECOVER) "Новый пароль (от 10 символов)" else if (mode == AccountMode.REGISTER) "Пароль (от 10 символов)" else "Пароль",
+                    Modifier.fillMaxWidth(), password = true, onDone = { if (ready && !busy) submit() })
+                if (mode == AccountMode.REGISTER) HText("Логин: 3–32 буквы, цифры, точка, дефис или подчёркивание.", size = Hall.S_1, color = Hall.Muted)
+                HButton(when (mode) { AccountMode.LOGIN -> "Войти"; AccountMode.REGISTER -> "Создать аккаунт"; AccountMode.RECOVER -> "Сменить пароль" }, { submit() },
+                    primary = true, busy = busy, enabled = ready)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (mode != AccountMode.LOGIN) HChip("Уже есть аккаунт", false, { mode = AccountMode.LOGIN; message = "" })
+                    if (mode != AccountMode.REGISTER) HChip("Создать аккаунт", false, { mode = AccountMode.REGISTER; message = "" })
+                    if (mode != AccountMode.RECOVER) HChip("Забыли пароль?", false, { mode = AccountMode.RECOVER; message = "" })
+                }
                 HText("Без входа избранное и история хранятся только на этом телевизоре.", size = Hall.S_1, color = Hall.Muted)
             }
         }
-        UpdateBanner(always = true)
-        if (message.isNotBlank()) HText(message, size = Hall.S0, color = Hall.Text2)
+        item(key = "update") { UpdateBanner(always = true) }
+        if (message.isNotBlank()) item(key = "message") { HText(message, size = Hall.S0, color = if (message.startsWith("Вы") || message.startsWith("Готово")) Hall.Text2 else Hall.Gold) }
     }
 }
 

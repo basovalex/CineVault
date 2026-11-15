@@ -123,15 +123,8 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
                         // All the buttons fit, however long «Продолжить · …» is: the row scrolls with the focus.
                         Row(Modifier.offset(x = (-16).dp).horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             HButton(playLabel, {
-                                val next = record?.takeIf { it.completed && it.season > 0 }?.let { done ->
-                                    val count = seasons.firstOrNull { it.number == done.season }?.episodes ?: 0
-                                    if (done.episode < count) done.season to done.episode + 1 else seasons.firstOrNull { it.number > done.season }?.let { it.number to 1 }
-                                }
-                                when {
-                                    next != null -> nav.push(TvRoute.Watch(item, next.first, next.second))
-                                    resuming -> nav.push(TvRoute.Watch(item, record!!.season, record.episode))
-                                    else -> nav.push(TvRoute.Watch(item))
-                                }
+                                val (s, e) = if (resuming && record!!.season == 0) 0 to 0 else TvState.nextUp(item)
+                                nav.push(TvRoute.Watch(item, s, e))
                             }, Modifier.remembered("title-${item.id}", "play"), primary = true, icon = Icons.Default.PlayArrow, focus = play, big = true,
                                 note = if (resuming && record!!.season > 0) "${record.season} сезон, ${record.episode} серия · с ${tvClock(record.position)}" else null)
                             HButton("Трейлер", { nav.push(TvRoute.Trailer(item)) }, icon = Icons.Default.Theaters)
