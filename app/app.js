@@ -5500,6 +5500,7 @@
     const episodes = list.map((entry, position) => ({ label: entry.label, note: entry.title || entry.note || "", name: entry.title || "", still: entry.still || "", s: entry.s, e: entry.e, current: position === index, startAt: lampacSavedPosition(item, entry.s, entry.e) }));
     const player = window.CineVaultPlayer.open({
       title: item.title,
+      artwork: item.posterImage ? highResolutionPosterUrl(item.posterImage) : "",
       voice,
       stream: first.stream,
       qualities: first.qualities,

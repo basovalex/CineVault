@@ -215,6 +215,17 @@
     const episode = () => episodes[index] || {};
     const header = () => {
       const entry = episode();
+      // The lock screen and the iPhone's Dynamic Island show the poster and the episode, not a blank tile.
+      if ("mediaSession" in navigator && window.MediaMetadata) {
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: options.title || "CineVault",
+            artist: options.isMovie ? (options.voice || "") : [entry.label, entry.name].filter(Boolean).join(" · "),
+            album: "CineVault",
+            artwork: options.artwork ? [{ src: options.artwork, sizes: "500x750", type: "image/jpeg" }] : [],
+          });
+        } catch {}
+      }
       const nextButton = root.querySelector('.cv-player-icon[data-act="next"]');
       if (nextButton) nextButton.hidden = !(options.autoNext !== false && episodes[index + 1]);
       // Episodes and voices are two different buttons: a film has only voices.
@@ -456,10 +467,16 @@
         hls.on(window.Hls.Events.AUDIO_TRACKS_UPDATED, updateTrackButtons);
         hls.on(window.Hls.Events.SUBTITLE_TRACKS_UPDATED, updateTrackButtons);
         hls.on(window.Hls.Events.LEVEL_SWITCHED, updateQualityButton);
+        let mediaRecoveries = 0;
         hls.on(window.Hls.Events.ERROR, (_event, data) => {
-          if (!data?.fatal) return;
-          if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
-          fail("Источник перестал отдавать видео. Выберите другую озвучку или источник.");
+          if (!data?.fatal || mine !== loadToken) return;
+          if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 2) {
+            if (mediaRecoveries++ === 1) hls.swapAudioCodec();
+            hls.recoverMediaError();
+            return;
+          }
+          // The network dropped or the link went stale: reconnect from the same second instead of giving up.
+          reconnect();
         });
         hls.loadSource(stream);
         hls.attachMedia(video);
@@ -468,6 +485,45 @@
         video.load();
       }
       updateTrackButtons();
+    };
+    // Unsteady internet or a link that expired mid-film: wait for the network, reconnect from the same second,
+    // every other try with a fresh link from the source. Only after many tries in a row does the error show.
+    let reconnects = 0;
+    let reconnecting = false;
+    let lastTime = 0;
+    let lastProgressAt = Date.now();
+    let steadySince = 0;
+    const online = () => navigator.onLine !== false ? Promise.resolve() : new Promise((done) => {
+      const go = () => { window.removeEventListener("online", go); done(); };
+      window.addEventListener("online", go);
+      window.setTimeout(go, 60000);
+    });
+    const reconnect = async () => {
+      if (closed || reconnecting) return;
+      const at = video.currentTime > 1 ? video.currentTime : lastTime || Number(options.startAt || 0);
+      reconnects += 1;
+      if (reconnects > 8) {
+        fail("Связь с источником пропала. Проверьте интернет и откройте серию заново или выберите другой источник.");
+        reconnects = 0;
+        return;
+      }
+      reconnecting = true;
+      const mine = loadToken;
+      root.classList.add("is-loading");
+      toast(navigator.onLine === false ? "Нет интернета, жду связь…" : "Связь прервалась, переподключаюсь…");
+      await online();
+      await new Promise((done) => window.setTimeout(done, Math.min(1000 * 2 ** (reconnects - 1), 15000)));
+      if (closed || mine !== loadToken) { reconnecting = false; return; }
+      if (reconnects % 2 === 0 && options.resolve && episodes[index]) {
+        try {
+          const fresh = await options.resolve(index);
+          if (!closed && mine === loadToken && fresh?.stream) current = { stream: fresh.stream, qualities: fresh.qualities || {}, subtitles: fresh.subtitles || current.subtitles };
+        } catch {}
+      }
+      reconnecting = false;
+      if (closed || mine !== loadToken) return;
+      lastProgressAt = Date.now();
+      load(current.qualities[qualityLabel] || current.stream, at);
     };
     const fail = (text) => {
       root.classList.remove("is-loading");
@@ -902,6 +958,28 @@
     video.addEventListener("play", syncPlayState);
     video.addEventListener("pause", syncPlayState);
     video.addEventListener("timeupdate", updateTime);
+    video.addEventListener("timeupdate", () => {
+      if (video.currentTime !== lastTime) { lastTime = video.currentTime; lastProgressAt = Date.now(); }
+      if (!steadySince) steadySince = Date.now();
+      if (reconnects && Date.now() - steadySince > 60000) reconnects = 0;
+    });
+    video.addEventListener("waiting", () => { steadySince = 0; });
+    // Stuck with no new frames for half a minute while it should play: reconnect.
+    const stallTimer = window.setInterval(() => {
+      if (closed || reconnecting || connecting || video.paused || video.ended || lastTime < 1) return;
+      if (Date.now() - lastProgressAt > 30000) reconnect();
+    }, 5000);
+    // The screen stays on while the film plays (where the browser supports it).
+    let wakeLock = null;
+    const holdScreen = async () => {
+      if (closed || video.paused || document.visibilityState !== "visible" || wakeLock || !navigator.wakeLock) return;
+      try { wakeLock = await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release", () => { wakeLock = null; }); } catch {}
+    };
+    const releaseScreen = () => { wakeLock?.release?.().catch(() => {}); wakeLock = null; };
+    video.addEventListener("playing", holdScreen);
+    video.addEventListener("pause", releaseScreen);
+    const onVisible = () => { if (document.visibilityState === "visible") holdScreen(); };
+    document.addEventListener("visibilitychange", onVisible);
     video.addEventListener("waiting", () => root.classList.add("is-loading"));
     video.addEventListener("playing", () => { connecting = false; loadingTarget = -1; root.classList.remove("is-loading"); });
     video.addEventListener("canplay", () => root.classList.remove("is-loading"));
@@ -914,6 +992,8 @@
     const tried = new Set();
     video.addEventListener("error", () => {
       if (hls) return;
+      // A dropped connection mid-film (or a link that expired after playing a while) is not a bad quality.
+      if (video.error?.code === 2 || (lastTime > 5 && video.error?.code !== 3)) { reconnect(); return; }
       tried.add(qualityLabel);
       const lower = Object.keys(current.qualities || {}).filter((label) => !tried.has(label) && qualityLines(label) < (qualityLines(qualityLabel) || Infinity)).sort((a, b) => qualityLines(b) - qualityLines(a))[0];
       if (lower) {
@@ -935,6 +1015,9 @@
       saveProgress(video.ended);
       cancelNext();
       window.clearInterval(statsTimer);
+      window.clearInterval(stallTimer);
+      document.removeEventListener("visibilitychange", onVisible);
+      releaseScreen();
       window.clearTimeout(idleTimer);
       window.clearTimeout(saveTimer);
       document.removeEventListener("keydown", onKey, true);

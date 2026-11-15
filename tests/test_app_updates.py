@@ -64,6 +64,9 @@ class TokenTests(unittest.TestCase):
         self.assertTrue(app_updates.token_matches(f"/dl/{TOKEN}/CineVault.apk", TOKEN))
         self.assertFalse(app_updates.token_matches(f"/dl/{'x' * 24}/CineVault.apk", TOKEN))
         self.assertFalse(app_updates.token_matches(f"/dl/{TOKEN}/other.apk", TOKEN))
+        # The short form for typing on a remote: no file name at the end.
+        self.assertTrue(app_updates.token_matches(f"/dl/{TOKEN}", TOKEN))
+        self.assertTrue(app_updates.token_matches(f"/dl/{TOKEN}/", TOKEN))
         self.assertFalse(app_updates.token_matches("/dl/short/CineVault.apk", "short"))
         self.assertFalse(app_updates.token_matches(f"/dl/{TOKEN}/CineVault.apk", ""))
 
@@ -94,7 +97,7 @@ class HandleTests(unittest.TestCase):
         self.assertEqual(handler.status, 200)
         self.assertEqual(handler.json["versionCode"], 9)
         self.assertEqual(handler.json["size"], 1000)
-        self.assertEqual(handler.json["shareUrl"], f"https://example.test/dl/{TOKEN}/CineVault.apk")
+        self.assertEqual(handler.json["shareUrl"], f"https://example.test/dl/{TOKEN}")
 
     def test_manifest_without_token_has_no_share_url(self):
         publish(self.dir.name)

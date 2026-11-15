@@ -8,7 +8,7 @@
   GET /tv                          страница со скачиванием и инструкцией (app/tv.html)
   GET /tv/latest.json              описание последней версии; его спрашивает приложение
   GET /tv/CineVault-android.apk    сам файл (с докачкой по Range)
-  GET /dl/<токен>/CineVault.apk    то же без пароля сайта, по длинному секретному адресу
+  GET /dl/<токен>[/CineVault.apk]  то же без пароля сайта, по секретному адресу
                                    для Downloader; включается CINEVAULT_APK_TOKEN
                                    (16+ символов), перед сервером его надо открыть в Caddy.
 """
@@ -27,7 +27,7 @@ APK_NAME = "CineVault-android.apk"
 MANIFEST_NAME = "android.json"
 APK_MIME = "application/vnd.android.package-archive"
 CHUNK = 256 * 1024
-TOKEN_PATH = re.compile(r"^/dl/([A-Za-z0-9_-]{16,128})/CineVault\.apk$")
+TOKEN_PATH = re.compile(r"^/dl/([A-Za-z0-9_-]{16,128})(?:/CineVault\.apk)?/?$")
 
 
 def apk_dir(root: Path) -> Path:
@@ -96,7 +96,7 @@ def handle(handler, method: str, parsed) -> bool:
         token = os.environ.get("CINEVAULT_APK_TOKEN", "").strip()
         base = str(getattr(handler.server, "public_base_url", "") or "").rstrip("/")
         if len(token) >= 16 and base:
-            manifest["shareUrl"] = f"{base}/dl/{token}/CineVault.apk"
+            manifest["shareUrl"] = f"{base}/dl/{token}"
         handler.send_json(200, manifest)
         return True
     allowed = path == f"/tv/{APK_NAME}" or token_matches(path, os.environ.get("CINEVAULT_APK_TOKEN", "").strip())
