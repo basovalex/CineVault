@@ -673,7 +673,7 @@ button { cursor: pointer; }
 .sidebar { position: fixed; inset: 0 0 auto; z-index: var(--z-header); display: flex; align-items: center; gap: var(--sp-6); height: var(--header-h); padding: 0 var(--gutter); background: linear-gradient(180deg, rgba(8, 9, 11, .8), rgba(8, 9, 11, 0)); transition: background-color var(--t) var(--ease), box-shadow var(--t) var(--ease); }
 .app-shell.is-scrolled .sidebar { background: rgba(8, 9, 11, .94); box-shadow: 0 1px 0 var(--line); }
 .brand { display: inline-flex; align-items: center; gap: 9px; flex: none; color: var(--text); font: 700 var(--s-logo)/1 var(--display); letter-spacing: -.02em; text-decoration: none; }
-.brand-mark { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+.brand-mark { width: 26px; height: 26px; flex: none; border-radius: 7px; background: url(/favicon.svg) center / contain no-repeat; }
 .nav-list { display: flex; gap: 2px; min-width: 0; }
 .nav-item { position: relative; display: inline-flex; align-items: center; gap: var(--sp-2); min-height: 38px; padding: 0 14px; border: 0; border-radius: var(--r-pill); background: transparent; color: var(--text-2); font-weight: 500; white-space: nowrap; text-decoration: none; transition: color var(--t) var(--ease), background-color var(--t) var(--ease); }
 .nav-item:hover { color: var(--text); }
