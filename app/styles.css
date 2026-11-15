@@ -1543,6 +1543,8 @@ span.studio-sort-button::after { display: none; }
 .cv-player-segment:hover, .cv-player-segment:focus-visible { background: var(--player-light); color: var(--player-dark); outline: none; }
 .cv-player.has-panel .cv-player-segment { display: none; }
 @media (max-width: 720px) { .cv-player-segment { bottom: 190px; } }
+/* A phone on its side: the screen is only ~390px tall, so the skip and next buttons sit just above the controls. */
+@media (max-height: 500px) { .cv-player-segment, .cv-player-next { bottom: calc(96px + env(safe-area-inset-bottom)); } .cv-player:not(.is-ui) .cv-player-segment, .cv-player:not(.is-ui) .cv-player-next { bottom: calc(24px + env(safe-area-inset-bottom)); } }
 /* Подключение к видео: не просто крутилка, а что происходит и что делать, если долго. */
 .cv-player-loading { position: absolute; top: 50%; left: 50%; z-index: 2; display: grid; justify-items: center; gap: 10px; width: min(420px, calc(100% - 40px)); text-align: center; transform: translate(-50%, -50%); opacity: 0; pointer-events: none; transition: opacity .2s ease; }
 .cv-player.is-loading .cv-player-loading { opacity: 1; pointer-events: auto; }
@@ -1585,3 +1587,26 @@ span.studio-sort-button::after { display: none; }
 .random-bar-chips .genre-pill { flex: none; height: 34px; }
 .random-bar-chips .genre-pill.is-active { background: var(--accent-soft); color: var(--accent); }
 @media (max-width: 720px) { .random-bar-title { font-size: var(--s-1); } .random-bar-next { padding: 0 14px; } }
+
+/* ----- iPhone: шапка и вырез ----- */
+/* On the home screen (and with viewport-fit=cover) the page runs under the clock: the header moves below it,
+   and a solid strip under the clock hides what scrolls past, as in a native app. */
+.sidebar { padding-top: env(safe-area-inset-top); height: calc(var(--header-h) + env(safe-area-inset-top)); }
+.topbar { top: env(safe-area-inset-top); }
+.main-area { padding-top: calc(var(--header-h) + var(--sp-5) + env(safe-area-inset-top)); }
+.app-shell::before { content: ""; position: fixed; z-index: calc(var(--z-header) + 1); inset: 0 0 auto; height: env(safe-area-inset-top); background: var(--bg); pointer-events: none; }
+.sidebar, .topbar { padding-left: max(var(--gutter), env(safe-area-inset-left)); }
+@media (max-width: 520px) {
+  /* The mark alone: «CineVault» in words left no room for search, bell and the account. */
+  .brand > span:not(.brand-mark) { display: none; }
+  .account-trigger { max-width: 128px; overflow: hidden; text-overflow: ellipsis; }
+}
+.home-feature { margin-top: calc(-1 * (var(--header-h) + var(--sp-5) + env(safe-area-inset-top))); }
+.home-feature.is-placeholder { gap: 14px; }
+.home-feature.is-placeholder .skeleton { border-radius: var(--r); }
+.home-feature-skel-kicker { width: 160px; height: 16px; }
+.home-feature-skel-title { width: min(520px, 80%); height: 52px; }
+.home-feature-skel-line { width: min(560px, 90%); height: 18px; }
+.home-feature-skel-button { width: min(240px, 100%); height: 52px; margin-top: 12px; border-radius: var(--r-pill) !important; }
+/* Horizontal rows of tabs scroll only sideways: with overflow-x alone the browser also let a finger drag them up and hide them. */
+.studio-tabs, .section-switch, .upcoming-sort { overflow-y: hidden; overscroll-behavior-x: contain; touch-action: pan-x pan-y; }

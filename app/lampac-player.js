@@ -194,11 +194,17 @@
       box.querySelector("small").textContent = connecting ? what : "";
       box.querySelector("button").hidden = true;
       window.clearTimeout(slowTimer);
+      // Some sources take 10–20 s to start: first a calm word, the offer of another source only much later,
+      // so a slow-but-working source is not abandoned.
       slowTimer = window.setTimeout(() => {
         if (!root.classList.contains("is-loading")) return;
-        box.querySelector("small").textContent = "Источник отвечает медленно. Можно подождать или выбрать другой.";
-        box.querySelector("button").hidden = !options.onChooseSource;
-      }, connecting ? 9000 : 12000);
+        box.querySelector("small").textContent = connecting ? "Ещё немного — видео загружается." : "Догружаю видео…";
+        slowTimer = window.setTimeout(() => {
+          if (!root.classList.contains("is-loading")) return;
+          box.querySelector("small").textContent = "Этот источник сегодня долго отвечает. Можно подождать или выбрать другой.";
+          box.querySelector("button").hidden = !options.onChooseSource;
+        }, 15000);
+      }, connecting ? 10000 : 12000);
     };
     new MutationObserver(() => {
       const loading = root.classList.contains("is-loading");
@@ -510,7 +516,9 @@
       reconnecting = true;
       const mine = loadToken;
       root.classList.add("is-loading");
-      toast(navigator.onLine === false ? "Нет интернета, жду связь…" : "Связь прервалась, переподключаюсь…");
+      // Before the first frame it is just a slow start: a quiet line under the spinner, no alarm.
+      if (lastTime >= 1 || navigator.onLine === false) toast(navigator.onLine === false ? "Нет интернета, жду связь…" : "Связь прервалась, переподключаюсь…");
+      else { const small = $(".cv-player-loading small"); if (small) small.textContent = "Пробую ещё раз…"; }
       await online();
       await new Promise((done) => window.setTimeout(done, Math.min(1000 * 2 ** (reconnects - 1), 15000)));
       if (closed || mine !== loadToken) { reconnecting = false; return; }
@@ -923,9 +931,20 @@
       if (button) { event.stopPropagation(); actions[button.dataset.act]?.(); showUi(); return; }
       if (event.target === video || event.target === root) {
         if (panelKind) closePanel();
-        else togglePlay();
+        // A finger tap opens the controls (and a second tap hides them), as in phone players;
+        // pausing is the button's job. A mouse click still pauses.
+        else if (touchTap) {
+          if (uiWasHidden) showUi();
+          else if (!video.paused) { window.clearTimeout(idleTimer); root.classList.remove("is-ui"); }
+        } else togglePlay();
       }
     });
+    let touchTap = false;
+    let uiWasHidden = false;
+    root.addEventListener("pointerdown", (event) => {
+      touchTap = event.pointerType === "touch" || event.pointerType === "pen";
+      uiWasHidden = !root.classList.contains("is-ui");
+    }, true);
     video.addEventListener("dblclick", toggleFullscreen);
     root.addEventListener("pointermove", showUi);
 

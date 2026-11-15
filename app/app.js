@@ -6458,6 +6458,9 @@
       const daily = [...pool].sort((left, right) => stableHash(`${seed}:${left.id}`) - stableHash(`${seed}:${right.id}`)).slice(0, count);
       if (daily.length) return daily;
     }
+    // Until the day's trends arrive there is nothing real to show: a placeholder frame, not a film
+    // from the old catalogue (it flashed «Бойцовский клуб» and the like for a second).
+    if (lampacOrigin() && !tmdbHome) return [];
     if (frozenFeatureIds) {
       const kept = frozenFeatureIds.map((id) => getTitle(id)).filter(Boolean);
       if (kept.length === frozenFeatureIds.length) return kept;
@@ -6532,7 +6535,7 @@
   function homeFeatureMarkup(picks) {
     picks = picks.map((item) => String(item.backdropImage || '').includes('/2a0000019ac9a31de3b4565f65a725a0fdd3/') ? { ...item, backdropImage: '' } : item);
     const pick = picks[Math.min(homeFeatureIndex, picks.length - 1)] || picks[0];
-    if (!pick) return "";
+    if (!pick) return lampacOrigin() && !tmdbHome ? `<section class="home-feature is-placeholder" aria-busy="true" aria-label="Загружаю"><span class="skeleton home-feature-skel-kicker"></span><span class="skeleton home-feature-skel-title"></span><span class="skeleton home-feature-skel-line"></span><span class="skeleton home-feature-skel-button"></span></section>` : "";
     const poster = pick.posterImage ? highResolutionPosterUrl(pick.posterImage) : "";
     const backdrop = pick.backdropImage || "";
     const imdb = Number(pick.imdbRating || 0);
