@@ -1,4 +1,4 @@
-const SHELL_CACHE = "cinevault-shell-v205";
+const SHELL_CACHE = "cinevault-shell-v206";
 const API_CACHE = "cinevault-api-v1";
 const MEDIA_CACHE = "cinevault-media-v1";
 const SHELL = ["/", "/index.html", "/boot.js", "/styles.css", "/config.local.js", "/app.js", "/lampac-player.js", "/watch-native.js", "/accounts.js", "/manifest.json", "/favicon.svg", "/assets/fonts/onest-cyrillic.woff2", "/assets/fonts/onest-latin.woff2", "/assets/fonts/geologica-cyrillic.woff2", "/assets/fonts/geologica-latin.woff2"];
@@ -97,7 +97,7 @@ self.addEventListener("fetch", (event) => {
 self.addEventListener("push", (event) => {
   let message = {};
   try { message = event.data ? event.data.json() : {}; } catch { message = { body: event.data?.text() || "" }; }
-  event.waitUntil(self.registration.showNotification(message.title || "CineVault", {
+  event.waitUntil(self.registration.showNotification(message.title || "Lumo Film", {
     body: message.body || "",
     icon: "/assets/icons/icon-192.png",
     badge: "/assets/icons/icon-192.png",

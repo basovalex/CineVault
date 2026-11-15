@@ -33,7 +33,7 @@
     error(text) { const el=this.dialog.querySelector('[data-account-error]'); el.textContent=text; },
     form(mode='login') {
       const register=mode==='register', recover=mode==='recover';
-      this.modal(register?'Создать аккаунт':recover?'Восстановить доступ':'Войти в CineVault', `
+      this.modal(register?'Создать аккаунт':recover?'Восстановить доступ':'Войти в Lumo Film', `
         <p class="muted">Личный просмотр и просмотр вместе сохраняются отдельно на ваших устройствах.</p>
         <form data-auth-form>
         <label>Логин<input name="username" autocomplete="username" required minlength="3" maxlength="32"></label>

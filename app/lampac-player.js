@@ -225,9 +225,9 @@
       if ("mediaSession" in navigator && window.MediaMetadata) {
         try {
           navigator.mediaSession.metadata = new MediaMetadata({
-            title: options.title || "CineVault",
+            title: options.title || "Lumo Film",
             artist: options.isMovie ? (options.voice || "") : [entry.label, entry.name].filter(Boolean).join(" · "),
-            album: "CineVault",
+            album: "Lumo Film",
             artwork: options.artwork ? [{ src: options.artwork, sizes: "500x750", type: "image/jpeg" }] : [],
           });
         } catch {}
