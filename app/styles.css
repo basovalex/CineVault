@@ -1631,3 +1631,11 @@ span.studio-sort-button::after { display: none; }
 /* Card pictures fade in as they load (see fadeInImage in app.js). */
 img { transition: opacity .35s var(--ease); }
 img.img-fading { opacity: 0; }
+
+/* Waiting for the logo: the place is kept, the text is not shown yet; it fades in if no logo comes. */
+[data-logo-for] { transition: color .35s var(--ease); }
+[data-logo-for].is-logo-pending { color: transparent; min-height: 1.1em; }
+.home-feature h1.is-logo-pending, .detail-content h1.is-logo-pending { display: block; max-height: 150px; overflow: hidden; }
+/* The frame fades in from the dark once it has fully loaded: no blurred half-loaded picture first. */
+.home-feature .feature-backdrop, .detail-shell .detail-backdrop { transition: opacity .6s var(--ease), filter .6s var(--ease), transform .6s var(--ease); }
+.home-feature.is-blurred .feature-backdrop, .detail-shell.is-blurred .detail-backdrop { filter: none; transform: none; opacity: 0; }
