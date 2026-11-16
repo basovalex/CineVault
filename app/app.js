@@ -6672,11 +6672,13 @@
     const hasLogo = typeof known === "string" && titleLogoReady.has(known);
     prefetchTitleLogos(picks);
     const title = `<h1 id="home-feature-title" class="feature-title${hasLogo ? " has-logo" : ""}${titleLogoPending(pick.id) ? " is-logo-pending" : ""}${pick.title.length > 24 ? " is-long" : ""}" data-logo-for="${escapeHtml(pick.id)}">${titleLogoMarkup(pick.id, pick.title)}</h1>`;
-    const meta = [ratingStar(pick), imdb ? `<span>IMDb ${imdb.toFixed(1)}</span>` : "", ...itemMetaLine(pick).map((value) => `<span>${escapeHtml(value)}</span>`), age ? `<span class="feature-age">${escapeHtml(age)}</span>` : ""].filter(Boolean).join("");
+    // Less to read: rating, year, one genre, length — the picture and the logo say the rest.
+    const line = itemMetaLine(pick);
+    const meta = [ratingStar(pick), ...[line[0], line.length > 2 ? line[1] : "", line[line.length - 1]].filter((value, index, list) => value && list.indexOf(value) === index).map((value) => `<span>${escapeHtml(value)}</span>`), age ? `<span class="feature-age">${escapeHtml(age)}</span>` : ""].filter(Boolean).join("");
     const activeIndex = Math.max(0, picks.indexOf(pick));
     const nextIndex = (activeIndex + 1) % picks.length;
     const thumbs = picks.length > 1 ? `<div class="feature-pager"><span class="feature-pager-label">Далее в подборке</span><button class="feature-next" data-feature-pick="${nextIndex}" type="button">${escapeHtml(picks[nextIndex].title)}</button><div class="feature-picks" role="tablist" aria-label="Рекомендации на сегодня">${picks.map((item, index) => `<button class="feature-pick${index === activeIndex ? " is-active" : ""}" data-feature-pick="${index}" type="button" role="tab" aria-selected="${index === activeIndex}" aria-label="${escapeHtml(item.title)}"></button>`).join("")}</div></div>` : "";
-    return `<section class="home-feature${backdrop ? " has-backdrop" : ""}" aria-labelledby="home-feature-title" data-feature-image="${escapeHtml(backdrop || poster)}"><div class="feature-backdrop" aria-hidden="true"></div><div class="feature-body"><div class="feature-copy"><span class="feature-chip">${escapeHtml(chip)}</span>${title}<div class="feature-meta">${meta}</div>${pick.description ? `<p class="feature-description">${escapeHtml(pick.description)}</p>` : ""}<div class="hero-actions">${featureWatchAction(pick, resumable)}<button class="secondary-button" data-favorite="${escapeHtml(pick.id)}" type="button">${favorite ? `${uiIcon("check")}<span>В избранном</span>` : `${uiIcon("plus")}<span>В избранное</span>`}</button><a class="secondary-button feature-icon-button" href="${routeForTitle(pick.id)}" data-open-title="${escapeHtml(pick.id)}" aria-label="Подробнее" title="Подробнее">${uiIcon("info")}</a></div></div>${!backdrop && poster ? `<a class="feature-poster" href="${routeForTitle(pick.id)}" data-open-title="${escapeHtml(pick.id)}" aria-hidden="true" tabindex="-1"><img src="${escapeHtml(poster)}" alt="" decoding="async"></a>` : ""}</div>${thumbs}</section>`;
+    return `<section class="home-feature${backdrop ? " has-backdrop" : ""}" aria-labelledby="home-feature-title" data-feature-image="${escapeHtml(backdrop || poster)}"><div class="feature-backdrop" aria-hidden="true"></div><div class="feature-body"><div class="feature-copy"><span class="feature-chip">${escapeHtml(chip)}</span>${title}<div class="feature-meta">${meta}</div>${pick.description ? `<p class="feature-description">${escapeHtml(pick.description)}</p>` : ""}<div class="hero-actions">${featureWatchAction(pick, resumable)}<button class="secondary-button feature-icon-button" data-favorite="${escapeHtml(pick.id)}" type="button" aria-label="${favorite ? "В избранном" : "В избранное"}" title="${favorite ? "В избранном" : "В избранное"}">${uiIcon(favorite ? "check" : "plus")}</button><a class="secondary-button feature-icon-button" href="${routeForTitle(pick.id)}" data-open-title="${escapeHtml(pick.id)}" aria-label="Подробнее" title="Подробнее">${uiIcon("info")}</a></div></div>${!backdrop && poster ? `<a class="feature-poster" href="${routeForTitle(pick.id)}" data-open-title="${escapeHtml(pick.id)}" aria-hidden="true" tabindex="-1"><img src="${escapeHtml(poster)}" alt="" decoding="async"></a>` : ""}</div>${thumbs}</section>`;
   }
 
   function landscapeArt(item) {
@@ -6935,8 +6937,23 @@
     bindPageActions(copy);
   }
 
+  // On a phone the hero is swiped left and right, as a carousel.
+  function bindFeatureSwipe(feature = $(".home-feature")) {
+    if (!feature || feature.dataset.swipe) return;
+    feature.dataset.swipe = "1";
+    let startX = 0, startY = 0;
+    feature.addEventListener("touchstart", (event) => { startX = event.touches[0].clientX; startY = event.touches[0].clientY; }, { passive: true });
+    feature.addEventListener("touchend", (event) => {
+      const dx = event.changedTouches[0].clientX - startX;
+      const dy = event.changedTouches[0].clientY - startY;
+      const total = homeFeaturePicks().length;
+      if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5 || total < 2) return;
+      selectHomeFeature((homeFeatureIndex + (dx < 0 ? 1 : total - 1)) % total);
+    }, { passive: true });
+  }
   // The active segment fills in eight seconds, then the next pick takes its place.
   function bindFeatureAutoplay(feature = $(".home-feature")) {
+    bindFeatureSwipe(feature);
     const picks = feature?.querySelector(".feature-picks");
     if (!picks || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     picks.addEventListener("animationend", (event) => {
@@ -7959,8 +7976,26 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       .finally(() => { tmdbHomeLoading = null; });
     return tmdbHomeLoading;
   }
+  // «Топ-10 за неделю»: the week's trends with big rank numbers next to the posters.
+  function tmdbTopTenMarkup(items) {
+    const list = items.filter((item) => item.posterImage).slice(0, 10);
+    if (list.length < 5) return "";
+    return `<section class="discovery-shelf top-ten-shelf" data-tmdb-row="top10"><div class="section-header discovery-shelf-header"><div><h2>Топ-10 за неделю</h2></div></div><div class="discovery-rail top-ten-rail">${list.map((item, index) => `<a class="top-ten-card" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="${index + 1}. ${escapeHtml(item.title)}"><span class="top-ten-number" aria-hidden="true">${index + 1}</span><span class="top-ten-poster"><img src="${escapeHtml(previewImageUrl(highResolutionPosterUrl(item.posterImage)))}" alt="" loading="lazy" decoding="async"></span></a>`).join("")}</div></section>`;
+  }
+  // «Сейчас смотрят» as big frames (as the services' premieres): the frame, the film's logo, one line of facts,
+  // two lines of story and the button; the rest of the rows stay posters.
+  function tmdbWideRowMarkup(row) {
+    const list = row.items.filter((item) => item.backdropImage).slice(0, 12);
+    if (list.length < 3) return "";
+    return `<section class="discovery-shelf wide-shelf" data-tmdb-row="${escapeHtml(row.key)}"><div class="section-header discovery-shelf-header"><div><h2>${escapeHtml(row.title)}</h2></div></div><div class="wide-rail">${list.map((item) => {
+      const line = itemMetaLine(item);
+      const rating = catalogRatingValue(item);
+      return `<article class="wide-card" style="--wide-image:url('${escapeHtml(item.backdropImage)}')"><a class="wide-card-link" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)}"></a><div class="wide-card-copy"><h3 class="wide-card-title is-logo-pending" data-logo-for="${escapeHtml(item.id)}">${escapeHtml(item.title)}</h3><p class="wide-card-meta">${rating ? `<span class="wide-card-rating">${rating.toFixed(1)}</span>` : ""}${[line[0], line.length > 2 ? line[1] : ""].filter(Boolean).map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</p>${item.description ? `<p class="wide-card-text">${escapeHtml(item.description)}</p>` : ""}<a class="primary-button wide-card-button" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}">Подробнее</a></div></article>`;
+    }).join("")}</div></section>`;
+  }
   function tmdbHomeRowMarkup(row) {
     if (!row.items.length) return "";
+    if (row.key === "now") return tmdbWideRowMarkup(row) || "";
     return `<section class="discovery-shelf" data-tmdb-row="${escapeHtml(row.key)}"><div class="section-header discovery-shelf-header"><div><h2>${escapeHtml(row.title)}</h2>${row.description ? `<p>${escapeHtml(row.description)}</p>` : ""}</div></div><div class="discovery-rail">${row.items.map((candidate) => poster(candidate)).join("")}</div></section>`;
   }
   function tmdbHomeShelves(continueShelf) {
@@ -7971,7 +8006,9 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     if (personalRecsKey !== personalSeeds().map((seed) => seed.id).join(",") || (!personalRecs && !personalRecsLoading)) {
       loadPersonalRecs().then(() => { if (state.view === "home" && readRouteFromLocation().type === "view" && readRouteFromLocation().view === "home") { renderHome(); hydrateLazyPosters(); } }).catch(() => {});
     }
-    return `${continueShelf || ""}${personalShelvesMarkup()}${tmdbHome.map(tmdbHomeRowMarkup).join("")}${tmdbHomeGenreRows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-tmdb-home-more aria-hidden="true"></div>`;
+    const week = tmdbHome.find((row) => row.key === "trend-week")?.items || [];
+    const [firstRow, ...otherRows] = tmdbHome;
+    return `${continueShelf || ""}${personalShelvesMarkup()}${firstRow ? tmdbHomeRowMarkup(firstRow) : ""}${tmdbTopTenMarkup(week)}${otherRows.map(tmdbHomeRowMarkup).join("")}${tmdbHomeGenreRows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-tmdb-home-more aria-hidden="true"></div>`;
   }
   // «Для вас» from everything watched: every title in the history, the progress and the favourites is a seed
   // (newer and finished ones weigh more); TMDB's «recommendations» of each seed are pooled, a title liked by
