@@ -173,6 +173,12 @@ TRAILER_CACHE_SECONDS = 14 * 24 * 3600
 # «Nothing found» is asked again much sooner: trailers of upcoming films appear on Rutube later.
 TRAILER_EMPTY_CACHE_SECONDS = 12 * 3600
 TRAILER_WORDS = ("трейлер", "trailer")
+# Words a trailer's name may carry besides the film's own title (stems: «русский», «официальный», «сезон»…).
+TRAILER_NOISE = ("трейлер", "trailer", "русск", "официал", "official", "дубляж", "дублир", "озвуч", "субтит", "сезон", "season",
+                 "сериал", "series", "фильм", "movie", "мульт", "новый", "новинк", "финальн", "final", "второй", "первый", "трет",
+                 "часть", "part", "премьер", "кино", "смотр", "2160", "1080", "full", "ultra", "версия", "version", "озвучк",
+                 "netflix", "hbo", "disney", "apple", "amazon", "prime", "кинопоиск", "okko", "start", "иви", "wink", "амедиатек",
+                 "фильмы", "сериалы", "только", "скоро", "уже", "года", "году", "film", "teaser", "тизер", "клип", "promo", "промо")
 
 
 def _trailer_text(value: Any) -> str:
@@ -189,9 +195,20 @@ def score_trailer_candidate(candidate: Dict[str, Any], titles: Iterable[str], ye
     if not name or not any(word in name for word in TRAILER_WORDS) or not 20 <= duration <= 420:
         return 0.0
     wanted = [text for text in (_trailer_text(title) for title in titles) if len(text) >= 2]
-    if not any(text in name for text in wanted):
+    if not any(re.search(r"(?<![0-9a-zа-я]){}(?![0-9a-zа-я])".format(re.escape(text)), name) for text in wanted):
         return 0.0
     score = 10.0
+    # What is left after the titles, years and the usual trailer words must be little: «Тело Дженнифер 2 трейлер»
+    # is another film for «Тело». A short title tolerates no extra word, a long one a couple.
+    rest = name
+    for text in sorted(wanted, key=len, reverse=True):
+        rest = re.sub(r"(?<![0-9a-zа-я]){}(?![0-9a-zа-я])".format(re.escape(text)), " ", rest)
+    extra = [word for word in rest.split() if len(word) >= 4 and not word.isdigit() and not any(word.startswith(stem) for stem in TRAILER_NOISE)]
+    shortest = min((len(text.split()) for text in wanted), default=3)
+    if extra and shortest <= 2:
+        return 0.0
+    if len(extra) >= 3:
+        score -= 4 + 2 * len(extra)
     if year and str(year) in name:
         score += 4
     if "русск" in name or "дубляж" in name:

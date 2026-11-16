@@ -995,5 +995,21 @@ class MediaLibraryTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
 
 
+class TrailerMatchTests(unittest.TestCase):
+    def score(self, name, titles, year=2026):
+        from tools.media_library_server import score_trailer_candidate
+        return score_trailer_candidate({"title": name, "duration": 120, "hits": 1000}, titles, year)
+
+    def test_a_short_title_does_not_take_another_films_trailer(self):
+        self.assertEqual(self.score("Тело Дженнифер 2 (Трейлер 2026)", ["Тело", "The Body"]), 0.0)
+        self.assertEqual(self.score("Телохранитель трейлер", ["Тело"]), 0.0)
+        self.assertGreater(self.score("Тело — Русский трейлер (2026)", ["Тело", "The Body"]), 6)
+
+    def test_usual_trailer_words_and_the_original_title_are_allowed(self):
+        self.assertGreater(self.score("Квест Вижна (1 Сезон)🔥💥Официальный трейлер (Субтитры)", ["Квест Вижна", "VisionQuest"]), 6)
+        self.assertGreater(self.score("Сериал «Мыслить как преступник / Criminal Minds» трейлер", ["Мыслить как преступник", "Criminal Minds"], 2005), 6)
+        self.assertGreater(self.score("Сердце зверя | Официальный трейлер (2026) (русская озвучка)", ["Сердце зверя", "Primitive War"]), 6)
+
+
 if __name__ == "__main__":
     unittest.main()
