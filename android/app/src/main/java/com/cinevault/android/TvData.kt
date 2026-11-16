@@ -144,10 +144,11 @@ object Tmdb {
         logos[item.id]?.let { return it }
         val url = runCatching {
             val all = get("${if (item.isSeries) "tv" else "movie"}/${item.tmdbId}/images?include_image_language=ru,en,null", 8_000).optJSONArray("logos")
-            // English lettering only for a title written in Latin in Russian too: «Полтора шпиона», not «Central Intelligence».
+            // Only Russian lettering (English only for a title written in Latin in Russian too); «wordless» TMDB logos
+            // are left out, they often carry English text. None — the Russian name as text.
             val latin = item.title.none { it in 'а'..'я' || it in 'А'..'Я' || it == 'ё' || it == 'Ё' }
             val list = (0 until (all?.length() ?: 0)).mapNotNull { all!!.optJSONObject(it) }
-                .filter { it.optString("file_path").let { path -> path.isNotBlank() && !path.endsWith(".svg", true) } && (it.optString("iso_639_1") != "en" || latin) }
+                .filter { it.optString("file_path").let { path -> path.isNotBlank() && !path.endsWith(".svg", true) } && (it.optString("iso_639_1") == "ru" || (latin && it.optString("iso_639_1") == "en")) }
             fun rank(logo: JSONObject) = when (logo.optString("iso_639_1")) { "ru" -> 0; "en" -> 1; else -> 2 }
             list.sortedWith(compareBy<JSONObject> { rank(it) }.thenByDescending { it.optDouble("vote_average", 0.0) }).firstOrNull()
                 ?.let { image(it.optString("file_path"), "w500") }.orEmpty()

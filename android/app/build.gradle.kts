@@ -26,8 +26,8 @@ android {
         applicationId = "com.cinevault.android"
         minSdk = 24
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.4.7"
+        versionCode = 17
+        versionName = "0.4.8"
         buildConfigField("String", "SERVER_URL", (findProperty("cinevault.serverUrl") as String? ?: "https://cinevault-aleksandr.duckdns.org").asBuildConfigString())
         buildConfigField("String", "BASIC_USERNAME", readXcconfigValue("CINEVAULT_BASIC_USERNAME").asBuildConfigString())
         buildConfigField("String", "BASIC_PASSWORD", readXcconfigValue("CINEVAULT_BASIC_PASSWORD").asBuildConfigString())
