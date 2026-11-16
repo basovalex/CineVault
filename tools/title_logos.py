@@ -77,7 +77,8 @@ def lookup(tmdb: str, kind: str, kp: str, token: str, session=requests) -> Optio
         if not kp and doc.get("isSeries") is not None and bool(doc.get("isSeries")) != series:
             continue
         url = str((doc.get("logo") or {}).get("url") or "")
-        if url:
+        # A TMDB-hosted logo here is TMDB's (usually English) one, already checked by the site: not Kinopoisk's own.
+        if url and "image.tmdb.org" not in url:
             return url
     return ""
 

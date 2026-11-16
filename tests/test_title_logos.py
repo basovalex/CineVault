@@ -61,6 +61,11 @@ class TitleLogoTests(unittest.TestCase):
         self.assertEqual(title_logos.lookup("", "tv", "77044", "key", session), "")
         self.assertIn(("id", "77044"), session.calls[0])
 
+    def test_lookup_skips_tmdb_hosted_logos(self):
+        # Kinopoisk often returns TMDB's English logo; only Kinopoisk's own pictures count.
+        session = FakeSession(FakeResponse(200, {"docs": [{"isSeries": True, "logo": {"url": "https://image.tmdb.org/t/p/original/x.png"}}]}))
+        self.assertEqual(title_logos.lookup("4057", "tv", "", "key", session), "")
+
     def test_lookup_reports_a_failed_service_as_none(self):
         self.assertIsNone(title_logos.lookup("1", "movie", "", "key", FakeSession(FakeResponse(403, {}))))
 

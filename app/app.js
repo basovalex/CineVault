@@ -5212,7 +5212,8 @@
           if (kp) params.set("kp", kp);
           const answer = await apiFetch(`/api/title-logo?${params}`, { headers: { accept: "application/json" } }).then((response) => (response.ok ? response.json() : null)).catch(() => null);
           const url = String(answer?.url || "");
-          if (url) return /^https:\/\/image\.tmdb\.org\/t\/p\/\w+(\/.+)$/.test(url) ? tmdbImage(url.replace(/^https:\/\/image\.tmdb\.org\/t\/p\/\w+/, ""), "w500") : url;
+          // Kinopoisk often hands back TMDB's English logo: only its own pictures (Russian art) are taken.
+          if (url && !/image\.tmdb\.org/.test(url)) return url;
         }
         return fromTmdb.url;
       })
@@ -5224,8 +5225,10 @@
     // An English logo only for a title that is in Latin letters in Russian too («Stick»): «Полтора шпиона»
     // must not show up as «Central Intelligence». Otherwise Russian, a wordless one, or the text title.
     const latin = Boolean(title) && !/[а-яё]/i.test(title);
-    const rank = (logo) => ({ ru: 0, en: latin ? 1 : 3 })[logo.iso_639_1] ?? 2;
-    const best = (data?.logos || []).filter((logo) => logo.file_path && !/\.svg$/i.test(logo.file_path) && (logo.iso_639_1 !== "en" || latin))
+    // Only Russian lettering (English only for a title written in Latin in Russian too). «Wordless» logos are left
+    // out: on TMDB they often carry English text. No Russian logo — the Russian name as text.
+    const rank = (logo) => ({ ru: 0, en: 1 })[logo.iso_639_1] ?? 9;
+    const best = (data?.logos || []).filter((logo) => logo.file_path && !/\.svg$/i.test(logo.file_path) && (logo.iso_639_1 === "ru" || (latin && logo.iso_639_1 === "en")))
       .sort((left, right) => rank(left) - rank(right) || (right.vote_average || 0) - (left.vote_average || 0))[0];
     return { url: best ? tmdbImage(best.file_path, "w500") : "", russian: best?.iso_639_1 === "ru" || (latin && Boolean(best)) };
   }
