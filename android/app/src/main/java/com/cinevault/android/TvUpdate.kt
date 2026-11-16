@@ -53,6 +53,7 @@ sealed interface UpdateState {
  * by hand; every one after it is a single button.
  */
 object TvUpdate {
+    const val CHECK_INTERVAL_MS = 5 * 60 * 1_000L
     var state by mutableStateOf<UpdateState>(UpdateState.Idle)
         private set
     /** True once the server answered, so «У вас последняя версия» can be said. */
@@ -70,8 +71,9 @@ object TvUpdate {
 
     suspend fun check(force: Boolean = false) {
         if (checking || state is UpdateState.Downloading) return
-        if (!force && System.currentTimeMillis() - lastCheck < 30 * 60_000) return
+        if (!force && System.currentTimeMillis() - lastCheck < CHECK_INTERVAL_MS) return
         checking = true
+        checked = false
         try {
             val json = JSONObject(TvNet.get("${TvNet.server}/tv/latest.json", 12_000))
             val info = UpdateInfo(json.optInt("versionCode"), json.optString("versionName"), json.optString("sha256"), json.optLong("size"),
@@ -84,8 +86,7 @@ object TvUpdate {
             } else state = UpdateState.Idle
         } catch (error: HttpError) {
             // 404: nothing published yet. Not an error for the viewer.
-            lastCheck = System.currentTimeMillis()
-            checked = error.status == 404
+            checked = false
         } catch (error: Exception) {
             android.util.Log.w("TvUpdate", "check failed: $error")
         } finally {

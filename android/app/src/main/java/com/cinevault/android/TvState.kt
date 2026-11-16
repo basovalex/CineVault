@@ -29,6 +29,7 @@ data class TvProgress(val key: String, val titleId: String, val season: Int, val
  * /api/account/site-state, the same merge the site uses; signed out, it stays on the TV.
  */
 object TvState {
+    var pendingCatalogGenre = ""
     private lateinit var prefs: SharedPreferences
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 

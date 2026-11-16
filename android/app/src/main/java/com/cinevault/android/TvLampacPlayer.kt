@@ -187,6 +187,8 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, chooseSource: (Int, 
     var entries by remember { mutableStateOf(request.entries) }
     var voices by remember { mutableStateOf(request.voices) }
     var voiceBusy by remember { mutableStateOf(false) }
+    var nextSeasonLoading by remember { mutableStateOf(false) }
+    var nextSeasonCheckedFor by remember { mutableIntStateOf(-1) }
     /** «Другой источник» opens «Где смотреть» on the episode playing now. */
     val onChooseSource: () -> Unit = { val now = entries[index]; chooseSource(if (request.isMovie) 0 else now.season, if (request.isMovie) 0 else now.episode) }
     val entry = entries[index]
@@ -242,6 +244,33 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, chooseSource: (Int, 
             stream = next
             if (request.isMovie) { voice = entries[target].label; TvState.rememberLampacChoice(item.id, voice = voice); position = keep }
             startCurrent(resume = !request.isMovie)
+        }
+    }
+
+    suspend fun appendNextSeason() {
+        val currentSeason = entries.getOrNull(index)?.season ?: return
+        if (nextSeasonLoading || nextSeasonCheckedFor == currentSeason) return
+        nextSeasonLoading = true
+        nextSeasonCheckedFor = currentSeason
+        try {
+            val season = request.seasons.withIndex()
+                .map { (position, one) -> Lampac.number(one, position + 1) to one }
+                .firstOrNull { it.first > currentSeason } ?: return
+            var node = Lampac.node(season.second.optString("url"))
+            node?.voices?.firstOrNull { it.optString("name") == voice && !it.optBoolean("active") && it.optString("url").isNotBlank() }
+                ?.let { choice -> node = runCatching { Lampac.node(choice.optString("url")) }.getOrNull() ?: node }
+            if (node?.type == "season") {
+                node = node?.data?.firstOrNull()?.optString("url")?.takeIf(String::isNotBlank)?.let { Lampac.node(it) }
+            }
+            val next = node?.takeIf { it.type == "episode" }?.data.orEmpty().mapIndexed { position, raw ->
+                val episode = raw.optString("e").toIntOrNull() ?: (position + 1)
+                PlayEntry(raw.optString("name").ifBlank { "$episode серия" }, raw.optString("s").toIntOrNull() ?: season.first, episode, raw)
+            }.filterNot { fresh -> entries.any { it.season == fresh.season && it.episode == fresh.episode } }
+            if (next.isNotEmpty()) entries = entries + next
+        } catch (_: Exception) {
+            nextSeasonCheckedFor = -1
+        } finally {
+            nextSeasonLoading = false
         }
     }
 
@@ -422,6 +451,9 @@ fun TvLampacPlayer(request: LampacPlay, onBack: () -> Unit, chooseSource: (Int, 
     val activeSegment = segments.firstOrNull { position >= it.start && position < minOf(it.end, if (duration > 0) duration else it.end) - 1 && !(it.type == "outro" && hasNext) }
     val outro = segments.firstOrNull { it.type == "outro" && it.start > duration * 0.5 }
     val creditsAt = outro?.start ?: (duration - (duration * 0.04).coerceIn(30.0, 90.0))
+    LaunchedEffect(index, position >= creditsAt) {
+        if (!request.isMovie && position >= creditsAt && !hasNext) appendNextSeason()
+    }
     val showNext = hasNext && duration > 300 && position >= creditsAt && nextHiddenFor != index && !connecting
     // OK brings the controls; what is offered right now (the next episode, a skip) gets the focus there, as on the site
     // the button over the video is what the viewer presses. Nothing is skipped or switched by OK alone.

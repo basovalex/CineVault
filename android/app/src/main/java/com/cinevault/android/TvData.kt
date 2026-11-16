@@ -6,6 +6,8 @@ import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
@@ -31,7 +33,7 @@ data class TvRatedSeason(val season: Int, val episodes: List<Triple<Int, Double,
 
 /** A trailer the server found on Rutube. */
 @Immutable
-data class TvTrailer(val id: String, val title: String, val author: String, val duration: Int)
+data class TvTrailer(val id: String, val title: String, val author: String, val duration: Int, val previewUrl: String = "", val previewHighUrl: String = "")
 
 @Immutable
 data class TvNext(val season: Int, val episode: Int, val name: String, val airDate: String)
@@ -100,6 +102,7 @@ object Tmdb {
     val CATALOG_COLLECTIONS = listOf("" to "Все", "new" to "Последний год", "audience" to "Любимые зрителями")
 
     private val cache = ConcurrentHashMap<String, JSONObject>()
+    private val requestLocks = ConcurrentHashMap<String, Mutex>()
     private lateinit var prefs: SharedPreferences
     private val ruTitles = ConcurrentHashMap<String, String>()
 
@@ -121,40 +124,55 @@ object Tmdb {
     /** TMDB through our server (the key stays there); straight to TMDB with the site's read token if that fails. */
     suspend fun get(path: String, timeoutMs: Long = 10_000): JSONObject {
         cache[path]?.let { return it }
-        val json = try {
-            JSONObject(TvNet.get("${TvNet.server}/tmdb/3/$path", timeoutMs))
-        } catch (error: Exception) {
-            val key = runCatching { TvNet.config().tmdbKey }.getOrDefault("")
-            if (key.isBlank()) throw error
-            val url = "https://api.themoviedb.org/3/$path"
-            if (key.startsWith("eyJ")) JSONObject(TvNet.get(url, timeoutMs, mapOf("Authorization" to "Bearer $key")))
-            else JSONObject(TvNet.get("$url${if ('?' in path) '&' else '?'}api_key=$key", timeoutMs))
+        val lock = requestLocks.computeIfAbsent(path) { Mutex() }
+        return lock.withLock {
+            cache[path]?.let { return@withLock it }
+            val json = try {
+                JSONObject(TvNet.get("${TvNet.server}/tmdb/3/$path", timeoutMs))
+            } catch (error: Exception) {
+                val key = runCatching { TvNet.config().tmdbKey }.getOrDefault("")
+                if (key.isBlank()) throw error
+                val url = "https://api.themoviedb.org/3/$path"
+                if (key.startsWith("eyJ")) JSONObject(TvNet.get(url, timeoutMs, mapOf("Authorization" to "Bearer $key")))
+                else JSONObject(TvNet.get("$url${if ('?' in path) '&' else '?'}api_key=$key", timeoutMs))
+            }
+            if (cache.size > 400) cache.keys.take(100).forEach(cache::remove)
+            cache[path] = json
+            json
         }
-        if (cache.size > 400) cache.keys.take(100).forEach(cache::remove)
-        cache[path] = json
-        return json
     }
 
     fun image(path: String, size: String = "w500"): String = if (path.isBlank()) "" else "${TvNet.server}/tmdb/t/p/$size$path"
 
     private val logos = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val logoLocks = ConcurrentHashMap<String, Mutex>()
     /** The title's own lettering (TMDB «logos»): Russian first, then English or a wordless one; "" when there is none. */
     fun knownLogo(item: TvItem): String? = logos[item.id]
     suspend fun logo(item: TvItem): String {
         logos[item.id]?.let { return it }
-        val url = runCatching {
-            val all = get("${if (item.isSeries) "tv" else "movie"}/${item.tmdbId}/images?include_image_language=ru,en,null", 8_000).optJSONArray("logos")
-            // Only Russian lettering (English only for a title written in Latin in Russian too); «wordless» TMDB logos
-            // are left out, they often carry English text. None — the Russian name as text.
-            val latin = item.title.none { it in 'а'..'я' || it in 'А'..'Я' || it == 'ё' || it == 'Ё' }
-            val list = (0 until (all?.length() ?: 0)).mapNotNull { all!!.optJSONObject(it) }
-                .filter { it.optString("file_path").let { path -> path.isNotBlank() && !path.endsWith(".svg", true) } && (it.optString("iso_639_1") == "ru" || (latin && it.optString("iso_639_1") == "en")) }
-            fun rank(logo: JSONObject) = when (logo.optString("iso_639_1")) { "ru" -> 0; "en" -> 1; else -> 2 }
-            list.sortedWith(compareBy<JSONObject> { rank(it) }.thenByDescending { it.optDouble("vote_average", 0.0) }).firstOrNull()
-                ?.let { image(it.optString("file_path"), "w500") }.orEmpty()
-        }.getOrElse { return "" }
-        logos[item.id] = url
-        return url
+        val lock = logoLocks.computeIfAbsent(item.id) { Mutex() }
+        return lock.withLock {
+            logos[item.id]?.let { return@withLock it }
+            val tmdbLogo = runCatching {
+                val all = get("${if (item.isSeries) "tv" else "movie"}/${item.tmdbId}/images?include_image_language=ru,en,null", 8_000).optJSONArray("logos")
+                // Only Russian lettering (English only for a title written in Latin in Russian too); «wordless» TMDB logos
+                // are left out, they often carry English text. None — the Russian name as text.
+                val latin = item.title.none { it in 'а'..'я' || it in 'А'..'Я' || it == 'ё' || it == 'Ё' }
+                val list = (0 until (all?.length() ?: 0)).mapNotNull { all!!.optJSONObject(it) }
+                    .filter { it.optString("file_path").let { path -> path.isNotBlank() && !path.endsWith(".svg", true) } && (it.optString("iso_639_1") == "ru" || (latin && it.optString("iso_639_1") == "en")) }
+                fun rank(logo: JSONObject) = when (logo.optString("iso_639_1")) { "ru" -> 0; "en" -> 1; else -> 2 }
+                list.sortedWith(compareBy<JSONObject> { rank(it) }.thenByDescending { it.optDouble("vote_average", 0.0) }).firstOrNull()
+                    ?.let { image(it.optString("file_path"), "w500") }.orEmpty()
+            }.getOrDefault("")
+            val url = tmdbLogo.ifBlank {
+                runCatching {
+                    val type = if (item.isSeries) "tv" else "movie"
+                    JSONObject(TvNet.get("${TvNet.server}/api/title-logo?tmdb=${item.tmdbId}&type=$type", 12_000)).optString("url")
+                }.getOrDefault("")
+            }
+            logos[item.id] = url
+            url
+        }
     }
 
     /** The same picture straight from TMDB, for when our server's copy does not come. */
@@ -483,10 +501,10 @@ object Tmdb {
     }
 
     /** Trailers, as the site's «Трейлер»: Rutube, found by our server (works without a VPN). */
-    suspend fun trailers(item: TvItem): List<TvTrailer> {
-        val url = "${TvNet.server}/api/trailers?title=${enc(item.title)}&original=${enc(item.originalTitle)}&year=${if (item.year > 0) item.year else ""}"
+    suspend fun trailers(item: TvItem, includePreview: Boolean = false): List<TvTrailer> {
+        val url = "${TvNet.server}/api/trailers?title=${enc(item.title)}&original=${enc(item.originalTitle)}&year=${if (item.year > 0) item.year else ""}${if (includePreview) "&preview=1" else ""}"
         return JSONObject(TvNet.get(url, 15_000)).optJSONArray("items").objects().filter { it.optString("provider", "rutube") == "rutube" && it.optString("id").isNotBlank() }
-            .map { TvTrailer(it.optString("id"), it.optString("title"), it.optString("author").ifBlank { "Rutube" }, it.optInt("duration")) }
+            .map { TvTrailer(it.optString("id"), it.optString("title"), it.optString("author").ifBlank { "Rutube" }, it.optInt("duration"), it.optString("previewUrl"), it.optString("previewHighUrl")) }
     }
 
     /** Rutube's own stream of a video, so Media3 plays it on the TV's decoder instead of Rutube's web player. */

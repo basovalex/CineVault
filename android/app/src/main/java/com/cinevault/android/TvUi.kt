@@ -65,6 +65,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -274,21 +275,61 @@ fun TvPosterCard(item: TvItem, onClick: () -> Unit, modifier: Modifier = Modifie
     // The whole card — poster and the title under it — comes into view, not only the focused poster.
     val bring = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
     if (focused) androidx.compose.runtime.LaunchedEffect(Unit) { onFocus(); kotlinx.coroutines.delay(30); runCatching { bring.bringIntoView() } }
-    Column(modifier.then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth()).bringIntoViewRequester(bring), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(
-            Modifier.fillMaxWidth().aspectRatio(2f / 3f).then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
-                .hallFocus(RoundedCornerShape(Hall.R), scale = 1.07f, interaction = interaction, onClick = onClick).background(Hall.Surface),
-        ) {
-            TvImage(Tmdb.image(item.poster, "w342"), item.title, Modifier.fillMaxSize())
-            if (item.rating > 0) Badge(String.format(java.util.Locale.US, "%.1f", item.rating), Modifier.align(Alignment.TopStart).padding(6.dp))
-            if (progress > 0) ProgressBar(progress, Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(8.dp))
+    Box(
+        modifier.then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth())
+            .bringIntoViewRequester(bring).zIndex(if (focused) 2f else 0f),
+    ) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                Modifier.fillMaxWidth().aspectRatio(2f / 3f).then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
+                    .hallFocus(RoundedCornerShape(Hall.R), scale = 1.07f, interaction = interaction, onClick = onClick).background(Hall.Surface),
+            ) {
+                TvImage(Tmdb.image(item.poster, "w342"), item.title, Modifier.fillMaxSize())
+                if (item.rating > 0) Badge(String.format(java.util.Locale.US, "%.1f", item.rating), Modifier.align(Alignment.TopStart).padding(6.dp))
+                if (progress > 0) ProgressBar(progress, Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(8.dp))
+            }
+            Column {
+                HText(item.title, size = Hall.S0, color = if (focused) Hall.Accent else Hall.Text, weight = FontWeight.SemiBold, maxLines = 1)
+                val meta = listOfNotNull(item.year.takeIf { it > 0 }?.toString(), if (item.isSeries) "сериал" else item.genres.firstOrNull()).joinToString(" · ")
+                if (meta.isNotBlank()) HText(meta, size = Hall.S_1, color = Hall.Muted, maxLines = 1)
+            }
         }
-        Column {
-            HText(item.title, size = Hall.S0, color = if (focused) Hall.Accent else Hall.Text, weight = FontWeight.SemiBold, maxLines = 1)
-            val meta = listOfNotNull(item.year.takeIf { it > 0 }?.toString(), if (item.isSeries) "сериал" else item.genres.firstOrNull()).joinToString(" · ")
-            if (meta.isNotBlank()) HText(meta, size = Hall.S_1, color = Hall.Muted, maxLines = 1)
-        }
+        TvTrailerCardPreview(item, focused, Modifier.align(Alignment.TopCenter).fillMaxWidth().aspectRatio(2f / 3f)
+            .graphicsLayer { scaleX = 2f }.zIndex(1f))
     }
+}
+
+@Composable
+fun TvTopTenCard(rank: Int, item: TvItem, onClick: () -> Unit, modifier: Modifier = Modifier, onFocus: () -> Unit = {}) {
+    val (interaction, focused) = rememberFocused()
+    val bring = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
+    if (focused) androidx.compose.runtime.LaunchedEffect(Unit) { onFocus(); kotlinx.coroutines.delay(30); runCatching { bring.bringIntoView() } }
+    Column(modifier.width(176.dp).bringIntoViewRequester(bring), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(2f / 3f)
+            .hallFocus(RoundedCornerShape(Hall.R), scale = 1.07f, interaction = interaction, onClick = onClick)
+            .background(Hall.Surface)) {
+            TvImage(Tmdb.image(item.poster, "w342"), item.title, Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.38f to Color.Transparent, 1f to Hall.Bg.copy(alpha = 0.84f))))
+            HText(rank.toString(), Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = 2.dp),
+                size = 92.sp, color = Hall.Text.copy(alpha = if (focused) 0.94f else 0.76f), weight = FontWeight.Black, display = true, maxLines = 1)
+            if (item.rating > 0) Badge(String.format(java.util.Locale.US, "%.1f", item.rating), Modifier.align(Alignment.TopStart).padding(6.dp))
+        }
+        HText(item.title, size = Hall.S0, color = if (focused) Hall.Accent else Hall.Text, weight = FontWeight.SemiBold, maxLines = 1)
+    }
+}
+
+@Composable
+fun TvGenreTile(title: String, image: String, onClick: () -> Unit, modifier: Modifier = Modifier, onFocus: () -> Unit = {}) {
+    val (interaction, focused) = rememberFocused()
+    Box(modifier.width(224.dp).aspectRatio(16f / 10f)
+        .hallFocus(RoundedCornerShape(Hall.RLg), scale = 1.06f, interaction = interaction, onClick = onClick)
+        .background(Hall.Surface)) {
+        TvImage(image, title, Modifier.fillMaxSize())
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.18f to Color.Transparent, 1f to Hall.Bg.copy(alpha = 0.86f))))
+        HText(title.replaceFirstChar(Char::uppercase), Modifier.align(Alignment.BottomStart).padding(horizontal = 14.dp, vertical = 12.dp),
+            size = Hall.S1, color = if (focused) Hall.Accent else Hall.Text, weight = FontWeight.SemiBold, display = true, maxLines = 1)
+    }
+    if (focused) androidx.compose.runtime.LaunchedEffect(Unit) { onFocus() }
 }
 
 @Composable
@@ -457,23 +498,23 @@ fun KeepScreenOn(active: Boolean = true) {
 
 /**
  * A title as the big services show it: the film's own lettering when TMDB has one (it fades in once loaded),
- * the text title meanwhile and whenever there is none or the picture fails.
+ * the text title if the image is unavailable or takes too long.
  */
 @Composable
 fun TitleArt(item: TvItem, height: Dp, textSize: TextUnit, modifier: Modifier = Modifier, maxLines: Int = 2) {
     var url by remember(item.id) { androidx.compose.runtime.mutableStateOf<String?>(Tmdb.knownLogo(item)) }
     var shown by remember(item.id) { androidx.compose.runtime.mutableStateOf(false) }
     var failed by remember(item.id) { androidx.compose.runtime.mutableStateOf(false) }
-    // The text only if no logo comes within a moment: no flash of text replaced by the picture.
-    var waited by remember(item.id) { androidx.compose.runtime.mutableStateOf(Tmdb.knownLogo(item) == "") }
-    androidx.compose.runtime.LaunchedEffect(item.id) { if (url == null) url = Tmdb.logo(item); if (url.isNullOrBlank()) waited = true }
-    androidx.compose.runtime.LaunchedEffect(item.id) { kotlinx.coroutines.delay(1_200); waited = true }
+    // Once the text is visible, keep it for this visit instead of replacing it with a late logo.
+    var useText by remember(item.id) { androidx.compose.runtime.mutableStateOf(Tmdb.knownLogo(item) == "") }
+    androidx.compose.runtime.LaunchedEffect(item.id) { if (url == null) url = Tmdb.logo(item); if (url.isNullOrBlank()) useText = true }
+    androidx.compose.runtime.LaunchedEffect(item.id) { kotlinx.coroutines.delay(1_200); if (!shown) useText = true }
     val alpha by animateFloatAsState(if (shown) 1f else 0f, androidx.compose.animation.core.tween(450), label = "logo")
-    val textAlpha by animateFloatAsState(if (!shown && (waited || failed)) 1f else 0f, androidx.compose.animation.core.tween(350), label = "title")
-    Box(modifier.heightIn(min = height * 0.6f)) {
+    val textAlpha by animateFloatAsState(if (useText || failed) 1f else 0f, androidx.compose.animation.core.tween(350), label = "title")
+    Box(modifier.height(height), contentAlignment = Alignment.CenterStart) {
         val logo = url
         if (!shown) HText(item.title, Modifier.graphicsLayer { this.alpha = textAlpha }, size = textSize, weight = FontWeight.Bold, display = true, maxLines = maxLines, lineHeight = textSize * 1.08f)
-        if (!logo.isNullOrBlank() && !failed) {
+        if (!logo.isNullOrBlank() && !failed && !useText) {
             val context = LocalContext.current
             val request = remember(logo) {
                 ImageRequest.Builder(context).data(logo).apply { TvNet.serverHeaders(logo).forEach { (name, value) -> if (name == "Authorization") addHeader(name, value) } }.build()

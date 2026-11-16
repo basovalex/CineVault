@@ -7,6 +7,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -70,6 +72,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
@@ -88,6 +92,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -118,6 +125,7 @@ val TV_GROUPS = listOf(
 
 val LocalTvView = androidx.compose.runtime.staticCompositionLocalOf { TvView.HOME }
 val LocalTvSwitch = androidx.compose.runtime.staticCompositionLocalOf<(TvView) -> Unit> { {} }
+val LocalTvRailFocus = androidx.compose.runtime.staticCompositionLocalOf<FocusRequester?> { null }
 
 /** The tab row of the page's group (Фильмы · Сериалы · … in «Каталог», Избранное · История in «Моё»); nothing for a lone page. */
 @Composable
@@ -125,9 +133,16 @@ fun GroupTabs(modifier: Modifier = Modifier) {
     val current = LocalTvView.current
     val switch = LocalTvSwitch.current
     val group = TV_GROUPS.firstOrNull { current in it.views }?.takeIf { it.views.size > 1 } ?: return
+    val selectedFocus = remember(current) { FocusRequester() }
+    LaunchedEffect(current) {
+        if (TvMemory.pendingTab == current) {
+            delay(60)
+            if (runCatching { selectedFocus.requestFocus() }.isSuccess) TvMemory.pendingTab = null
+        }
+    }
     CompositionLocalProvider(LocalBringIntoViewSpec provides TvRowScroll) {
         LazyRow(modifier, horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp)) {
-            items(group.views) { tab -> HChip(tab.tab, tab == current, { switch(tab) }) }
+            items(group.views) { tab -> HChip(tab.tab, tab == current, { if (tab != current) { TvMemory.pendingTab = tab; switch(tab) } }, focus = if (tab == current) selectedFocus else null) }
         }
     }
 }
@@ -142,6 +157,7 @@ sealed interface TvRoute {
 
 /** Where the remote was on a page, so coming back from a card puts it there again. */
 object TvMemory {
+    var pendingTab: TvView? = null
     val focus = mutableMapOf<String, String>()
     var restore = false
     val rows = mutableMapOf<String, List<TvRow>>()
@@ -170,6 +186,7 @@ class TvNav {
 }
 
 @Composable
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 fun TvApp(startId: String? = null) {
     val nav = remember { TvNav() }
     // A card opened from outside (an intent's "open" extra, e.g. tmdb-tv-456).
@@ -179,18 +196,28 @@ fun TvApp(startId: String? = null) {
         else runCatching { Tmdb.title(startId) }.getOrNull()?.let(nav::open)
     }
     var view by rememberSaveable { mutableStateOf(TvView.HOME) }
+    val railFocus = remember { FocusRequester() }
     val holder = rememberSaveableStateHolder()
     val lastInGroup = remember { mutableMapOf<String, TvView>() }
     LaunchedEffect(view) { TV_GROUPS.firstOrNull { view in it.views }?.let { lastInGroup[it.title] = view } }
-    LaunchedEffect(Unit) { TvState.sync(); TvUpdate.check() }
-    // A TV app lives in the background for days: look for a new version every time it comes back.
-    val updateScope = rememberCoroutineScope()
-    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { updateScope.launch { TvUpdate.check() } }
+    LaunchedEffect(Unit) { TvState.sync() }
+    // Check on launch/resume and periodically while the app is open. A missed or transiently failed
+    // request is retried soon, so a published release does not depend on the viewer opening Account.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                TvUpdate.check()
+                delay(TvUpdate.CHECK_INTERVAL_MS)
+            }
+        }
+    }
     BackHandler(enabled = nav.stack.isNotEmpty()) { nav.pop() }
     BackHandler(enabled = nav.stack.isEmpty() && view != TvView.HOME) { view = TvView.HOME }
 
+    val top = nav.stack.lastOrNull()
     Box(Modifier.fillMaxSize().background(Hall.Bg)) {
-        when (val top = nav.stack.lastOrNull()) {
+        when (top) {
             is TvRoute.Play -> TvLampacPlayer(top.request, onBack = { nav.pop() }, chooseSource = { season, episode ->
                 nav.pop()
                 nav.push(TvRoute.Watch(top.request.item, season, episode))
@@ -203,9 +230,14 @@ fun TvApp(startId: String? = null) {
             is TvRoute.Title -> holder.SaveableStateProvider("title-${top.item.id}") { TvTitleScreen(top.item, nav, top.season) }
             is TvRoute.Trailer -> TvTrailerScreen(top.item, onBack = { nav.pop() })
             is TvRoute.Person -> holder.SaveableStateProvider("person-${top.id}") { TvPersonScreen(top.id, top.name, nav) }
-            null -> CompositionLocalProvider(LocalTvView provides view, LocalTvSwitch provides { view = it }) { Row(Modifier.fillMaxSize()) {
-                TvRail(view) { group -> if (view !in group.views) view = lastInGroup[group.title] ?: group.views.first() }
-                Box(Modifier.weight(1f).fillMaxHeight()) {
+            null -> CompositionLocalProvider(LocalTvView provides view, LocalTvSwitch provides { view = it }, LocalTvRailFocus provides railFocus) { Row(Modifier.fillMaxSize()) {
+                TvRail(view, railFocus) { group -> if (view !in group.views) view = lastInGroup[group.title] ?: group.views.first() }
+                Box(Modifier.weight(1f).fillMaxHeight().focusProperties {
+                    exit = { direction ->
+                        if (direction == FocusDirection.Up || direction == FocusDirection.Down) FocusRequester.Cancel
+                        else FocusRequester.Default
+                    }
+                }.focusGroup()) {
                     holder.SaveableStateProvider(view.name) {
                         when (view) {
                             TvView.HOME -> TvRowsPage("home", nav)
@@ -225,12 +257,18 @@ fun TvApp(startId: String? = null) {
                 }
             } }
         }
+        val playbackOpen = top is TvRoute.Play || top is TvRoute.Trailer
+        if (!playbackOpen && TvUpdate.state !is UpdateState.Idle && !TvUpdate.dismissed) {
+            UpdateBanner(
+                Modifier.align(Alignment.BottomCenter).padding(horizontal = 24.dp, vertical = 20.dp).widthIn(max = 820.dp),
+            )
+        }
     }
 }
 
 /** The site's header menu as a slim rail of icons; it opens with labels while the remote is in it. */
 @Composable
-private fun TvRail(view: TvView, onSelect: (TvGroup) -> Unit) {
+private fun TvRail(view: TvView, railFocus: FocusRequester, onSelect: (TvGroup) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val width by animateDpAsState(if (open) 210.dp else Hall.RailWidth, label = "rail")
     Column(
@@ -246,7 +284,7 @@ private fun TvRail(view: TvView, onSelect: (TvGroup) -> Unit) {
             val selected = view in item.views
             val (interaction, focused) = rememberFocused()
             Row(
-                Modifier.fillMaxWidth().hallFocus(RoundedCornerShape(Hall.R), scale = 1.03f, interaction = interaction) { onSelect(item) }
+                Modifier.fillMaxWidth().then(if (selected) Modifier.focusRequester(railFocus) else Modifier).hallFocus(RoundedCornerShape(Hall.R), scale = 1.03f, interaction = interaction) { onSelect(item) }
                     .background(if (focused) Hall.Text else if (selected) Hall.Surface2 else Color.Transparent)
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -289,7 +327,7 @@ private fun FocusInfo(item: TvItem?, modifier: Modifier = Modifier, chip: String
             val facts = listOfNotNull(item.year.takeIf { it > 0 }?.toString(), if (item.isSeries) "Сериал" else "Фильм", item.genres.take(3).joinToString(", ").ifBlank { null })
             HText(facts.joinToString(" · "), size = Hall.S0, color = Hall.Text2, maxLines = 1)
         }
-        if (item.overview.isNotBlank()) HText(item.overview, size = Hall.S0, color = Hall.Text2, maxLines = 3)
+        if (item.overview.isNotBlank()) HText(item.overview, size = Hall.S0, color = Hall.Text2, maxLines = 2)
     }
 }
 
@@ -314,7 +352,10 @@ fun TvRowsPage(view: String, nav: TvNav) {
             val personal = runCatching { Tmdb.personalRows(TvState.personalSeeds()) { id -> TvState.known[id]?.title.orEmpty() } }.getOrDefault(emptyList())
             if (personal.isNotEmpty()) { val merged = personal + loaded; TvMemory.rows[view] = merged; rows = merged }
         }
-        prefetchLogos(context, loaded.take(3).flatMap { it.items.take(12) })
+    }
+    LaunchedEffect(rows) {
+        val visibleRows = rows ?: return@LaunchedEffect
+        prefetchLogos(context, visibleRows.take(3).flatMap { it.items.take(12) })
     }
     // Endless genre rows: the next one comes while the last rows are in view.
     LaunchedEffect(rows) {
@@ -333,6 +374,14 @@ fun TvRowsPage(view: String, nav: TvNav) {
             }
     }
     val meta = Tmdb.SECTION_TITLES[view]
+    val switchView = LocalTvSwitch.current
+    val genreCovers = remember(rows) {
+        val candidates = rows.orEmpty().flatMap { it.items }.filter { it.backdrop.isNotBlank() }
+        val used = mutableSetOf<String>()
+        Tmdb.CATALOG_GENRES.take(10).mapNotNull { genre ->
+            candidates.firstOrNull { genre in it.genres && it.id !in used }?.also { used += it.id }?.let { genre to it }
+        }
+    }
     val continueList = if (view == "home") TvState.continueWatching().mapNotNull { record -> TvState.known[record.titleId]?.let { it to record } }.take(12) else emptyList()
     // «Для вас» opens, as the site's home, on a big pick of the day with its own buttons and «Далее в подборке».
     // Three of the six are the viewer's own picks (from «Для вас») when there is a history; the rest, the day's trends.
@@ -362,8 +411,9 @@ fun TvRowsPage(view: String, nav: TvNav) {
             val order = buildList {
                 if (meta != null) add("section-title")
                 if (pick != null) add("hero")
-                if (view == "home" && TvUpdate.state !is UpdateState.Idle && !TvUpdate.dismissed) add("update")
                 if (continueList.isNotEmpty()) add("continue")
+                if (view == "home" && (rows?.firstOrNull { it.key == "trend-week" }?.items?.size ?: 0) >= 5) add("top10")
+                if (view == "home" && genreCovers.size >= 4) add("genre-tiles")
                 addAll((rows.orEmpty() + genreRows).map { it.key })
             }
             val anchor: (Any) -> Modifier = { key -> Modifier.onFocusChanged { state ->
@@ -392,9 +442,6 @@ fun TvRowsPage(view: String, nav: TvNav) {
                             }
                         }
                     }
-                    if (view == "home" && TvUpdate.state !is UpdateState.Idle && !TvUpdate.dismissed) item(key = "update") {
-                        Box(anchor("update")) { UpdateBanner(Modifier.padding(horizontal = Hall.Gutter, vertical = 4.dp)) }
-                    }
                     if (continueList.isNotEmpty()) item(key = "continue") {
                         Box(anchor("continue")) {
                             TvShelf("Продолжить просмотр") {
@@ -406,12 +453,41 @@ fun TvRowsPage(view: String, nav: TvNav) {
                             }
                         }
                     }
+                    val topTen = rows?.firstOrNull { it.key == "trend-week" }?.items.orEmpty().take(10)
+                    if (view == "home" && topTen.size >= 5) item(key = "top10") {
+                        Box(anchor("top10")) {
+                            TvShelf("Топ-10 за неделю") {
+                                itemsIndexed(topTen, key = { _, item -> item.id }) { index, item ->
+                                    TvTopTenCard(index + 1, item, { nav.open(item) }, Modifier.remembered(view, "top10/${item.id}")) { focused = item }
+                                }
+                            }
+                        }
+                    }
+                    if (view == "home" && genreCovers.size >= 4) item(key = "genre-tiles") {
+                        Box(anchor("genre-tiles")) {
+                            TvShelf("Жанры") {
+                                items(genreCovers, key = { it.first }) { (genre, item) ->
+                                    TvGenreTile(genre, Tmdb.image(item.backdrop, "w780"), {
+                                        TvState.pendingCatalogGenre = genre
+                                        switchView(TvView.CATALOG)
+                                    }, Modifier.remembered(view, "genre/$genre")) { focused = item }
+                                }
+                            }
+                        }
+                    }
                     val all = rows.orEmpty() + genreRows
                     itemsIndexed(all, key = { _, row -> row.key }) { position, row ->
                         Box(anchor(row.key)) {
                             TvShelf(row.title, row.description) {
                                 items(row.items, key = { it.id }) { item ->
-                                    TvPosterCard(item, { nav.open(item) }, Modifier.remembered(view, "${row.key}/${item.id}"), onFocus = { focused = item })
+                                    if (view == "home" && row.key == "now") {
+                                        WideCard(Tmdb.image(item.backdrop.ifBlank { item.poster }, "w780"), item.title,
+                                            listOfNotNull(item.year.takeIf { it > 0 }?.toString(), item.genres.firstOrNull()).joinToString(" · "),
+                                            { nav.open(item) }, Modifier.remembered(view, "${row.key}/${item.id}").onFocusChanged { if (it.hasFocus) focused = item },
+                                            width = 330.dp, rating = item.rating)
+                                    } else {
+                                        TvPosterCard(item, { nav.open(item) }, Modifier.remembered(view, "${row.key}/${item.id}"), onFocus = { focused = item })
+                                    }
                                 }
                             }
                         }
@@ -471,6 +547,9 @@ fun TvCatalogPage(nav: TvNav) {
     var kind by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf("now") }
     var genre by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(TvState.pendingCatalogGenre) {
+        TvState.pendingCatalogGenre.takeIf(String::isNotBlank)?.let { genre = it; TvState.pendingCatalogGenre = "" }
+    }
     TvDiscoverGrid(
         page = "catalog", key = "$collection|$kind|$sort|$genre", nav = nav,
         kinds = when (kind) { "movie" -> listOf("movie"); "tv" -> listOf("tv"); else -> listOf("movie", "tv") },
@@ -594,6 +673,7 @@ fun TvHistoryPage(nav: TvNav) {
     val ids = TvState.history.toList()
     val items = rememberSavedItems(ids)
     val list = rememberLazyListState()
+    val railFocus = LocalTvRailFocus.current
     Column(Modifier.fillMaxSize()) {
         GroupTabs(Modifier.padding(start = Hall.Gutter - 4.dp, top = 12.dp))
         PageHeading("История просмотра", "Последнее просмотренное — сверху. Продолжить можно с того же места.", Modifier.padding(start = Hall.Gutter, top = 6.dp, bottom = 12.dp))
@@ -622,7 +702,7 @@ fun TvHistoryPage(nav: TvNav) {
                         }
                         HButton(if (record != null && !record.completed && record.real) "Продолжить" else if (record?.completed == true && record.season > 0) "Смотреть дальше" else "Смотреть", {
                             val (s, e) = TvState.nextUp(item); nav.push(TvRoute.Watch(item, s, e))
-                        }, Modifier.remembered("history", item.id), primary = true, icon = Icons.Default.PlayArrow)
+                        }, Modifier.focusProperties { if (railFocus != null) left = railFocus }.remembered("history", item.id), primary = true, icon = Icons.Default.PlayArrow)
                         HButton("Карточка", { nav.open(item) })
                         HButton("Удалить", { TvState.removeHistory(item.id) }, icon = Icons.Default.Close)
                     }
@@ -860,7 +940,7 @@ fun TvAccountPage() {
         }
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = Hall.Gutter, top = 34.dp, end = Hall.Gutter, bottom = 48.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        item { PageHeading("Аккаунт", "Избранное, история и «Продолжить» общие с сайтом и телефоном, когда вы вошли.") }
+        item { PageHeading("Аккаунт", "Синхронизируйте списки между устройствами.") }
         val code = TvState.pendingRecovery
         if (code != null) item(key = "recovery") {
             val focus = remember { FocusRequester() }
@@ -903,10 +983,10 @@ fun TvAccountPage() {
                     if (mode != AccountMode.REGISTER) HChip("Создать аккаунт", false, { mode = AccountMode.REGISTER; message = "" })
                     if (mode != AccountMode.RECOVER) HChip("Забыли пароль?", false, { mode = AccountMode.RECOVER; message = "" })
                 }
-                HText("Без входа избранное и история хранятся только на этом телевизоре.", size = Hall.S_1, color = Hall.Muted)
+                HText("Без входа данные хранятся только на ТВ.", size = Hall.S_1, color = Hall.Muted)
             }
         }
-        item(key = "update") { UpdateBanner(always = true) }
+        if (TvUpdate.state is UpdateState.Idle) item(key = "update") { UpdateBanner(always = true) }
         if (message.isNotBlank()) item(key = "message") { HText(message, size = Hall.S0, color = if (message.startsWith("Вы") || message.startsWith("Готово")) Hall.Text2 else Hall.Gold) }
     }
 }

@@ -102,7 +102,6 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
                     Column(Modifier.fillMaxWidth().scrollTopOnFocus().padding(start = Hall.Gutter, end = Hall.Gutter, top = 70.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         HText(if (item.isSeries) "Сериал" else "Фильм", size = Hall.S_1, color = Hall.Accent, weight = FontWeight.SemiBold)
                         TitleArt(item, height = 96.dp, textSize = Hall.STitle, modifier = Modifier.fillMaxWidth(0.55f))
-                        if (item.originalTitle.isNotBlank() && item.originalTitle != item.title) HText(item.originalTitle, size = Hall.S0, color = Hall.Muted, maxLines = 1)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                             if (item.rating > 0) Badge(String.format(Locale.US, "%.1f", item.rating), color = Hall.OnAccent, background = Hall.Accent)
                             val facts = listOfNotNull(
@@ -117,7 +116,7 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
                         if (unreleased) HText("Премьера ${russianDate(item.premiere)}", size = Hall.S0, color = Hall.Gold, weight = FontWeight.SemiBold)
                         item.next?.let { next -> HText("Следующая серия: ${next.season} сезон, ${next.episode} серия — ${russianDate(next.airDate)}", size = Hall.S0, color = Hall.Gold) }
                         if (item.tagline.isNotBlank()) HText(item.tagline, size = Hall.S0, color = Hall.Text2, maxLines = 1)
-                        if (item.overview.isNotBlank()) HText(item.overview, Modifier.fillMaxWidth(0.75f), size = Hall.S0, color = Hall.Text2, maxLines = 4)
+                        if (item.overview.isNotBlank()) HText(item.overview, Modifier.fillMaxWidth(0.75f), size = Hall.S0, color = Hall.Text2, maxLines = 2)
                         else if (failed) HText("Описание не загрузилось. Смотреть всё равно можно.", size = Hall.S0, color = Hall.Muted)
                         Spacer(Modifier.height(6.dp))
                         // All the buttons fit, however long «Продолжить · …» is: the row scrolls with the focus.
@@ -171,7 +170,6 @@ fun TvTitleScreen(initial: TvItem, nav: TvNav, startSeason: Int = 0) {
                 // «О фильме», the site's facts block.
                 item(key = "about") {
                     val facts = listOf(
-                        "Оригинальное название" to item.originalTitle.takeIf { it != item.title }.orEmpty(),
                         "Год" to (if (item.year > 0) "${item.year}" else ""),
                         "Премьера" to (if (item.premiere.length == 10) russianDate(item.premiere, withYear = true) else ""),
                         "Страна" to item.countries.joinToString(", "),
