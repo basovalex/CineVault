@@ -21,7 +21,6 @@ final class CineVaultAppDelegate: NSObject, UIApplicationDelegate {
         #if DEBUG
         DebugRotation.install()
         #endif
-        PlayerAdBlocker.prepare()
         return true
     }
 

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A00000000000000000000040 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000040 /* Assets.xcassets */; };
 		A00000000000000000000001 /* CineVaultApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000001 /* CineVaultApp.swift */; };
 		A00000000000000000000002 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000002 /* Models.swift */; };
 		A00000000000000000000003 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000003 /* APIClient.swift */; };
@@ -15,16 +16,19 @@
 		A00000000000000000000006 /* PlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000006 /* PlayerView.swift */; };
 		A00000000000000000000007 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000007 /* ContentView.swift */; };
 		A00000000000000000000010 /* LocalHLSFileServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000010 /* LocalHLSFileServer.swift */; };
-		A00000000000000000000012 /* filter.js in Resources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000012 /* filter.js */; };
 		A00000000000000000000020 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000020 /* Theme.swift */; };
 		A00000000000000000000021 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000021 /* HomeView.swift */; };
 		A00000000000000000000022 /* CatalogViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000022 /* CatalogViews.swift */; };
 		A00000000000000000000023 /* TitleDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000023 /* TitleDetailView.swift */; };
 		A00000000000000000000024 /* MineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000024 /* MineView.swift */; };
+		A00000000000000000000032 /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000032 /* AccountView.swift */; };
+		A00000000000000000000031 /* Account.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000031 /* Account.swift */; };
+		A00000000000000000000030 /* TMDB.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000030 /* TMDB.swift */; };
 		A00000000000000000000025 /* EmbedPlayers.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000025 /* EmbedPlayers.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		B00000000000000000000040 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B00000000000000000000001 /* CineVaultApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CineVaultApp.swift; sourceTree = "<group>"; };
 		B00000000000000000000002 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		B00000000000000000000003 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
@@ -32,15 +36,17 @@
 		B00000000000000000000005 /* AppStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStore.swift; sourceTree = "<group>"; };
 		B00000000000000000000006 /* PlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerView.swift; sourceTree = "<group>"; };
 		B00000000000000000000007 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		B00000000000000000000010 /* LocalHLSFileServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHLSFileServer.swift; sourceTree = "<group>"; };
 		B00000000000000000000008 /* CineVault.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CineVault.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000010 /* LocalHLSFileServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHLSFileServer.swift; sourceTree = "<group>"; };
 		B00000000000000000000011 /* CineVault.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = CineVault.xcconfig; sourceTree = "<group>"; };
-		B00000000000000000000012 /* filter.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = ../../tools/alloha_ad_filter_extension/filter.js; sourceTree = "<group>"; };
 		B00000000000000000000020 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		B00000000000000000000021 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		B00000000000000000000022 /* CatalogViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogViews.swift; sourceTree = "<group>"; };
 		B00000000000000000000023 /* TitleDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TitleDetailView.swift; sourceTree = "<group>"; };
 		B00000000000000000000024 /* MineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MineView.swift; sourceTree = "<group>"; };
+		B00000000000000000000032 /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
+		B00000000000000000000031 /* Account.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Account.swift; sourceTree = "<group>"; };
+		B00000000000000000000030 /* TMDB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TMDB.swift; sourceTree = "<group>"; };
 		B00000000000000000000025 /* EmbedPlayers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbedPlayers.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -80,8 +86,11 @@
 				B00000000000000000000022 /* CatalogViews.swift */,
 				B00000000000000000000023 /* TitleDetailView.swift */,
 				B00000000000000000000024 /* MineView.swift */,
+				B00000000000000000000040 /* Assets.xcassets */,
+				B00000000000000000000032 /* AccountView.swift */,
+				B00000000000000000000031 /* Account.swift */,
+				B00000000000000000000030 /* TMDB.swift */,
 				B00000000000000000000025 /* EmbedPlayers.swift */,
-				B00000000000000000000012 /* filter.js */,
 			);
 			path = CineVault;
 			sourceTree = "<group>";
@@ -147,7 +156,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A00000000000000000000012 /* filter.js in Resources */,
+				A00000000000000000000040 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -171,6 +180,9 @@
 				A00000000000000000000022 /* CatalogViews.swift in Sources */,
 				A00000000000000000000023 /* TitleDetailView.swift in Sources */,
 				A00000000000000000000024 /* MineView.swift in Sources */,
+				A00000000000000000000032 /* AccountView.swift in Sources */,
+				A00000000000000000000031 /* Account.swift in Sources */,
+				A00000000000000000000030 /* TMDB.swift in Sources */,
 				A00000000000000000000025 /* EmbedPlayers.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -186,10 +198,11 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CineVault/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = CineVault;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				INFOPLIST_KEY_CFBundleDisplayName = "Lumo Film";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "CineVault подключается к локальному серверу медиатеки.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Lumo Film подключается к локальному серверу медиатеки.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cinevault.personal;
@@ -208,10 +221,11 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CineVault/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = CineVault;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				INFOPLIST_KEY_CFBundleDisplayName = "Lumo Film";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "CineVault подключается к локальному серверу медиатеки.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Lumo Film подключается к локальному серверу медиатеки.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.cinevault.personal;
@@ -223,7 +237,7 @@
 			};
 			name = Release;
 		};
-		F00000000000000000000003 /* Project Debug */ = {
+		F00000000000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -267,7 +281,7 @@
 			};
 			name = Debug;
 		};
-		F00000000000000000000004 /* Project Release */ = {
+		F00000000000000000000004 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -303,8 +317,8 @@
 		E00000000000000000000006 /* Build configuration list for PBXProject "CineVault" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				F00000000000000000000003 /* Project Debug */,
-				F00000000000000000000004 /* Project Release */,
+				F00000000000000000000003 /* Debug */,
+				F00000000000000000000004 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

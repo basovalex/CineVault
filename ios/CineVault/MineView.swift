@@ -46,7 +46,7 @@ struct MineView: View {
             .background(Color.cineBackground.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: CatalogTitle.self) { TitleDetailView(title: $0) }
-            .refreshable { await store.loadCatalogProgress() }
+            .refreshable { if store.accountUser != nil { await store.syncAccount() } else { await store.loadCatalogProgress() } }
             .sheet(isPresented: $isSettingsPresented) { SettingsView() }
         }
     }
@@ -84,6 +84,11 @@ struct MineView: View {
                         HistoryRow(title: item.title, progress: item.progress)
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button("Убрать из истории", systemImage: "trash", role: .destructive) {
+                            store.removeFromHistory(item.title.id)
+                        }
+                    }
                 }
             }
         }
@@ -131,7 +136,7 @@ private struct HistoryRow: View {
         }
         let date = Date(timeIntervalSince1970: TimeInterval(progress.updatedAt) / 1000)
         let when = date.formatted(.relative(presentation: .named).locale(Locale(identifier: "ru_RU")))
-        let player = progress.providerId?.capitalized ?? "CineVault"
+        let player = progress.providerId?.capitalized ?? "Lumo Film"
         return "\(player) · \(when)"
     }
 }

@@ -104,7 +104,7 @@ struct HomeView: View {
                     .frame(width: 30, height: 30)
                     .background(Color.cineButton)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
-                Text("CineVault")
+                Text("Lumo Film")
                     .font(.cine(19, .semibold))
             }
             .accessibilityElement(children: .combine)

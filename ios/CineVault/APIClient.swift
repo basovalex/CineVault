@@ -61,20 +61,6 @@ final class CineVaultAPI {
         return entry.catalogTitle
     }
 
-    func fetchPlayerOptions(kinopoiskID: Int) async throws -> ExternalPlayerOptions {
-        try await request(
-            path: "api/player-options",
-            queryItems: [URLQueryItem(name: "kinopoisk", value: String(kinopoiskID))]
-        )
-    }
-
-    func refreshPlayback(kinopoiskID: Int, force: Bool = false) async throws -> PlaybackRefreshResponse {
-        var request = try makeRequest(path: "api/playback/refresh", method: "POST")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(PlaybackRefreshPayload(kinopoiskID: kinopoiskID, force: force))
-        return try await send(request, expecting: PlaybackRefreshResponse.self)
-    }
-
     func fetchOfflineManifest(for episode: Episode, quality: String) async throws -> OfflineManifest {
         guard let path = episode.offlineManifestURL else {
             throw CineVaultAPIError.server(status: 409, message: "Для этой серии нет офлайн-манифеста")

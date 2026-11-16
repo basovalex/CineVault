@@ -9,14 +9,11 @@ struct CatalogView: View {
     @EnvironmentObject private var store: AppStore
     @State private var kind: CatalogKind = .movies
     @State private var genre = ""
-    @State private var sort = "rating"
-    @State private var kindGenres: [String: Int] = [:]
+    @State private var sort = "now"
 
     private var loadKey: String { "\(kind.rawValue)|\(genre)|\(sort)" }
 
-    private var genreNames: [String] {
-        kindGenres.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }.map(\.key)
-    }
+    private var genreNames: [String] { TMDBService.catalogGenres }
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .top), count: 3)
 
@@ -26,8 +23,8 @@ struct CatalogView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     header
                     CineSegmented(options: [
-                        (value: CatalogKind.movies, title: countLabel("Фильмы", store.catalogFacets?.movies)),
-                        (value: CatalogKind.series, title: countLabel("Сериалы", store.catalogFacets?.series)),
+                        (value: CatalogKind.movies, title: "Фильмы"),
+                        (value: CatalogKind.series, title: "Сериалы"),
                     ], selection: $kind)
                     .padding(.horizontal, CineMetrics.gutter)
                     genreChips
@@ -40,11 +37,6 @@ struct CatalogView: View {
             .background(Color.cineBackground.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: CatalogTitle.self) { TitleDetailView(title: $0) }
-            .task { await store.loadCatalogFacets() }
-            .task(id: kind) {
-                kindGenres = (try? await store.api.fetchCatalogFacets(kind: kind.rawValue))?.genres ?? [:]
-                if kindGenres[genre] == nil { genre = "" }
-            }
             .task(id: loadKey) { await loadPage(1) }
             .refreshable { await loadPage(1) }
         }
@@ -57,9 +49,10 @@ struct CatalogView: View {
             Spacer()
             Menu {
                 Picker("Сортировка", selection: $sort) {
-                    Label("С высоким рейтингом", systemImage: "star").tag("rating")
-                    Label("По числу оценок", systemImage: "chart.bar").tag("popular")
-                    Label("Сначала новые", systemImage: "calendar").tag("new")
+                    Label("Популярное", systemImage: "flame").tag("now")
+                    Label("Больше всего оценок", systemImage: "chart.bar").tag("audience")
+                    Label("По рейтингу", systemImage: "star").tag("rating")
+                    Label("Сначала новые", systemImage: "calendar").tag("year")
                     Label("По алфавиту", systemImage: "textformat.abc").tag("title")
                 }
             } label: {
@@ -115,11 +108,6 @@ struct CatalogView: View {
                 ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.vertical, 16)
             }
         }
-    }
-
-    private func countLabel(_ title: String, _ count: Int?) -> String {
-        guard let count, count > 0 else { return title }
-        return "\(title) · \(count.formatted(.number.locale(Locale(identifier: "ru_RU"))))"
     }
 
     private func loadPage(_ page: Int) async {
@@ -233,7 +221,7 @@ struct SearchView: View {
     @ViewBuilder
     private var content: some View {
         if trimmed.isEmpty {
-            let popular = store.homeShelves.first(where: { $0.id == "popular" })?.items ?? store.homeShelves.first?.items ?? []
+            let popular = store.homeShelves.first(where: { $0.id == "trend-day" })?.items ?? store.homeShelves.first?.items ?? []
             if popular.isEmpty {
                 EmptyStateView(systemImage: "magnifyingglass", title: "Что посмотрим?", message: "Ищите по названию, актёру или режиссёру.")
             } else {
@@ -272,9 +260,9 @@ struct SearchView: View {
         errorMessage = nil
         defer { isLoading = false }
         do {
-            let page = try await store.api.fetchCatalogPage(page: 1, search: trimmed, kind: filter, sort: "popular")
+            let page = try await TMDBService.shared.search(trimmed, kind: filter)
             guard !Task.isCancelled else { return }
-            results = page.items.map(\.catalogTitle)
+            results = page.items
             total = page.total
         } catch {
             guard !Task.isCancelled else { return }

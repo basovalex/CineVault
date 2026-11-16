@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>CineVault</string>
+	<string>Lumo Film</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -28,15 +28,21 @@
 	<string>$(CINEVAULT_BASIC_PASSWORD)</string>
 	<key>CineVaultBasicUsername</key>
 	<string>$(CINEVAULT_BASIC_USERNAME)</string>
+	<key>CineVaultLampacHost</key>
+	<string>$(CINEVAULT_LAMPAC_HOST)</string>
+	<key>CineVaultLampacUID</key>
+	<string>$(CINEVAULT_LAMPAC_UID)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
+		<key>NSAllowsArbitraryLoadsForMedia</key>
+		<true/>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>CineVault подключается к локальному серверу медиатеки.</string>
+	<string>Lumo Film подключается к локальному серверу медиатеки.</string>
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>

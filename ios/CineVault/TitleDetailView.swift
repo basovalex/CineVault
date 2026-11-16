@@ -1,24 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// A player the viewer can pick on a title card, in the site's order:
-/// CineVault first, then Alloha, then Collaps / Veoveo / Turbo.
-private struct PlayerChoice: Identifiable, Hashable {
-    enum Kind: Hashable { case cinevault, alloha, embed }
-
-    let id: String
-    let name: String
-    let kind: Kind
-    let voices: [VoiceChoice]
-    /// Voices an embed lists but lets the viewer pick only inside itself.
-    var embedVoices: [String] = []
-}
-
-private struct VoiceChoice: Identifiable, Hashable {
-    let id: String
-    let name: String
-}
-
 private enum DetailTab: String, CaseIterable {
     case similar = "Похожие"
     case cast = "Актёры"
@@ -32,52 +14,22 @@ struct TitleDetailView: View {
 
     @State private var fullTitle: CatalogTitle?
     @State private var detailError: String?
-    @State private var providers: [ExternalPlayerProvider] = []
-    @State private var isLoadingPlayers = false
-    @State private var selectedPlayerID: String?
-    @State private var selectedVoiceID: String?
     @State private var isDescriptionExpanded = false
     @State private var tab: DetailTab = .similar
     @State private var similar: [CatalogTitle] = []
     @State private var season = 1
     @State private var isRequesting = false
     @State private var requestError: String?
+    @State private var trailers: [Trailer] = []
+    @State private var playingTrailer: Trailer?
 
     private var item: CatalogTitle { fullTitle ?? title }
 
-    private var choices: [PlayerChoice] {
-        var result: [PlayerChoice] = []
-        let sources = item.playbackSources.filter { store.api.playbackURL(for: $0.url) != nil }
-        if !sources.isEmpty {
-            let voices = sources.enumerated().map { index, source in
-                VoiceChoice(id: source.id, name: source.label.isEmpty ? "Вариант \(index + 1)" : source.label)
-            }
-            result.append(PlayerChoice(id: "cinevault", name: "CineVault", kind: .cinevault, voices: voices))
-        } else if !item.isServerTitle, item.videoURL != nil {
-            result.append(PlayerChoice(id: "cinevault", name: "CineVault", kind: .cinevault, voices: []))
-        }
-        for provider in providers {
-            if provider.id == "alloha" {
-                let voices = provider.translations.map {
-                    VoiceChoice(id: $0.id, name: [$0.name, $0.quality].filter { !$0.isEmpty }.joined(separator: " · "))
-                }
-                if !voices.isEmpty {
-                    result.append(PlayerChoice(id: "alloha", name: "Alloha", kind: .alloha, voices: voices))
-                }
-            } else if provider.embedURL != nil {
-                result.append(PlayerChoice(id: provider.id, name: provider.name, kind: .embed, voices: [], embedVoices: provider.voices))
-            }
-        }
-        return result
-    }
-
-    private var selectedChoice: PlayerChoice? {
-        choices.first { $0.id == selectedPlayerID } ?? choices.first
-    }
-
-    private var selectedVoice: VoiceChoice? {
-        guard let selectedChoice else { return nil }
-        return selectedChoice.voices.first { $0.id == selectedVoiceID } ?? selectedChoice.voices.first
+    /// Server titles play through Lampac, found by their Kinopoisk, TMDB or IMDb id;
+    /// the built-in open films keep their own direct file.
+    private var canWatch: Bool {
+        if !item.isServerTitle { return item.videoURL != nil }
+        return item.kinopoiskID != nil || item.tmdbID != nil || !(item.imdbID ?? "").isEmpty
     }
 
     private var libraryEpisodes: [Episode] {
@@ -97,13 +49,13 @@ struct TitleDetailView: View {
                         TitleLogo(title: item, maxWidth: 240, maxHeight: 70, fontSize: 30)
                         metaRow
                         actions
-                        playerPickers
+                        detailNotice
                         description
                         if !item.genres.isEmpty {
                             FlowRow(items: item.genres) { GenrePill(text: $0) }
                         }
                         if item.isSeries { seasons }
-                        if !item.isServerTitle && choices.isEmpty { requestButton }
+                        if !item.isServerTitle && !canWatch { requestButton }
                         tabs
                     }
                     .padding(.horizontal, CineMetrics.gutter)
@@ -192,73 +144,42 @@ struct TitleDetailView: View {
     @ViewBuilder
     private var actions: some View {
         HStack(spacing: 10) {
-            if selectedChoice != nil {
+            if canWatch {
                 NavigationLink { playerDestination } label: {
                     Label(resumeLabel, systemImage: "play.fill")
                 }
                 .buttonStyle(CinePrimaryButtonStyle())
-            } else if isLoadingPlayers {
-                Button {} label: {
-                    HStack(spacing: 8) {
-                        ProgressView().tint(.white)
-                        Text("Ищу плееры…")
-                    }
-                }
-                .buttonStyle(CinePrimaryButtonStyle())
-                .disabled(true)
-            } else {
-                Button { Task { await loadPlayers() } } label: {
-                    Label("Нет плееров · обновить", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(CineSecondaryButtonStyle())
+            }
+            if let trailer = trailers.first {
+                Button { playingTrailer = trailer } label: { Image(systemName: "film") }
+                    .buttonStyle(CineIconButtonStyle())
+                    .accessibilityLabel("Трейлер")
             }
             Button { store.toggleFavorite(item) } label: {
-                Label(store.isFavorite(item.id) ? "В избранном" : "В избранное",
-                      systemImage: store.isFavorite(item.id) ? "checkmark" : "plus")
+                Image(systemName: store.isFavorite(item.id) ? "checkmark" : "plus")
             }
-            .buttonStyle(CineSecondaryButtonStyle())
+            .buttonStyle(CineIconButtonStyle())
+            .accessibilityLabel(store.isFavorite(item.id) ? "Убрать из избранного" : "В избранное")
+        }
+        .fullScreenCover(item: $playingTrailer) { TrailerPlayerView(trailer: $0) }
+        if !item.nextAir.isEmpty {
+            Text("Следующая серия: \(item.nextAir)").font(.cine(12)).foregroundStyle(Color.cineMuted)
         }
     }
 
+    /// «Смотреть» goes on from where it stopped: the unfinished episode, or the one after a finished one.
     private var resumeLabel: String {
-        guard let progress = store.progress(forTitle: item.id), progress.completed != true else { return "Смотреть" }
+        if item.isSeries, let next = store.nextUp(item) {
+            let record = store.catalogProgress[LampacProgress.key(item.id, season: next.season, episode: next.episode)]
+            let resuming = (record?.position ?? 0) >= 15 && record?.completed != true
+            return "\(resuming ? "Продолжить" : "Смотреть") · \(next.season) сез. \(next.episode) сер."
+        }
+        guard let progress = store.progress(forTitle: item.id), progress.completed != true, (progress.position ?? 0) >= 15 else { return "Смотреть" }
         return "Продолжить"
     }
 
     @ViewBuilder
-    private var playerPickers: some View {
-        let options = choices
-        if let current = selectedChoice, options.count > 1 || !current.voices.isEmpty {
-            HStack(spacing: 10) {
-                Menu {
-                    ForEach(options) { choice in
-                        Button {
-                            selectedPlayerID = choice.id
-                            selectedVoiceID = nil
-                        } label: {
-                            if choice.id == current.id { Label(choice.name, systemImage: "checkmark") } else { Text(choice.name) }
-                        }
-                    }
-                } label: {
-                    PickerCard(caption: "Плеер", value: current.name)
-                }
-                if current.kind == .embed {
-                    PickerCard(caption: "Озвучка", value: "В плеере", showsChevron: false)
-                } else if !current.voices.isEmpty {
-                    Menu {
-                        ForEach(current.voices) { voice in
-                            Button {
-                                selectedVoiceID = voice.id
-                            } label: {
-                                if voice.id == selectedVoice?.id { Label(voice.name, systemImage: "checkmark") } else { Text(voice.name) }
-                            }
-                        }
-                    } label: {
-                        PickerCard(caption: "Озвучка", value: selectedVoice?.name ?? "—")
-                    }
-                }
-            }
-        }
+    private var detailNotice: some View {
         if let detailError {
             Text("Карточка обновилась не полностью: \(detailError)")
                 .font(.cine(12))
@@ -268,26 +189,13 @@ struct TitleDetailView: View {
 
     @ViewBuilder
     private var playerDestination: some View {
-        if let choice = selectedChoice {
-            Group {
-                switch choice.kind {
-                case .cinevault:
-                    if let source = item.playbackSources.first(where: { $0.id == selectedVoice?.id }) ?? item.playbackSources.first {
-                        CatalogFreshPlayerView(title: item, source: source)
-                    } else if let raw = item.videoURL, let url = URL(string: raw) {
-                        CatalogExternalPlayerView(title: item, url: url)
-                    }
-                case .alloha:
-                    CatalogAllohaPlayerView(title: item, preferredTranslation: providers
-                        .first(where: { $0.id == "alloha" })?.translations
-                        .first(where: { $0.id == selectedVoice?.id })?.name ?? "")
-                case .embed:
-                    if let provider = providers.first(where: { $0.id == choice.id }) {
-                        EmbedProviderPlayerView(title: item, provider: provider)
-                    }
-                }
-            }
-            .modifier(PlayerFullscreenButton())
+        if !item.isServerTitle, let raw = item.videoURL, let url = URL(string: raw) {
+            CatalogExternalPlayerView(title: item, url: url)
+                .modifier(PlayerFullscreenButton())
+        } else if let next = store.nextUp(item) {
+            LampacChooserView(title: item, season: next.season, episode: next.episode)
+        } else {
+            LampacChooserView(title: item)
         }
     }
 
@@ -331,10 +239,23 @@ struct TitleDetailView: View {
                 .scrollIndicators(.hidden)
                 let count = item.seasons.indices.contains(season - 1) ? item.seasons[season - 1] : 0
                 let onServer = libraryEpisodes.filter { $0.season == season }.sorted { ($0.episode ?? 0) < ($1.episode ?? 0) }
-                Text(count > 0 ? "\(count) серий · выберите серию в плеере" : "Серии ещё не объявлены")
-                    .font(.cine(13))
-                    .foregroundStyle(Color.cineMuted)
+                HStack {
+                    Text(count > 0 ? "\(count) серий" : "Серии ещё не объявлены")
+                        .font(.cine(13))
+                        .foregroundStyle(Color.cineMuted)
+                    Spacer()
+                    if canWatch && item.isServerTitle && count > 0 {
+                        NavigationLink { LampacChooserView(title: item, season: season) } label: {
+                            Label("Серии \(season) сезона", systemImage: "list.bullet")
+                                .font(.cine(13, .semibold))
+                        }
+                        .foregroundStyle(Color.cineAccent)
+                    }
+                }
                 ForEach(onServer) { episode in EpisodeRow(episode: episode) }
+                if !item.nextAir.isEmpty {
+                    Text("Ближайшая серия: \(item.nextAir)").font(.cine(12)).foregroundStyle(Color.cineMuted)
+                }
             }
         }
     }
@@ -473,65 +394,16 @@ struct TitleDetailView: View {
     private func load() async {
         if title.isServerTitle {
             do {
-                fullTitle = try await store.api.fetchCatalogTitle(id: title.id)
+                fullTitle = try await store.fetchTitle(title.id)
                 detailError = nil
             } catch {
                 detailError = error.localizedDescription
             }
         }
-        async let players: Void = loadPlayers()
-        async let others: Void = loadSimilar()
-        _ = await (players, others)
-    }
-
-    private func loadPlayers() async {
-        guard let kinopoiskID = item.kinopoiskID else { return }
-        isLoadingPlayers = true
-        defer { isLoadingPlayers = false }
-        providers = (try? await store.api.fetchPlayerOptions(kinopoiskID: kinopoiskID).providers) ?? []
-        // Reopen the player the viewer used last time, on this iPhone or on the site.
-        if selectedPlayerID == nil, let last = store.progress(forTitle: item.id) {
-            let lastID = last.providerId ?? last.player?.replacingOccurrences(of: "embed:", with: "")
-            if let match = choices.first(where: { $0.id == lastID }) {
-                selectedPlayerID = match.id
-                if let voice = last.translationName {
-                    selectedVoiceID = match.voices.first { $0.name.hasPrefix(voice) }?.id
-                }
-            }
-        }
-    }
-
-    private func loadSimilar() async {
-        guard let genre = item.genres.first else { return }
-        let page = try? await store.api.fetchCatalogPage(page: 1, kind: item.kind, genre: genre, sort: "popular")
-        similar = (page?.items.map(\.catalogTitle) ?? []).filter { $0.id != item.id }.prefix(12).map { $0 }
-    }
-}
-
-private struct PickerCard: View {
-    let caption: String
-    let value: String
-    var showsChevron = true
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(caption).font(.cine(11)).foregroundStyle(Color.cineMuted)
-                Text(value).font(.cine(14, .medium)).foregroundStyle(.white).lineLimit(1)
-            }
-            Spacer(minLength: 4)
-            if showsChevron {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.cineMuted)
-            }
-        }
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity, minHeight: 56)
-        .background(Color.cineSurface)
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.cineLine, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .contentShape(Rectangle())
+        async let similarTitles = TMDBService.shared.similar(item)
+        async let found = TMDBService.shared.trailers(item)
+        similar = await similarTitles
+        trailers = await found
     }
 }
 

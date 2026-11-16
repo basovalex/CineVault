@@ -317,7 +317,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Сервер CineVault") {
+                Section("Сервер Lumo Film") {
                     TextField("https://ваш-сервер.example", text: $store.serverAddress)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -326,15 +326,7 @@ struct SettingsView: View {
                         .foregroundStyle(Color.cineAccent)
                     Text(store.statusMessage).font(.footnote).foregroundStyle(Color.cineMuted)
                 }
-                Section {
-                    Label("Избранное хранится на этом iPhone", systemImage: "heart")
-                    Label("История просмотра хранится на этом iPhone", systemImage: "clock.arrow.circlepath")
-                    Label("Скачанные серии доступны без интернета", systemImage: "arrow.down.to.line")
-                } header: {
-                    Text("Данные")
-                } footer: {
-                    Text("Вход выполняется автоматически: данные доступа заданы в приватной сборке. Для просмотра вне дома сервер должен быть доступен по HTTPS.")
-                }
+                AccountSection()
             }
             .scrollContentBackground(.hidden)
             .background(Color.cineBackground.ignoresSafeArea())
