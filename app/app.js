@@ -6919,6 +6919,9 @@
     const currentCopy = feature.querySelector(".feature-copy");
     if (!copy || !currentCopy) return;
     currentCopy.replaceWith(copy);
+    feature.classList.add("is-switching");
+    window.clearTimeout(feature._switchTimer);
+    feature._switchTimer = window.setTimeout(() => feature.classList.remove("is-switching"), 1000);
     const currentPoster = feature.querySelector(".feature-poster");
     const nextPoster = next.querySelector(".feature-poster");
     if (currentPoster && nextPoster) currentPoster.replaceWith(nextPoster);
@@ -8027,7 +8030,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     }
     const week = tmdbHome.find((row) => row.key === "trend-week")?.items || [];
     const [firstRow, ...otherRows] = tmdbHome;
-    return `${firstRow ? tmdbHomeRowMarkup(firstRow) : ""}${continueShelf || ""}${personalShelvesMarkup()}${tmdbTopTenMarkup(week)}${otherRows.slice(0, 2).map(tmdbHomeRowMarkup).join("")}${tmdbGenreTilesMarkup()}${otherRows.slice(2).map(tmdbHomeRowMarkup).join("")}${tmdbHomeGenreRows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-tmdb-home-more aria-hidden="true"></div>`;
+    return `${continueShelf || ""}${firstRow ? tmdbHomeRowMarkup(firstRow) : ""}${personalShelvesMarkup()}${tmdbTopTenMarkup(week)}${otherRows.slice(0, 2).map(tmdbHomeRowMarkup).join("")}${tmdbGenreTilesMarkup()}${otherRows.slice(2).map(tmdbHomeRowMarkup).join("")}${tmdbHomeGenreRows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-tmdb-home-more aria-hidden="true"></div>`;
   }
   // «Для вас» from everything watched: every title in the history, the progress and the favourites is a seed
   // (newer and finished ones weigh more); TMDB's «recommendations» of each seed are pooled, a title liked by
@@ -8378,7 +8381,19 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     } catch { similarTitlesCache.delete(item.id); }
   }
 
+  // Details, episodes and ratings arrive one after another: redraws of the open page within a short moment are
+  // merged into one, so it does not look as if it loaded several times. Opening a page draws at once.
+  let detailRedrawTimer = 0;
   function renderDetails(id) {
+    if (activeTitleId === id && page.querySelector(".detail-shell")) {
+      window.clearTimeout(detailRedrawTimer);
+      detailRedrawTimer = window.setTimeout(() => { if (activeTitleId === id) renderDetailsNow(id); }, 180);
+      return;
+    }
+    window.clearTimeout(detailRedrawTimer);
+    renderDetailsNow(id);
+  }
+  function renderDetailsNow(id) {
     const item = getTitle(id);
     if (!item) return;
     if (item.kinopoiskId && !Array.isArray(item.videoSources) && !importedDetailsLoaded.has(String(item.kinopoiskId))) {
@@ -9268,8 +9283,13 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   // not in the cache yet is hidden, and only until it loads or fails, so nothing can stay invisible.
   // Episode stills of one list come up together (when all have loaded, or after 1.5 s at most), not one by one.
   const stillGroups = new WeakMap();
+  // Pages are drawn again as data arrives: a picture that has been shown once appears at once next time,
+  // or the redraw would look like the page loading over and over.
+  const shownImages = new Set();
+  document.addEventListener("load", (event) => { const src = event.target?.getAttribute?.("src"); if (event.target?.tagName === "IMG" && src) shownImages.add(src); }, true);
   function fadeInImage(image) {
     if (!(image instanceof HTMLImageElement) || image.dataset.fade || image.complete || image.closest(".title-logo, .cv-player")) return;
+    if (shownImages.has(image.getAttribute("src"))) return;
     image.dataset.fade = "1";
     image.classList.add("img-fading");
     const group = image.hasAttribute("data-episode-poster") ? image.closest("section, .page") : null;
@@ -9303,12 +9323,12 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
 
   // Shelves rise into place as they scroll into view, their cards one after another.
   const shelfReveal = "IntersectionObserver" in window && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    ? new IntersectionObserver((entries) => entries.forEach((entry) => { if (entry.isIntersecting) { entry.target.classList.add("is-in"); shelfReveal.unobserve(entry.target); } }), { rootMargin: "0px 0px -8% 0px" })
+    ? new IntersectionObserver((entries) => entries.forEach((entry) => { if (entry.isIntersecting) { entry.target.classList.add("is-in"); revealedShelves.add(shelfKey(entry.target)); shelfReveal.unobserve(entry.target); } }), { rootMargin: "0px 0px -8% 0px" })
     : null;
   // Belt and braces: a shelf also shows on a plain scroll check, and none stays hidden for long whatever happens.
   function revealVisibleShelves() {
     document.querySelectorAll(".discovery-shelf.reveal:not(.is-in)").forEach((shelf) => {
-      if (shelf.getBoundingClientRect().top < window.innerHeight * 0.95) shelf.classList.add("is-in");
+      if (shelf.getBoundingClientRect().top < window.innerHeight * 0.95) { shelf.classList.add("is-in"); revealedShelves.add(shelfKey(shelf)); }
     });
   }
   let revealTicking = false;
@@ -9317,9 +9337,11 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     revealTicking = true;
     requestAnimationFrame(() => { revealTicking = false; revealVisibleShelves(); });
   }, { passive: true });
+  const revealedShelves = new Set();
+  const shelfKey = (shelf) => shelf.dataset.tmdbRow || shelf.getAttribute("aria-labelledby") || "";
   function revealShelves(root = document) {
     if (!shelfReveal) return;
-    const fresh = [...(root.querySelectorAll?.(".discovery-shelf:not(.reveal)") || [])];
+    const fresh = [...(root.querySelectorAll?.(".discovery-shelf:not(.reveal)") || [])].filter((shelf) => !revealedShelves.has(shelfKey(shelf)));
     fresh.forEach((shelf) => {
       shelf.classList.add("reveal");
       [...shelf.querySelectorAll(".poster-card, .wide-card, .top-ten-card, .genre-tile, .landscape-card")].slice(0, 10).forEach((card, index) => card.style.setProperty("--i", index));

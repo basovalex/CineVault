@@ -1757,11 +1757,11 @@ img.img-fading { opacity: 0; }
   /* The hero's frame drifts slowly, as a living picture; a new pick's words slide in. */
   .home-feature.has-backdrop .feature-backdrop { animation: hero-drift 24s ease-in-out infinite alternate; }
   @keyframes hero-drift { from { transform: scale(1.02) translate3d(0, 0, 0); } to { transform: scale(1.1) translate3d(-1.5%, -1%, 0); } }
-  .home-feature .feature-copy > * { animation: hero-in .7s var(--ease) both; }
-  .home-feature .feature-copy > :nth-child(2) { animation-delay: .06s; }
-  .home-feature .feature-copy > :nth-child(3) { animation-delay: .12s; }
-  .home-feature .feature-copy > :nth-child(4) { animation-delay: .18s; }
-  .home-feature .feature-copy > :nth-child(5) { animation-delay: .24s; }
+  .home-feature.is-switching .feature-copy > * { animation: hero-in .7s var(--ease) both; }
+  .home-feature.is-switching .feature-copy > :nth-child(2) { animation-delay: .06s; }
+  .home-feature.is-switching .feature-copy > :nth-child(3) { animation-delay: .12s; }
+  .home-feature.is-switching .feature-copy > :nth-child(4) { animation-delay: .18s; }
+  .home-feature.is-switching .feature-copy > :nth-child(5) { animation-delay: .24s; }
   @keyframes hero-in { from { opacity: 0; transform: translate3d(0, 14px, 0); filter: blur(4px); } to { opacity: 1; transform: none; filter: none; } }
   /* Shelves rise as they come into view; cards follow one by one. */
   .discovery-shelf.reveal { opacity: 0; transform: translate3d(0, 26px, 0); transition: opacity .6s var(--ease), transform .6s var(--ease); }
