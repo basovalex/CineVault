@@ -8340,7 +8340,20 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       loadPersonalRecs().then(() => { if (!hadRecs && state.view === "home" && readRouteFromLocation().type === "view" && readRouteFromLocation().view === "home") { renderHome(); hydrateLazyPosters(); } }).catch(() => {});
     }
     const week = tmdbHome.find((row) => row.key === "trend-week")?.items || [];
-    const [firstRow, ...otherRows] = tmdbHome;
+    const [firstRow, ...allRows] = tmdbHome;
+    // The same films should not open shelf after shelf («Одиссея» first in the top, the day's and the week's trends):
+    // a row leaves out what the rows above already showed, unless that would leave it too thin.
+    const seen = new Set([
+      ...(firstRow?.items || []).filter((item) => item.backdropImage).slice(0, 12),
+      ...(personalRecs?.top?.length >= 6 ? personalRecs.top.slice(0, 20) : []),
+      ...week.filter((item) => item.posterImage).slice(0, 10),
+    ].map((item) => item.id));
+    const otherRows = allRows.map((row) => {
+      const fresh = row.items.filter((item) => !seen.has(item.id));
+      const shown = fresh.length >= 6 ? fresh : row.items;
+      shown.slice(0, 20).forEach((item) => seen.add(item.id));
+      return shown === row.items ? row : { ...row, items: shown };
+    });
     return `${continueShelf || ""}${firstRow ? tmdbHomeRowMarkup(firstRow) : ""}${personalShelvesMarkup()}${tmdbTopTenMarkup(week)}${otherRows.slice(0, 2).map(tmdbHomeRowMarkup).join("")}${tmdbGenreTilesMarkup()}${otherRows.slice(2).map(tmdbHomeRowMarkup).join("")}${tmdbHomeGenreRows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-tmdb-home-more role="status" aria-label="Подгружаю подборки"><span class="loading-spinner" aria-hidden="true" hidden></span></div>`;
   }
   // «Для вас» from everything watched: every title in the history, the progress and the favourites is a seed

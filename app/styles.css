@@ -1841,3 +1841,12 @@ img.img-fading { opacity: 0; }
 }
 
 @media (hover: none), (pointer: coarse) { .cv-player-volume input, .player-volume-level { display: none; } }
+/* The title row keeps its height (the hero does not jump between picks), but the title or logo sits at the row's
+   bottom: the spare room goes above it, over the picture, not as a gap before the rating line. */
+.home-feature h1, .home-feature h1.has-logo { height: auto; }
+/* The hero keeps a steady height between picks, but its words sit together at the bottom: chip, title or logo,
+   facts, story and buttons follow one another, and the spare room is above them, over the picture. */
+.feature-copy { grid-template-rows: none; grid-auto-rows: auto; min-height: 426px; align-content: end; }
+.home-feature .feature-copy > * { max-height: none; }
+.home-feature h1 { max-height: 168px; }
+@media (max-width: 720px) { .feature-copy { grid-template-rows: none; min-height: 320px; } .home-feature h1 { max-height: 108px; } }
