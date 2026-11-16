@@ -33,6 +33,8 @@ from tools.media_library_server import (
     normalize_catalog_source_json,
     parse_external_embed_input,
     parse_kinopoisk_import_input,
+    rutube_trailer_preview_url,
+    rutube_trailer_high_quality_url,
     sitemap_title_ids,
     update_catalog_from_source_json,
 )
@@ -47,6 +49,40 @@ class MediaLibraryTests(unittest.TestCase):
     def tearDown(self):
         self.library.close()
         self.temp_dir.cleanup()
+
+    def test_rutube_trailer_preview_uses_only_rutube_hls_urls(self):
+        response = MagicMock()
+        response.json.return_value = {"video_balancer": {"m3u8": "https://video-storage.rutube.ru/hls/test/master.m3u8"}}
+        with patch("tools.media_library_server.requests.get", return_value=response) as get:
+            self.assertEqual(rutube_trailer_preview_url("a" * 32), "https://video-storage.rutube.ru/hls/test/master.m3u8")
+            get.assert_called_once()
+        response.json.return_value = {"video_balancer": {"m3u8": "https://attacker.example/master.m3u8"}}
+        with patch("tools.media_library_server.requests.get", return_value=response):
+            self.assertEqual(rutube_trailer_preview_url("a" * 32), "")
+        with patch("tools.media_library_server.requests.get") as get:
+            self.assertEqual(rutube_trailer_preview_url("invalid"), "")
+            get.assert_not_called()
+
+    def test_trailer_preview_url_is_not_saved_in_search_cache(self):
+        trailer = {"id": "a" * 32, "provider": "rutube", "title": "Пример трейлер"}
+        with patch("tools.media_library_server.search_rutube_trailers", return_value=[trailer]), patch(
+            "tools.media_library_server.rutube_trailer_preview_url", return_value="https://video-storage.rutube.ru/hls/test/master.m3u8"
+        ), patch("tools.media_library_server.rutube_trailer_high_quality_url", return_value="https://video-storage.rutube.ru/hls/test/1080.m3u8"):
+            result = self.library.find_trailers("Пример", include_preview=True)
+        self.assertEqual(result["items"][0]["previewUrl"], "https://video-storage.rutube.ru/hls/test/master.m3u8")
+        self.assertEqual(result["items"][0]["previewHighUrl"], "https://video-storage.rutube.ru/hls/test/1080.m3u8")
+        cached = self.library._db.execute("SELECT payload_json FROM trailer_cache").fetchone()[0]
+        self.assertNotIn("previewUrl", cached)
+
+    def test_trailer_high_quality_selects_trusted_1080_variant(self):
+        response = MagicMock(status_code=200)
+        response.text = ('#EXTM3U\n#EXT-X-STREAM-INF:RESOLUTION=256x144\nlow.m3u8\n'
+                         '#EXT-X-STREAM-INF:RESOLUTION=1920x1080\nhttps://attacker.example/high.m3u8\n'
+                         '#EXT-X-STREAM-INF:RESOLUTION=1920x1080\nhttps://video.rtbcdn.ru/high.m3u8\n'
+                         '#EXT-X-STREAM-INF:RESOLUTION=3840x2160\nhttps://video.rutube.ru/4k.m3u8\n')
+        with patch("tools.media_library_server.requests.get", return_value=response):
+            self.assertEqual(rutube_trailer_high_quality_url("https://bl.rutube.ru/master.m3u8"), "https://video.rtbcdn.ru/high.m3u8")
+            self.assertEqual(rutube_trailer_high_quality_url("https://attacker.example/master.m3u8"), "")
 
     def test_concurrent_catalog_requests_parse_files_once(self):
         catalog_path = Path(self.temp_dir.name) / "catalog_imports.json"

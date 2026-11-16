@@ -239,6 +239,53 @@ def search_rutube_trailers(title: str, original_title: str = "", year: int = 0, 
     return sorted(found.values(), key=lambda item: item["score"], reverse=True)[:limit]
 
 
+def rutube_trailer_preview_url(video_id: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{32}", str(video_id or "")):
+        return ""
+    try:
+        response = requests.get(
+            "https://rutube.ru/api/play/options/{}/".format(video_id),
+            params={"format": "json"}, timeout=8,
+            headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0 CineVault/1.0"},
+        )
+        response.raise_for_status()
+        stream_url = str((response.json().get("video_balancer") or {}).get("m3u8") or "")
+        parsed = urllib.parse.urlsplit(stream_url)
+        if parsed.scheme == "https" and parsed.hostname and parsed.hostname.endswith(".rutube.ru") and parsed.path.endswith(".m3u8"):
+            return stream_url
+    except (requests.RequestException, ValueError, AttributeError):
+        pass
+    return ""
+
+
+def rutube_trailer_high_quality_url(master_url: str) -> str:
+    """Pick a Rutube HLS variant up to 1080p; keep the master on failure."""
+    master = urllib.parse.urlsplit(master_url)
+    if master.scheme != "https" or not master.hostname or not master.hostname.endswith(".rutube.ru"):
+        return ""
+    try:
+        response = requests.get(master_url, timeout=4, allow_redirects=False,
+                                headers={"User-Agent": "Mozilla/5.0 CineVault/1.0"})
+        if response.status_code != 200:
+            return ""
+        lines = response.text[:262144].splitlines()
+    except (requests.RequestException, ValueError):
+        return ""
+    variants = []
+    for index, line in enumerate(lines[:-1]):
+        match = re.search(r"RESOLUTION=\d+x(\d+)", line) if line.startswith("#EXT-X-STREAM-INF:") else None
+        if not match or not 0 < int(match.group(1)) <= 1080:
+            continue
+        candidate = urllib.parse.urljoin(master_url, lines[index + 1].strip())
+        parsed = urllib.parse.urlsplit(candidate)
+        host = parsed.hostname or ""
+        if (parsed.scheme == "https" and not parsed.username and not parsed.password
+                and (host.endswith(".rutube.ru") or host.endswith(".rtbcdn.ru"))
+                and parsed.path.endswith(".m3u8")):
+            variants.append((int(match.group(1)), host.endswith(".rutube.ru"), candidate))
+    return max(variants, default=(0, False, ""))[2]
+
+
 class PlayerOptionsRateLimited(RuntimeError):
     """The players API asked us to slow down (HTTP 429)."""
 
@@ -2549,7 +2596,7 @@ class MediaLibrary:
             self._db.commit()
         return clean
 
-    def find_trailers(self, title: str, original_title: str = "", year: Any = 0) -> Dict[str, Any]:
+    def find_trailers(self, title: str, original_title: str = "", year: Any = 0, include_preview: bool = False) -> Dict[str, Any]:
         title = str(title or "").strip()[:200]
         original_title = str(original_title or "").strip()[:200]
         try:
@@ -2561,14 +2608,22 @@ class MediaLibrary:
         key = "{}|{}|{}".format(title.casefold(), original_title.casefold(), year_value)
         row = self._db.execute("SELECT payload_json, fetched_at FROM trailer_cache WHERE cache_key = ?", (key,)).fetchone()
         if row and time.time() - int(row["fetched_at"]) < TRAILER_CACHE_SECONDS:
-            return {"items": json.loads(row["payload_json"]), "cached": True}
-        items = search_rutube_trailers(title, original_title, year_value)
-        self._execute(
-            "INSERT INTO trailer_cache(cache_key, payload_json, fetched_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(cache_key) DO UPDATE SET payload_json=excluded.payload_json, fetched_at=excluded.fetched_at",
-            (key, json.dumps(items, ensure_ascii=False), int(time.time())),
-        )
-        return {"items": items, "cached": False}
+            items = json.loads(row["payload_json"])
+            cached = True
+        else:
+            items = search_rutube_trailers(title, original_title, year_value)
+            self._execute(
+                "INSERT INTO trailer_cache(cache_key, payload_json, fetched_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(cache_key) DO UPDATE SET payload_json=excluded.payload_json, fetched_at=excluded.fetched_at",
+                (key, json.dumps(items, ensure_ascii=False), int(time.time())),
+            )
+            cached = False
+        if include_preview and items:
+            preview_url = rutube_trailer_preview_url(items[0].get("id", ""))
+            if preview_url:
+                high_url = rutube_trailer_high_quality_url(preview_url)
+                items = [dict(items[0], previewUrl=preview_url, previewHighUrl=high_url), *items[1:]]
+        return {"items": items, "cached": cached}
 
     SHARED_STATE_KEYS = {"pets"}
     MAX_SHARED_STATE_BYTES = 64 * 1024
@@ -3515,7 +3570,8 @@ class MediaLibraryHandler(SimpleHTTPRequestHandler):
             params = urllib.parse.parse_qs(parsed.query)
             try:
                 self.send_json(200, self.library.find_trailers(
-                    params.get("title", [""])[0], params.get("original", [""])[0], params.get("year", ["0"])[0]))
+                    params.get("title", [""])[0], params.get("original", [""])[0], params.get("year", ["0"])[0],
+                    include_preview=(params.get("preview", [""])[0] == "1")))
             except ValueError as exc:
                 self.send_json(400, {"error": str(exc)})
         elif parsed.path.startswith("/api/shared/"):

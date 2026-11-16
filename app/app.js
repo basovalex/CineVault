@@ -2453,6 +2453,8 @@
   const ROUTE_PATHS = Object.freeze({ home: "/", feed: "/feed/", catalog: "/catalog/", upcoming: "/upcoming/", movies: "/movies/", series: "/series/", cartoons: "/cartoons/", anime: "/anime/", library: "/library/", favorites: "/favorites/", evening: "/evening/", history: "/history/", settings: "/settings/", about: "/about/" });
   const ROUTE_VIEWS = Object.freeze(Object.fromEntries(Object.entries(ROUTE_PATHS).map(([view, path]) => [path, view])));
   let state = loadState();
+  let activeCollectionKey = "";
+  let activeCollectionData = null;
   // One dark theme; older builds stored a theme choice that is no longer read.
   // «Интерес зрителей» used to mean all-time votes; it now means what people watch now.
   if (!state.catalogSortNow) { if (!state.catalogSort || state.catalogSort === "audience") state.catalogSort = "now"; state.catalogSortNow = true; saveState(); }
@@ -2564,10 +2566,10 @@
   const railArrowsWanted = window.matchMedia("(hover: hover) and (pointer: fine)");
   function enhanceRails() {
     if (!railArrowsWanted.matches) return;
-    page.querySelectorAll(".discovery-rail:not([data-rail-arrows])").forEach((rail) => {
+    page.querySelectorAll(".discovery-rail:not([data-rail-arrows]), .wide-rail:not([data-rail-arrows])").forEach((rail) => {
       rail.dataset.railArrows = "1";
       const wrap = document.createElement("div");
-      wrap.className = "rail-wrap";
+      wrap.className = `rail-wrap${rail.classList.contains("wide-rail") ? " rail-wrap-wide" : ""}`;
       rail.replaceWith(wrap);
       wrap.append(rail);
       const arrows = [-1, 1].map((direction) => {
@@ -2634,6 +2636,7 @@
   function routeForView(view) { return ROUTE_PATHS[view] || ROUTE_PATHS.catalog; }
   function routeForTitle(id) { return `/title/${encodeURIComponent(String(id))}/`; }
   function routeForPerson(id) { return `/person/${encodeURIComponent(String(id))}/`; }
+  function routeForCollection(id) { return `/collection/${encodeURIComponent(String(id))}/`; }
 
   function readRouteFromLocation() {
     // Addresses published before the catalogue moved to Kinopoisk ids (the sitemap still lists them).
@@ -2650,6 +2653,10 @@
     }
     const personMatch = path.match(/^\/person\/(\d+)\/$/);
     if (personMatch) return { type: "person", id: personMatch[1] };
+    const collectionMatch = path.match(/^\/collection\/([^/]+)\/$/);
+    if (collectionMatch) {
+      try { return { type: "collection", id: decodeURIComponent(collectionMatch[1]) }; } catch { return { type: "view", view: "missing" }; }
+    }
     return { type: "view", view: ROUTE_VIEWS[path] || "home" };
   }
 
@@ -2725,11 +2732,11 @@
   }
 
   function updateDocumentRoute(route, item = null) {
-    const titles = { about: "О Lumo Film", missing: "Не найдено — Lumo Film", home: "Lumo Film — кино для вас", catalog: "Каталог — Lumo Film", anime: "Аниме — Lumo Film", cartoons: "Мультфильмы — Lumo Film", upcoming: "Скоро — Lumo Film", movies: "Фильмы — Lumo Film", series: "Сериалы — Lumo Film", library: "Моя медиатека — Lumo Film", favorites: "Избранное — Lumo Film", evening: "Наш вечер — Lumo Film", history: "История просмотра — Lumo Film", settings: "Настройки — Lumo Film" };
-    document.title = item ? `${item.title} — Lumo Film` : (titles[route.view] || "Lumo Film — кино для вас");
+    const titles = { about: "О Lumo Film", missing: "Не найдено — Lumo Film", home: "Lumo Film — кино для вас", catalog: "Каталог — Lumo Film", collection: "Подборка — Lumo Film", anime: "Аниме — Lumo Film", cartoons: "Мультфильмы — Lumo Film", upcoming: "Скоро — Lumo Film", movies: "Фильмы — Lumo Film", series: "Сериалы — Lumo Film", library: "Моя медиатека — Lumo Film", favorites: "Избранное — Lumo Film", evening: "Наш вечер — Lumo Film", history: "История просмотра — Lumo Film", settings: "Настройки — Lumo Film" };
+    document.title = item ? `${item.title} — Lumo Film` : route.type === "collection" ? `${tmdbCollectionRow(route.id)?.title || "Подборка"} — Lumo Film` : (titles[route.view] || "Lumo Film — кино для вас");
     const canonical = document.querySelector('link[rel="canonical"]');
     if (canonical) {
-      const path = route.type === "title" ? routeForTitle(route.id) : routeForView(route.view);
+      const path = route.type === "title" ? routeForTitle(route.id) : route.type === "collection" ? routeForCollection(route.id) : routeForView(route.view);
       canonical.setAttribute("href", new URL(path, window.location.origin).toString());
     }
   }
@@ -2754,6 +2761,17 @@
     if (route.type === "person") {
       activeTitleId = null;
       renderPersonPage(route.id);
+      scheduleScroll(0);
+      return;
+    }
+    if (route.type === "collection") {
+      activeTitleId = null;
+      state.view = "collection";
+      activeCollectionKey = route.id;
+      activeCollectionData = null;
+      try { activeCollectionData = JSON.parse(sessionStorage.getItem(`cinevault.collection.${route.id}`) || "null"); } catch { activeCollectionData = null; }
+      render();
+      updateDocumentRoute(route);
       scheduleScroll(0);
       return;
     }
@@ -3017,6 +3035,17 @@
   app.addEventListener("click", (event) => {
     const element = event.target instanceof Element ? event.target : null;
     if (!element) return;
+    const collectionLink = element.closest("[data-open-tmdb-collection]");
+    if (collectionLink && app.contains(collectionLink)) {
+      event.preventDefault();
+      openTmdbCollection(collectionLink.dataset.openTmdbCollection);
+      return;
+    }
+    const collectionBack = element.closest("[data-collection-back]");
+    if (collectionBack && app.contains(collectionBack)) {
+      navigateToView("home");
+      return;
+    }
     const detailLink = element.closest("[data-open-title]");
     if (detailLink && app.contains(detailLink) && shouldHandleLink(event, detailLink)) {
       event.preventDefault();
@@ -5002,6 +5031,28 @@
     hand(Array.isArray(answer) ? answer : answer?.online);
     return seen.size;
   }
+  const LAMPAC_SOURCE_STATS_KEY = "cinevault.lampacSourceStarts.v1";
+  function lampacSourceStats() {
+    try { return JSON.parse(localStorage.getItem(LAMPAC_SOURCE_STATS_KEY) || "{}") || {}; } catch { return {}; }
+  }
+  function rankLampacSources(sources, stats = lampacSourceStats()) {
+    return sources.map((source, index) => ({ source, index, average: Number(stats[source.id]?.samples) >= 3 ? Number(stats[source.id]?.averageMs) : Infinity }))
+      .sort((left, right) => left.average - right.average || left.index - right.index)
+      .map(({ source }) => source);
+  }
+  function recordLampacSourceStart(sourceId, sourceName, elapsedMs) {
+    const id = String(sourceId || "").trim();
+    const sample = Math.max(250, Math.min(120000, Number(elapsedMs) || 0));
+    if (!id || sample < 250) return;
+    const stats = lampacSourceStats();
+    const previous = stats[id] || {};
+    const samples = Math.min(1000, Number(previous.samples || 0) + 1);
+    const averageMs = previous.samples ? Number(previous.averageMs) * .75 + sample * .25 : sample;
+    stats[id] = { name: String(sourceName || previous.name || id).slice(0, 100), samples, averageMs: Math.round(averageMs), updatedAt: Date.now() };
+    const keys = Object.keys(stats);
+    if (keys.length > 100) keys.sort((a, b) => Number(stats[a]?.updatedAt || 0) - Number(stats[b]?.updatedAt || 0)).slice(0, keys.length - 100).forEach((key) => delete stats[key]);
+    try { localStorage.setItem(LAMPAC_SOURCE_STATS_KEY, JSON.stringify(stats)); } catch {}
+  }
   // A source either answers with the title itself or with a list of look-alikes;
   // a look-alike is taken only when its year matches, never guessed.
   async function lampacResolve(url, item) {
@@ -5593,7 +5644,7 @@
 
   // Opens the Lumo Film player on a Lampac list (a voice's episodes, or a film's voices)
   // and wires progress and the shared room to it.
-  function startLampacPlayer(item, list, index, first, { voiceName = "", isMovie = false, sourceId = "", roomId = "", voices = null, seasons = null } = {}) {
+  function startLampacPlayer(item, list, index, first, { voiceName = "", isMovie = false, sourceId = "", sourceName = "", startedAt = performance.now(), roomId = "", voices = null, seasons = null } = {}) {
     const target = list[index];
     let voice = voiceName;
     let roomSync = null;
@@ -5630,6 +5681,7 @@
       subtitles: first.subtitles,
       startAt: roomId ? 0 : lampacSavedPosition(item, target.s, target.e),
       handoff: { source: sourceId, voice: voiceName },
+      onFirstFrame: () => recordLampacSourceStart(sourceId, sourceName, performance.now() - startedAt),
       listTitle: isMovie ? "Озвучка" : "Серии",
       isMovie,
       seasons: isMovie ? [] : (seasons || []).filter((entry) => entry?.url).map((entry, position) => ({ number: lampacNumber(entry, position + 1), label: entry.name || "", url: entry.url })),
@@ -5910,7 +5962,9 @@
       return done;
     };
     const renderSources = () => {
-      sourcesRoot.innerHTML = sources.map((source) => `<button class="filter-button${source.id === active ? " is-active" : ""}" type="button" role="tab" aria-selected="${source.id === active}" data-lampac-source="${escapeHtml(source.id)}">${escapeHtml(source.name)}${source.lines ? `<span class="lampac-quality" title="Лучшее качество у этого источника; у отдельных озвучек и серий может быть ниже">до ${lampacQualityLabel(source.lines)}</span>` : ""}</button>`).join("") + (pending.size ? `<span class="filter-button lampac-pending" title="${escapeHtml([...pending.values()].join(", "))}"><span class="loading-spinner" aria-hidden="true"></span>${sources.length ? "Проверяю ещё" : "Проверяю"} ${countWord(pending.size, "источник", "источника", "источников")}…</span>` : "");
+      const focusedId = document.activeElement?.closest?.("[data-lampac-source]")?.dataset.lampacSource;
+      sourcesRoot.innerHTML = rankLampacSources(sources).map((source) => `<button class="filter-button${source.id === active ? " is-active" : ""}" type="button" role="tab" aria-selected="${source.id === active}" data-lampac-source="${escapeHtml(source.id)}">${escapeHtml(source.name)}${source.lines && !/\b(?:\d{3,4}p|[24]k|uhd|fhd|hd)\b/i.test(source.name) ? `<span class="lampac-quality" title="Лучшее качество у этого источника; у отдельных озвучек и серий может быть ниже">до ${lampacQualityLabel(source.lines)}</span>` : ""}</button>`).join("");
+      if (focusedId) [...sourcesRoot.querySelectorAll("[data-lampac-source]")].find((button) => button.dataset.lampacSource === focusedId)?.focus({ preventScroll: true });
       const note = stepRoot.querySelector("[data-lampac-bg]");
       if (note) note.innerHTML = lampacBackgroundNote();
       const current = sourcesRoot.querySelector(".is-active");
@@ -5922,6 +5976,7 @@
     const progressKey = (seasonNumber, episodeNumber) => lampacProgressKey(item, seasonNumber, episodeNumber);
     const play = async (list, index, { voiceName = "", isMovie = false, trigger = null, voices = null, seasons = null } = {}) => {
       const mine = ++token;
+      const startedAt = performance.now();
       const done = busy(trigger, `Открываю видео: ${escapeHtml(list[index].label)}${voiceName && !isMovie ? `, ${escapeHtml(voiceName)}` : ""}…`);
       try {
         const first = await lampacStream(list[index].entry);
@@ -5931,7 +5986,7 @@
         rememberLampacChoice({ source: active, voice: voiceName || "" }, item.id);
         modalRoot.innerHTML = "";
         closed = true;
-        startLampacPlayer(item, list, index, first, { voiceName, isMovie, sourceId: active, voices, seasons });
+        startLampacPlayer(item, list, index, first, { voiceName, isMovie, sourceId: active, sourceName: sourceName(), startedAt, voices, seasons });
       } catch (error) {
         if (closed || mine !== token) return;
         done();
@@ -5956,7 +6011,7 @@
       let chosen = Math.max(0, remembered);
       const resume = resumeNote(null, null);
       const resuming = resume && resume !== "Просмотрено";
-      const startLabel = () => `${resuming ? "Продолжить" : "Смотреть"} · ${escapeHtml(list[chosen].label)}`;
+      const startLabel = () => resuming ? "Продолжить" : "Смотреть";
       body.innerHTML = `<button class="primary-button lampac-start" type="button" data-lampac-start>${playerIcon("play")}<span data-start-label>${startLabel()}</span><em>${escapeHtml(sourceName())}</em>${resuming ? `<small>${escapeHtml(resume)}</small>` : ""}</button>${qualityPickMarkup(sources.find((one) => one.id === active)?.lines)}<div class="lampac-label">Озвучка</div><div class="lampac-voices" role="radiogroup" aria-label="Озвучка">${list.map((entry, index) => `<button class="lampac-voice${index === chosen ? " is-active" : ""}" type="button" role="radio" aria-checked="${index === chosen}" data-lampac-voice-pick="${index}"><span class="lampac-voice-mark" aria-hidden="true"></span><span class="lampac-voice-copy"><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(entry.note || "Качество выбирается в плеере")}</small></span>${index === remembered ? `<span class="player-choice-badge">Вы выбирали</span>` : ""}</button>`).join("")}</div>`;
       const start = body.querySelector("[data-lampac-start]");
       start.addEventListener("click", () => play(list, chosen, { voiceName: list[chosen].label, isMovie: true, trigger: start }));
@@ -6164,7 +6219,7 @@
       busyDone?.();
       renderSources();
       if (step === "episode") return;
-      setStatus(finished ? "" : `Ищу ещё источники… найдено ${sources.length}`, { busy: !finished });
+      setStatus(finished ? "" : "Ищу ещё варианты…", { busy: !finished });
       if (source.node.type === "movie") renderMovie(source.node);
       else if (source.node.type === "season") { body.innerHTML = lampacSkeleton(); busy(null, `Загружаю серии и озвучки: ${escapeHtml(source.name)}…`); openSeasons(source.node); }
       else renderEpisodes(source.node, [], wantSeason);
@@ -6180,13 +6235,9 @@
     const showSearch = () => {
       if (search.over || finished || closed) return;
       if (active && !statusRoot.textContent.startsWith("Ищу") && !statusRoot.textContent.startsWith("Проверяю") && !statusRoot.hidden) return;
-      const share = search.total ? search.done / search.total : null;
-      const counted = search.total ? `проверено ${search.done} из ${search.total}` : "";
-      const text = sources.length
-        ? `Ищу ещё источники… найдено ${sources.length}${counted ? `, ${counted}` : ""}`
-        : search.total && search.done >= search.total ? "Жду ответа от источников…" : `Проверяю источники${counted ? `: ${search.done} из ${search.total}` : "…"}`;
-      const slowNote = !sources.length && Date.now() - search.startedAt > 8000 ? ` <em class="lampac-slow">Источники иногда отвечают до полуминуты — окно не зависло.</em>` : "";
-      setStatus(text + slowNote, { busy: true, share });
+      const text = sources.length ? "Ищу ещё варианты…" : "Ищу, где посмотреть…";
+      const slowNote = !sources.length && Date.now() - search.startedAt > 8000 ? ` <em class="lampac-slow">Поиск занимает больше времени.</em>` : "";
+      setStatus(text + slowNote, { busy: true });
     };
     window.setTimeout(() => { if (!sources.length) showSearch(); }, 8500);
     (async () => {
@@ -6253,13 +6304,206 @@
 
   // Rutube trailers come from the server (works without VPN); YouTube ones
   // come from TMDB in the browser, which needs a VPN in Russia.
-  async function rutubeTrailers(item) {
+  async function rutubeTrailers(item, { preview = false } = {}) {
     const params = new URLSearchParams({ title: item.title || "", original: item.originalTitle || "", year: String(item.year || "") });
+    if (preview) params.set("preview", "1");
     const response = await apiFetch(`/api/trailers?${params}`, { headers: { accept: "application/json" } });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
     return (payload.items || []).map((trailer) => ({ ...trailer, label: trailer.author || "Rutube" }));
   }
+  let posterPreviewTimer = 0;
+  const POSTER_PREVIEW_DELAY_MS = 700;
+  let posterPreviewStopTimer = 0;
+  let posterPreviewLeaveTimer = 0;
+  let posterPreviewHighTimer = 0;
+  let posterPreviewCard = null;
+  let posterPreviewHls = null;
+  let posterPreviewPosition = null;
+  let posterPreviewPanel = null;
+  function stopPosterPreview() {
+    window.clearTimeout(posterPreviewTimer);
+    window.clearTimeout(posterPreviewStopTimer);
+    window.clearTimeout(posterPreviewLeaveTimer);
+    window.clearTimeout(posterPreviewHighTimer);
+    posterPreviewTimer = 0;
+    posterPreviewStopTimer = 0;
+    posterPreviewLeaveTimer = 0;
+    posterPreviewHighTimer = 0;
+    posterPreviewHls?.destroy();
+    posterPreviewHls = null;
+    posterPreviewCard?.classList.remove("is-trailer-preview");
+    posterPreviewPanel?.remove();
+    posterPreviewPanel = null;
+    posterPreviewCard = null;
+    posterPreviewPosition = null;
+  }
+  function createPosterPreviewPanel(item, card) {
+    const panel = document.createElement("section");
+    panel.className = "poster-preview-panel";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", `Трейлер: ${item.title}`);
+    const facts = [item.year, ...genresForItem(item).slice(0, 2), catalogRatingValue(item) ? `★ ${catalogRatingValue(item).toFixed(1)}` : ""].filter(Boolean).join(" · ");
+    const isFavorite = state.favorites.includes(item.id);
+    panel.innerHTML = `<div class="poster-preview-screen"><div class="poster-preview-placeholder"${item.backdropImage || item.posterImage ? ` style="background-image:linear-gradient(0deg,rgba(0,0,0,.28),rgba(0,0,0,.08)),url('${escapeHtml(previewImageUrl(item.backdropImage || item.posterImage))}')"` : ""} aria-hidden="true"></div><video class="poster-trailer-preview" muted playsinline preload="auto" aria-label="Трейлер: ${escapeHtml(item.title)}"></video><div class="poster-preview-loading" aria-live="polite"></div><div class="poster-preview-controls"><button type="button" data-preview-sound aria-label="Включить звук" title="Включить звук">${playerIcon("muted")}</button><button type="button" data-preview-fullscreen aria-label="Полный экран" title="Полный экран">${playerIcon("fullscreen")}</button><button type="button" data-preview-close aria-label="Закрыть" title="Закрыть">${uiIcon("close")}</button></div></div><div class="poster-preview-copy"><div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(facts)}</p></div><div class="poster-preview-actions"><button type="button" data-preview-favorite aria-pressed="${isFavorite}" aria-label="${isFavorite ? "Убрать из избранного" : "В избранное"}" title="${isFavorite ? "Убрать из избранного" : "В избранное"}">${uiIcon(isFavorite ? "heart-filled" : "heart")}</button><button type="button" data-preview-watch>${uiIcon("play")}<span>Смотреть</span></button></div></div>`;
+    const video = panel.querySelector("video");
+    video.volume = 0.5;
+    const stopIfCurrent = () => { if (posterPreviewCard === card && posterPreviewPanel === panel) stopPosterPreview(); };
+    const showUnavailable = () => {
+      if (posterPreviewCard !== card || posterPreviewPanel !== panel) return;
+      posterPreviewHls?.destroy();
+      posterPreviewHls = null;
+      panel.classList.remove("is-playing");
+      panel.classList.add("is-unavailable");
+      panel.querySelector(".poster-preview-loading").textContent = "Трейлер пока недоступен";
+    };
+    panel.querySelector("[data-preview-close]").addEventListener("click", stopIfCurrent);
+    panel.querySelector("[data-preview-sound]").addEventListener("click", (event) => {
+      video.volume = 0.5;
+      video.muted = !video.muted;
+      event.currentTarget.innerHTML = playerIcon(video.muted ? "muted" : "volume");
+      event.currentTarget.setAttribute("aria-label", video.muted ? "Включить звук" : "Выключить звук");
+      event.currentTarget.title = video.muted ? "Включить звук" : "Выключить звук";
+      if (!video.muted) video.play().catch(() => {});
+    });
+    panel.querySelector("[data-preview-fullscreen]").addEventListener("click", () => {
+      if (document.fullscreenElement) document.exitFullscreen?.().catch?.(() => {});
+      else panel.requestFullscreen?.().catch?.(() => {});
+    });
+    panel.querySelector("[data-preview-favorite]").addEventListener("click", (event) => {
+      const button = event.currentTarget;
+      const adding = !state.favorites.includes(item.id);
+      state.favorites = adding ? [...state.favorites, item.id] : withoutTitle(state.favorites, item.id);
+      const tracked = Array.isArray(state.anticipatedPremieres) ? state.anticipatedPremieres : [];
+      state.anticipatedPremieres = adding && upcomingPremiere(item) ? [...new Set([...tracked, item.id])] : adding ? tracked : tracked.filter((id) => id !== item.id);
+      saveState();
+      button.innerHTML = uiIcon(adding ? "heart-filled" : "heart");
+      button.setAttribute("aria-pressed", String(adding));
+      button.setAttribute("aria-label", adding ? "Убрать из избранного" : "В избранное");
+      button.title = adding ? "Убрать из избранного" : "В избранное";
+    });
+    panel.querySelector("[data-preview-watch]").addEventListener("click", () => {
+      stopPosterPreview();
+      const progress = progressForTitle(item);
+      openWatch(item, { season: progress?.seasonNumber ?? progress?.season ?? null, episode: progress?.episodeNumber ?? progress?.episode ?? null });
+    });
+    panel.addEventListener("click", (event) => {
+      if (event.target.closest("button, a, input, select, textarea")) return;
+      stopIfCurrent();
+      openTitleRoute(item.id, { trigger: card });
+    });
+    panel.addEventListener("pointerleave", (event) => {
+      if (!card.contains(event.relatedTarget) && document.fullscreenElement !== panel) posterPreviewLeaveTimer = window.setTimeout(stopIfCurrent, 1000);
+    });
+    panel.addEventListener("pointerenter", () => { window.clearTimeout(posterPreviewLeaveTimer); posterPreviewLeaveTimer = 0; });
+    panel.addEventListener("keydown", (event) => { if (event.key === "Escape") stopIfCurrent(); });
+    return { panel, video, stopIfCurrent, showUnavailable };
+  }
+  function schedulePosterPreview(card, position = null) {
+    stopPosterPreview();
+    if (!window.matchMedia("(hover: hover) and (pointer: fine)").matches || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const item = getTitle(card?.dataset.openTitle);
+    if (!item) return;
+    posterPreviewCard = card;
+    posterPreviewPosition = position;
+    posterPreviewTimer = window.setTimeout(async () => {
+      posterPreviewTimer = 0;
+      posterPreviewPosition = null;
+      if (!card.isConnected || posterPreviewCard !== card) return;
+      const preview = createPosterPreviewPanel(item, card);
+      posterPreviewPanel = preview.panel;
+      document.body.append(preview.panel);
+      const rect = card.getBoundingClientRect();
+      const width = Math.max(1, Math.min(560, rect.width * 2, window.innerWidth - 32));
+      preview.panel.classList.toggle("is-compact", width < 420);
+      preview.panel.style.width = `${width}px`;
+      preview.panel.style.left = `${Math.max(16, Math.min(window.innerWidth - width - 16, rect.left + rect.width / 2 - width / 2))}px`;
+      preview.panel.style.top = `${Math.max(16, Math.min(window.innerHeight - Math.min(window.innerHeight - 32, width * 9 / 16 + 100) - 16, rect.top))}px`;
+      const [trailer] = await rutubeTrailers(item, { preview: true }).catch(() => []);
+      if (posterPreviewCard !== card || !card.isConnected) { preview.stopIfCurrent(); return; }
+      if (!trailer?.previewUrl) { preview.showUnavailable(); return; }
+      const { video } = preview;
+      let nativeHigh = false;
+      let playAttempt = 0;
+      const startVideo = () => {
+        const attempt = ++playAttempt;
+        video.play().catch((error) => { if (attempt === playAttempt && error.name !== "AbortError") preview.showUnavailable(); });
+      };
+      const fallbackToAuto = () => {
+        window.clearTimeout(posterPreviewHighTimer);
+        posterPreviewHighTimer = 0;
+        if (!nativeHigh || posterPreviewPanel !== preview.panel) return;
+        nativeHigh = false;
+        video.src = trailer.previewUrl;
+        startVideo();
+      };
+      video.addEventListener("error", () => {
+        if (nativeHigh) fallbackToAuto();
+        else preview.showUnavailable();
+      });
+      video.addEventListener("waiting", () => {
+        if (nativeHigh && !posterPreviewHighTimer) posterPreviewHighTimer = window.setTimeout(fallbackToAuto, 7000);
+      });
+      video.addEventListener("playing", () => { window.clearTimeout(posterPreviewHighTimer); posterPreviewHighTimer = 0; });
+      video.addEventListener("loadeddata", () => {
+        if (posterPreviewCard !== card || posterPreviewPanel !== preview.panel) return;
+        preview.panel.classList.add("is-playing");
+        card.classList.add("is-trailer-preview");
+      }, { once: true });
+      if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        nativeHigh = Boolean(trailer.previewHighUrl);
+        video.src = trailer.previewHighUrl || trailer.previewUrl;
+        if (nativeHigh) posterPreviewHighTimer = window.setTimeout(fallbackToAuto, 7000);
+      } else if (window.Hls?.isSupported()) {
+        const hls = new window.Hls({ enableWorker: true, autoStartLoad: false, maxBufferLength: 12, backBufferLength: 0 });
+        posterPreviewHls = hls;
+        hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+          const levels = hls.levels || [];
+          const capped = levels.map((level, index) => ({ height: Number(level.height || 0), index })).filter((level) => level.height > 0 && level.height <= 1080);
+          capped.sort((a, b) => b.height - a.height);
+          const best = capped[0];
+          if (best) {
+            hls.startLevel = best.index;
+            hls.currentLevel = best.index;
+            hls.autoLevelEnabled = false;
+          } else if (levels.length) hls.startLevel = levels.length - 1;
+          hls.startLoad();
+        });
+        hls.on(window.Hls.Events.ERROR, (_event, data) => { if (data.fatal) preview.showUnavailable(); });
+        hls.loadSource(trailer.previewUrl);
+        hls.attachMedia(video);
+      } else {
+        preview.showUnavailable();
+        return;
+      }
+      startVideo();
+      video.loop = true;
+    }, POSTER_PREVIEW_DELAY_MS);
+  }
+  page.addEventListener("pointerover", (event) => {
+    if (event.pointerType !== "mouse") return;
+    const card = event.target.closest?.(".poster-card[data-open-title]");
+    if (!card || card.contains(event.relatedTarget)) return;
+    window.clearTimeout(posterPreviewLeaveTimer);
+    posterPreviewLeaveTimer = 0;
+    if (card === posterPreviewCard) return;
+    schedulePosterPreview(card, { x: event.clientX, y: event.clientY });
+  });
+  page.addEventListener("pointerout", (event) => {
+    if (!posterPreviewCard || event.pointerType !== "mouse") return;
+    if (posterPreviewCard === event.target.closest?.(".poster-card[data-open-title]") && !posterPreviewCard.contains(event.relatedTarget) && !posterPreviewPanel?.contains(event.relatedTarget)) {
+      posterPreviewLeaveTimer = window.setTimeout(() => { if (!posterPreviewPanel?.matches(":hover")) stopPosterPreview(); }, 1000);
+    }
+  });
+  page.addEventListener("pointermove", (event) => {
+    if (!posterPreviewCard || event.pointerType !== "mouse") return;
+    const card = event.target.closest?.(".poster-card[data-open-title]");
+    if (card !== posterPreviewCard || !posterPreviewPosition) return;
+    if (Math.hypot(event.clientX - posterPreviewPosition.x, event.clientY - posterPreviewPosition.y) < 8) return;
+    schedulePosterPreview(card, { x: event.clientX, y: event.clientY });
+  });
+  window.addEventListener("scroll", () => { if (posterPreviewCard && document.fullscreenElement !== posterPreviewPanel) stopPosterPreview(); }, { passive: true, capture: true });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && posterPreviewPanel && !document.fullscreenElement) stopPosterPreview(); });
   async function tmdbRequest(path) {
     if (!tmdbCredential) throw new Error("нет ключа TMDB");
     const controller = new AbortController();
@@ -6850,6 +7094,7 @@
       enteringTimer = window.setTimeout(() => page.classList.remove("is-entering"), 1200);
     }
     if (state.view === "home") renderHome();
+    else if (state.view === "collection") renderTmdbCollectionPage();
     else if (state.view === "feed") renderFeedPage();
     else if (SECTION_PAGES[state.view] && lampacOrigin()) renderSectionPage(state.view);
     else if (["catalog", "upcoming", "movies", "series", "favorites", "evening", "history"].includes(state.view)) renderCatalogView();
@@ -6858,9 +7103,11 @@
     else if (state.view === "missing") renderMissingPage();
     else if (state.view === "about") renderAboutPage();
     hydrateLazyPosters();
-    page.focus({ preventScroll: true });
+    if (!page.contains(document.activeElement)) page.focus({ preventScroll: true });
   }
 
+  let renderedContinueMarkup = "";
+  let renderedHomeMarkup = "";
   function renderHome() {
     const picks = homeFeaturePicks();
     // One card per title with its latest episode, as in Lampa; old Kinopoisk records that
@@ -6872,6 +7119,10 @@
       .sort((a, b) => b.progress.updatedAt - a.progress.updatedAt)
       .filter((entry, index, list) => list.findIndex((other) => other.item.id === entry.item.id) === index);
     const continueShelf = continueItems.length ? `<section class="discovery-shelf" aria-labelledby="shelf-continue"><div class="section-header discovery-shelf-header"><div><h2 id="shelf-continue">Продолжить просмотр</h2></div><button class="text-button" data-view="history" type="button">Вся история${uiIcon("arrow-right")}</button></div><div class="discovery-rail landscape-rail">${continueItems.slice(0, 12).map(({ item, progress }) => continueCard(item, progress)).join("")}</div></section>` : "";
+    const previousContinue = continueShelf && continueShelf === renderedContinueMarkup ? page.querySelector('[aria-labelledby="shelf-continue"]') : null;
+    const previousContinueFocus = previousContinue?.contains(document.activeElement) ? document.activeElement : null;
+    const previousContinueScroll = previousContinue ? [...previousContinue.querySelectorAll(".discovery-rail")].map((rail) => rail.scrollLeft) : [];
+    renderedContinueMarkup = continueShelf;
     const moodStrip = `<section class="home-mood-strip" aria-label="Настроение"><span class="home-mood-label">Настроение вечера</span><div class="mood-row" role="group" aria-label="Настроение">${["уютно", "романтично", "смеяться", "напряжённо"].map((mood) => `<button class="mood-button ${state.mood === mood ? "is-active" : ""}" data-mood="${mood}" type="button" aria-pressed="${state.mood === mood}">${escapeHtml(moodDefinition(mood)?.shortLabel || mood)}</button>`).join("")}</div></section>`;
     const shelves = [
       continueShelf,
@@ -6890,7 +7141,10 @@
       discoveryShelf({ id: "anime", eyebrow: "", title: "Аниме", description: "Сериалы и фильмы с жанром «аниме».", items: collectionItems("anime", 12) }),
     ].filter(Boolean).join("");
     const lampaShelves = lampacOrigin() ? tmdbHomeShelves(continueShelf) : null;
-    page.innerHTML = `${homeFeatureMarkup(picks)}<div class="home-shelves">${lampaShelves ?? shelves}</div>`;
+    const markup = `${homeFeatureMarkup(picks)}<div class="home-shelves">${lampaShelves ?? shelves}</div>`;
+    if (markup === renderedHomeMarkup && page.querySelector(".home-feature") && page.querySelector(".home-shelves")) return;
+    renderedHomeMarkup = markup;
+    page.innerHTML = markup;
     if (lampaShelves !== null) bindTmdbHomeMore();
     const feature = $(".home-feature");
     // The shelves wait (at most 2.5 s) until the hero frame is in, so their posters do not
@@ -6904,6 +7158,11 @@
     }
     progressiveBackground(feature, "--feature-image", feature?.dataset.featureImage);
     bindPageActions();
+    if (previousContinue) {
+      page.querySelector('[aria-labelledby="shelf-continue"]')?.replaceWith(previousContinue);
+      previousContinue.querySelectorAll(".discovery-rail").forEach((rail, index) => { rail.scrollLeft = previousContinueScroll[index] || 0; });
+      previousContinueFocus?.focus({ preventScroll: true });
+    }
     bindFeatureAutoplay(feature);
   }
 
@@ -7891,6 +8150,14 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     return String(value || "").split(/[,;/|]/).map((item) => item.trim()).filter(Boolean);
   }
 
+  function cleanTagline(value) {
+    const text = String(value || "").trim();
+    for (const [open, close] of [["«", "»"], ["“", "”"], ["„", "“"], ["‘", "’"], ["\"", "\""], ["'", "'"]]) {
+      if (text.startsWith(open) && text.endsWith(close) && text.length > open.length + close.length) return text.slice(open.length, -close.length).trim();
+    }
+    return text;
+  }
+
   function detailAge(value) {
     const raw = String(value || "").trim();
     if (!raw) return "";
@@ -7916,6 +8183,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   let tmdbHomeLoading = null;
   let tmdbHomeGenreCursor = 0;
   const tmdbHomeGenreRows = [];
+  const tmdbRenderedRows = new Map();
   const TMDB_HOME_GENRES = [[28, "Боевики"], [35, "Комедии"], [18, "Драмы"], [878, "Фантастика"], [53, "Триллеры"], [16, "Мультфильмы"], [27, "Ужасы"], [10749, "Мелодрамы"], [80, "Криминал"], [12, "Приключения"], [14, "Фэнтези"], [9648, "Детективы"], [10751, "Семейные"], [36, "Исторические"], [10752, "Военные"], [99, "Документальные"], [37, "Вестерны"], [10402, "Музыкальные"]];
   const TMDB_MOVIE_GENRE_IDS = new Set([28, 12, 16, 35, 80, 99, 18, 10751, 14, 36, 27, 10402, 9648, 10749, 878, 10770, 53, 10752, 37]);
   const TMDB_TV_GENRE_IDS = new Set([10759, 16, 35, 80, 99, 18, 10751, 10762, 9648, 10763, 10764, 10765, 10766, 10767, 10768, 37]);
@@ -7986,7 +8254,8 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   function tmdbTopTenMarkup(items) {
     const list = items.filter((item) => item.posterImage).slice(0, 10);
     if (list.length < 5) return "";
-    return `<section class="discovery-shelf top-ten-shelf" data-tmdb-row="top10"><div class="section-header discovery-shelf-header"><div><h2>Топ-10 за неделю</h2></div></div><div class="discovery-rail top-ten-rail">${list.map((item, index) => `<a class="top-ten-card" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="${index + 1}. ${escapeHtml(item.title)}"><span class="top-ten-number" aria-hidden="true">${index + 1}</span><span class="top-ten-poster"><img src="${escapeHtml(previewImageUrl(highResolutionPosterUrl(item.posterImage)))}" alt="" loading="lazy" decoding="async"></span></a>`).join("")}</div></section>`;
+    tmdbRenderedRows.set("top10", { key: "top10", title: "Топ-10 за неделю", description: "Самые популярные фильмы недели", items: list });
+    return `<section class="discovery-shelf top-ten-shelf" data-tmdb-row="top10"><div class="section-header discovery-shelf-header"><div><h2>Топ-10 за неделю</h2></div><button class="text-button" data-open-tmdb-collection="top10" type="button">Все${uiIcon("arrow-right")}</button></div><div class="discovery-rail top-ten-rail">${list.map((item, index) => `<a class="top-ten-card" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="${index + 1}. ${escapeHtml(item.title)}"><span class="top-ten-number" aria-hidden="true">${index + 1}</span><span class="top-ten-poster"><img src="${escapeHtml(previewImageUrl(highResolutionPosterUrl(item.posterImage)))}" alt="" loading="lazy" decoding="async"></span></a>`).join("")}</div></section>`;
   }
   // Genres as pictures: a frame from a film of that genre among today's lists, the genre's name over it.
   const TMDB_GENRE_TILES = [["комедия", "Комедии"], ["фантастика", "Фантастика"], ["ужасы", "Ужасы"], ["драма", "Драмы"], ["мультфильм", "Мультфильмы"], ["триллер", "Триллеры"], ["мелодрама", "Про любовь"], ["криминал", "Криминал"], ["детектив", "Детективы"], ["боевик", "Боевики"]];
@@ -7994,7 +8263,10 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const pool = (tmdbHome || []).flatMap((row) => row.items).filter((item) => item.backdropImage);
     const used = new Set();
     const tiles = TMDB_GENRE_TILES.map(([genre, label]) => {
-      const cover = pool.find((item) => !used.has(item.id) && genresForItem(item).includes(genre));
+      // The cover is a film whose main genre this is — a horror that is also tagged «комедия» must not face the comedies.
+      const clash = { "комедия": ["ужасы", "триллер"], "мелодрама": ["ужасы"], "мультфильм": ["ужасы"], "драма": ["ужасы"] }[genre] || [];
+      const fits = (item) => !used.has(item.id) && !genresForItem(item).some((one) => clash.includes(one));
+      const cover = pool.find((item) => fits(item) && genresForItem(item)[0] === genre) || pool.find((item) => fits(item) && genresForItem(item).includes(genre));
       if (!cover) return "";
       used.add(cover.id);
       return `<button class="genre-tile genre-tile-${escapeHtml(genre)}" data-home-genre="${escapeHtml(genre)}" type="button"><img src="${escapeHtml(previewImageUrl(cover.backdropImage))}" alt="" loading="lazy" decoding="async"><span class="genre-tile-copy"><strong>${escapeHtml(label)}</strong></span></button>`;
@@ -8007,7 +8279,8 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   function tmdbWideRowMarkup(row) {
     const list = row.items.filter((item) => item.backdropImage).slice(0, 12);
     if (list.length < 3) return "";
-    return `<section class="discovery-shelf wide-shelf" data-tmdb-row="${escapeHtml(row.key)}"><div class="section-header discovery-shelf-header"><div><h2>${escapeHtml(row.title)}</h2></div></div><div class="wide-rail">${list.map((item) => {
+    tmdbRenderedRows.set(row.key, row);
+    return `<section class="discovery-shelf wide-shelf" data-tmdb-row="${escapeHtml(row.key)}"><div class="section-header discovery-shelf-header"><div><h2>${escapeHtml(row.title)}</h2></div><button class="text-button" data-open-tmdb-collection="${escapeHtml(row.key)}" type="button">Все${uiIcon("arrow-right")}</button></div><div class="wide-rail">${list.map((item) => {
       const line = itemMetaLine(item);
       const rating = catalogRatingValue(item);
       return `<article class="wide-card" style="--wide-image:url('${escapeHtml(item.backdropImage)}')"><a class="wide-card-link" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="${escapeHtml(item.title)}"></a><div class="wide-card-copy"><h3 class="wide-card-title is-logo-pending" data-logo-for="${escapeHtml(item.id)}">${escapeHtml(item.title)}</h3><p class="wide-card-meta">${rating ? `<span class="wide-card-rating">${rating.toFixed(1)}</span>` : ""}${[line[0], line.length > 2 ? line[1] : ""].filter(Boolean).map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</p>${item.description ? `<p class="wide-card-text">${escapeHtml(item.description)}</p>` : ""}<a class="primary-button wide-card-button" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}">Подробнее</a></div></article>`;
@@ -8016,7 +8289,45 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   function tmdbHomeRowMarkup(row) {
     if (!row.items.length) return "";
     if (row.key === "now") return tmdbWideRowMarkup(row) || "";
-    return `<section class="discovery-shelf" data-tmdb-row="${escapeHtml(row.key)}"><div class="section-header discovery-shelf-header"><div><h2>${escapeHtml(row.title)}</h2>${row.description ? `<p>${escapeHtml(row.description)}</p>` : ""}</div></div><div class="discovery-rail">${row.items.map((candidate) => poster(candidate)).join("")}</div></section>`;
+    tmdbRenderedRows.set(row.key, row);
+    return `<section class="discovery-shelf" data-tmdb-row="${escapeHtml(row.key)}"><div class="section-header discovery-shelf-header"><div><h2>${escapeHtml(row.title)}</h2>${row.description ? `<p>${escapeHtml(row.description)}</p>` : ""}</div><button class="text-button" data-open-tmdb-collection="${escapeHtml(row.key)}" type="button">Все${uiIcon("arrow-right")}</button></div><div class="discovery-rail">${row.items.map((candidate) => poster(candidate)).join("")}</div></section>`;
+  }
+  function tmdbCollectionRow(key) {
+    if (activeCollectionData?.key === key && activeCollectionData.items?.length) return activeCollectionData;
+    if (tmdbRenderedRows.has(key)) return tmdbRenderedRows.get(key);
+    if (key === "top10") {
+      const items = tmdbHome?.find((row) => row.key === "trend-week")?.items || [];
+      return { key, title: "Топ-10 за неделю", description: "Самые популярные фильмы недели", items: items.slice(0, 10) };
+    }
+    return [...(tmdbHome || []), ...tmdbHomeGenreRows].find((row) => row.key === key)
+      || (key === "for-you" && personalRecs?.top?.length ? { key, title: "Для вас", description: "По вашей истории и популярному", items: personalRecs.top.slice(0, 20) } : null);
+  }
+  function openTmdbCollection(key) {
+    const row = tmdbCollectionRow(key);
+    if (!row) return;
+    activeCollectionKey = key;
+    activeCollectionData = row;
+    try { sessionStorage.setItem(`cinevault.collection.${key}`, JSON.stringify(row)); } catch {}
+    updateCurrentHistoryScroll();
+    const route = { type: "collection", id: key };
+    window.history.pushState(routeHistoryState(route), "", routeForCollection(key));
+    renderRoute(route);
+  }
+  function renderTmdbCollectionPage() {
+    const row = tmdbCollectionRow(activeCollectionKey);
+    if (!row && !tmdbHome) {
+      page.innerHTML = `<div class="page-heading"><h1>Подборка</h1></div><div class="home-rows-loading" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю подборку…</div>`;
+      loadTmdbHome().then(() => {
+        if (state.view === "collection" && activeCollectionKey) { activeCollectionData = tmdbCollectionRow(activeCollectionKey); renderTmdbCollectionPage(); }
+      }).catch(() => {});
+      return;
+    }
+    if (!row) {
+      page.innerHTML = `<div class="page-heading"><div><h1>Подборка не найдена</h1><p class="muted">Откройте её с главной страницы.</p></div><button class="text-button" data-collection-back type="button">На главную</button></div>`;
+      return;
+    }
+    page.innerHTML = `<div class="page-heading"><div><h1>${escapeHtml(row.title)}</h1>${row.description ? `<p class="muted">${escapeHtml(row.description)}</p>` : ""}</div><button class="text-button" data-collection-back type="button">Назад</button></div>${row.items?.length ? `<div class="poster-grid collection-poster-grid">${row.items.map((item) => poster(item)).join("")}</div>` : `<div class="empty-state">Подборка пока пуста.</div>`}`;
+    bindPageActions();
   }
   function tmdbHomeShelves(continueShelf) {
     if (!tmdbHome) {
@@ -8030,14 +8341,14 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     }
     const week = tmdbHome.find((row) => row.key === "trend-week")?.items || [];
     const [firstRow, ...otherRows] = tmdbHome;
-    return `${continueShelf || ""}${firstRow ? tmdbHomeRowMarkup(firstRow) : ""}${personalShelvesMarkup()}${tmdbTopTenMarkup(week)}${otherRows.slice(0, 2).map(tmdbHomeRowMarkup).join("")}${tmdbGenreTilesMarkup()}${otherRows.slice(2).map(tmdbHomeRowMarkup).join("")}${tmdbHomeGenreRows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-tmdb-home-more aria-hidden="true"></div>`;
+    return `${continueShelf || ""}${firstRow ? tmdbHomeRowMarkup(firstRow) : ""}${personalShelvesMarkup()}${tmdbTopTenMarkup(week)}${otherRows.slice(0, 2).map(tmdbHomeRowMarkup).join("")}${tmdbGenreTilesMarkup()}${otherRows.slice(2).map(tmdbHomeRowMarkup).join("")}${tmdbHomeGenreRows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-tmdb-home-more role="status" aria-label="Подгружаю подборки"><span class="loading-spinner" aria-hidden="true" hidden></span></div>`;
   }
   // «Для вас» from everything watched: every title in the history, the progress and the favourites is a seed
   // (newer and finished ones weigh more); TMDB's «recommendations» of each seed are pooled, a title liked by
   // several seeds rises, a well-rated and popular one rises, an obscure or weak one sinks; nothing seen is shown.
   // The last answer is kept in the browser, so the home page opens with it straight away (no swap a second later);
   // a fresh one is worked out in the background and shown on the next visit.
-  const PERSONAL_RECS_KEY = "cinevault.personalRecs";
+  const PERSONAL_RECS_KEY = "cinevault.personalRecs.v2";
   let personalRecs = null;
   let personalRecsKey = "";
   let personalRecsLoading = null;
@@ -8050,7 +8361,30 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const finished = new Set(progress.filter((entry) => entry.completed || (entry.duration && entry.position / entry.duration > 0.6)).map((entry) => String(entry.titleId)));
     const ordered = [...new Set([...progress.map((entry) => String(entry.titleId)), ...(state.history || []).map(String), ...(state.favorites || []).map(String)])];
     const favorites = new Set((state.favorites || []).map(String));
-    return ordered.slice(0, 24).map((id, index) => ({ id, weight: (1 / (1 + index * 0.12)) * (finished.has(id) ? 1.3 : 1) * (favorites.has(id) ? 1.4 : 1) }));
+    return ordered.slice(0, 48).map((id, index) => ({ id, weight: (1 / (1 + index * 0.035)) * (finished.has(id) ? 1.2 : 1) * (favorites.has(id) ? 1.25 : 1) }));
+  }
+  function mixPersonalAndPopularRecs(personal, popular, limit = 40) {
+    const result = [];
+    const used = new Set();
+    let personalIndex = 0;
+    let popularIndex = 0;
+    while (result.length < limit && (personalIndex < personal.length || popularIndex < popular.length)) {
+      // One personalized pick followed by one broadly popular pick keeps a single watched title
+      // from taking over the row, while still reflecting the viewer's full history.
+      const takePopular = result.length % 2 === 1 || personalIndex >= personal.length;
+      const source = takePopular ? popular : personal;
+      let index = takePopular ? popularIndex : personalIndex;
+      while (index < source.length && used.has(source[index].id)) index++;
+      if (index < source.length) {
+        const item = source[index];
+        used.add(item.id);
+        result.push(item);
+        if (takePopular) popularIndex = index + 1;
+        else personalIndex = index + 1;
+      } else if (takePopular) popularIndex = source.length;
+      else personalIndex = source.length;
+    }
+    return result;
   }
   function loadPersonalRecs() {
     const seeds = personalSeeds();
@@ -8061,14 +8395,21 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     if (!seeds.length) { personalRecs = { top: [], because: [] }; return Promise.resolve(personalRecs); }
     personalRecsLoading = (async () => {
       const seen = new Set(seeds.map((seed) => seed.id));
-      const resolved = await Promise.all(seeds.map(async (seed) => {
-        const ref = await tmdbRefFor(seed.id).catch(() => null);
-        if (!ref) return null;
-        const type = ref.kind === "series" ? "tv" : "movie";
-        seen.add(`tmdb-${type}-${ref.tmdbId}`);
-        const json = await cvTmdb(`${type}/${ref.tmdbId}/recommendations?language=ru-RU`, 8000).catch(() => null);
-        return { ...seed, title: getTitle(seed.id)?.title || "", items: tmdbListItems(json, type) };
-      }));
+      const resolved = new Array(seeds.length);
+      let nextSeed = 0;
+      const resolveSeed = async () => {
+        while (nextSeed < seeds.length) {
+          const index = nextSeed++;
+          const seed = seeds[index];
+          const ref = await tmdbRefFor(seed.id).catch(() => null);
+          if (!ref) continue;
+          const type = ref.kind === "series" ? "tv" : "movie";
+          seen.add(`tmdb-${type}-${ref.tmdbId}`);
+          const json = await cvTmdb(`${type}/${ref.tmdbId}/recommendations?language=ru-RU`, 8000).catch(() => null);
+          resolved[index] = { ...seed, title: getTitle(seed.id)?.title || "", items: tmdbListItems(json, type) };
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(6, seeds.length) }, resolveSeed));
       const pool = new Map();
       const usable = resolved.filter((entry) => entry && entry.items.length);
       for (const seed of usable) {
@@ -8088,13 +8429,17 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
         return ratingFactor * popularity * (votes < 40 ? 0.5 : 1);
       };
       const ranked = [...pool.values()].map((entry) => ({ ...entry, final: entry.score * quality(entry.item) })).sort((a, b) => b.final - a.final);
-      const top = ranked.map((entry) => ({ ...entry.item, personalBecause: entry.seeds.sort((a, b) => b.weight - a.weight)[0]?.title || "" }));
+      const personal = ranked.map((entry) => ({ ...entry.item, personalBecause: entry.seeds.length > 1 ? "" : entry.seeds[0]?.title || "" }));
+      const popularRows = (tmdbHome || []).filter((row) => ["trend-day", "trend-week", "popular-movies", "popular-tv"].includes(row.key));
+      const popular = [...new Map(popularRows.flatMap((row) => row.items || []).filter((item) => !seen.has(item.id) && !hasSharedHistory(item)).map((item) => [item.id, item])).values()]
+        .sort((a, b) => quality(b) - quality(a));
+      const top = mixPersonalAndPopularRecs(personal, popular).map((item) => ({ ...item, personalBecause: popular.some((candidate) => candidate.id === item.id) ? "" : item.personalBecause }));
       const because = usable.slice(0, 3).filter((seed) => seed.title).map((seed) => ({
         title: seed.title,
         items: seed.items.filter((item) => !seen.has(item.id) && !hasSharedHistory(item) && Number(item.votes || 0) >= 40).slice(0, 16),
       })).filter((row) => row.items.length >= 5);
       rememberLooseTitles([...top, ...because.flatMap((row) => row.items)]);
-      personalRecs = { top: top.slice(0, 40), because };
+      personalRecs = { top, because };
       try { localStorage.setItem(PERSONAL_RECS_KEY, JSON.stringify({ key, at: Date.now(), top: personalRecs.top.slice(0, 30) })); } catch {}
       return personalRecs;
     })().finally(() => { personalRecsLoading = null; });
@@ -8103,7 +8448,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   function personalShelvesMarkup() {
     if (!personalRecs?.top?.length) return "";
     const rows = [];
-    if (personalRecs.top.length >= 6) rows.push({ key: "for-you", title: "Для вас", description: "По тому, что вы смотрели", items: personalRecs.top.slice(0, 20) });
+    if (personalRecs.top.length >= 6) rows.push({ key: "for-you", title: "Для вас", description: "По вашей истории и популярному", items: personalRecs.top.slice(0, 20) });
     return rows.map(tmdbHomeRowMarkup).join("");
   }
   let tmdbHomeObserver = null;
@@ -8117,10 +8462,18 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     }, { rootMargin: "800px 0px" });
     tmdbHomeObserver.observe(sentinel);
   }
+  function setHomeMoreLoading(sentinel, loading) {
+    if (!sentinel) return;
+    sentinel.classList.toggle("is-loading", Boolean(loading));
+    const spinner = sentinel.querySelector(".loading-spinner");
+    if (spinner) spinner.hidden = !loading;
+  }
   async function loadNextTmdbGenreRow() {
     if (tmdbHomeMoreBusy) return;
     if (tmdbHomeGenreCursor >= TMDB_HOME_GENRES.length * 2) return;
     tmdbHomeMoreBusy = true;
+    const sentinel = page.querySelector("[data-tmdb-home-more]");
+    setHomeMoreLoading(sentinel, true);
     try {
       const index = tmdbHomeGenreCursor++;
       const [genreId, name] = TMDB_HOME_GENRES[index % TMDB_HOME_GENRES.length];
@@ -8136,6 +8489,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       if (sentinel) { sentinel.insertAdjacentHTML("beforebegin", tmdbHomeRowMarkup(row)); hydrateLazyPosters(); }
     } finally {
       tmdbHomeMoreBusy = false;
+      setHomeMoreLoading(page.querySelector("[data-tmdb-home-more]"), false);
       const sentinel = page.querySelector("[data-tmdb-home-more]");
       if (sentinel && sentinel.getBoundingClientRect().top < window.innerHeight + 800) window.setTimeout(loadNextTmdbGenreRow, 50);
     }
@@ -8408,7 +8762,6 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     if (enteringTitle) selectedSeason = episodeProgressEntries(item).find((entry) => !entry.progress.completed)?.season || episodeProgressEntries(item)[0]?.season || 1;
     activeTitleId = id;
     const kinopoiskId = Number(item.kinopoiskId || item.kinopoisk_id || 0);
-    const upcoming = upcomingPremiere(item);
     const awaitingPlayback = awaitingPremierePlayback(item);
     loadOnlineEpisodeAssets(item);
     const progress = progressForTitle(item);
@@ -8428,7 +8781,6 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const genres = detailList(item.genres?.length ? item.genres : item.tags).filter((tag) => tag.toLowerCase() !== "для нас");
     const countries = detailList(item.countries || item.country);
     const directors = detailList(item.directors || item.director);
-    const actors = detailList(item.actors || item.cast);
     const producers = detailList(item.producers);
     const ageRating = detailAge(item.ageRating || item.ratingMpaa);
     const ratingKinopoisk = detailRating(item.ratingKinopoisk || item.rating);
@@ -8442,7 +8794,6 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const backdropUrl = frame || (item.posterImage ? highResolutionPosterUrl(item.posterImage) : "");
     const backdropStyle = "";
     const factMarkup = [
-      detailFact("Оригинальное название", item.originalTitle),
       detailFact("Год", item.year),
       detailFact("Премьера", premiere),
       detailFact("Страна", countries),
@@ -8451,36 +8802,54 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       detailFact("Возраст", ageRating),
       detailFact(item.kind === "series" ? "Сезоны" : "Хронометраж", item.kind === "series" ? seasonsLabel(item) : formatRuntime(item.runtime)),
     ].join("");
-    const actorPreview = actors.slice(0, 8).map((actor) => `<span class="detail-person">${escapeHtml(actor)}</span>`).join("");
-    const actorAll = actors.length > 8 ? `<details class="detail-more"><summary>Показать всех актёров (${actors.length})</summary><div class="detail-people">${actors.map((actor) => `<span class="detail-person">${escapeHtml(actor)}</span>`).join("")}</div></details>` : "";
     const catalogReturnView = ["catalog", "movies", "series", "favorites", "evening", "history", "home"].includes(state.view) ? state.view : "catalog";
     const backLabel = `${uiIcon("arrow-left")}${catalogReturnView === "home" ? "Назад" : "Назад к списку"}`;
     // The page is drawn again as TMDB details, episodes and ratings arrive: the logo that is already shown stays
     // (the same picture element), so the title does not blink on every pass.
     const keptLogo = enteringTitle ? null : page.querySelector(".detail-title .title-logo");
-    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell${frame ? " has-backdrop" : ""}"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}</div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"}</div><h1 class="detail-title${item.title.length > 24 ? " is-long" : ""}${titleLogoPending(item.id) ? " is-logo-pending" : ""}" data-logo-for="${escapeHtml(item.id)}">${titleLogoMarkup(item.id, item.title)}</h1>${item.tagline ? `<p class="detail-tagline">${escapeHtml(item.tagline)}</p>` : `<p class="detail-original">${escapeHtml(item.originalTitle || "")}</p>`}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">${uiIcon("star")}</span><strong>${ratingKinopoisk}</strong><small>${item.source === "tmdb" ? "TMDB" : "КиноПоиск"}</small></div>${item.source === "tmdb" && !Number(item.imdbRating || 0) ? "" : `<div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div>`}${hasPlayableSource(item) && !awaitingPlayback
+    page.innerHTML = `<div class="page-heading"><a class="text-button" href="${routeForView(catalogReturnView)}" data-back-from-detail>${backLabel}</a></div><section class="detail-shell${frame ? " has-backdrop" : ""}"${backdropStyle}><div class="detail-backdrop" aria-hidden="true"></div><div class="detail-hero"><div class="detail-poster" style="${posterStyle(item)}">${posterTitleArt(item)}</div><div class="detail-content"><div class="eyebrow">${item.kind === "series" ? "Сериал" : "Фильм"}</div><h1 class="detail-title${item.title.length > 24 ? " is-long" : ""}${titleLogoPending(item.id) ? " is-logo-pending" : ""}" data-logo-for="${escapeHtml(item.id)}">${titleLogoMarkup(item.id, item.title)}</h1>${cleanTagline(item.tagline) ? `<p class="detail-tagline">${escapeHtml(cleanTagline(item.tagline))}</p>` : ""}<div class="detail-ratings"><div class="detail-rating-card detail-rating-kp"><span class="detail-rating-star">${uiIcon("star")}</span><strong>${ratingKinopoisk}</strong><small>${item.source === "tmdb" ? "TMDB" : "КиноПоиск"}</small></div>${item.source === "tmdb" && !Number(item.imdbRating || 0) ? "" : `<div class="detail-rating-card"><span class="detail-rating-label">IMDb</span><strong>${ratingImdb}</strong><small>оценка</small></div>`}${hasPlayableSource(item) && !awaitingPlayback
       // Less to read: the seasons are listed below, so a playable series says nothing here; a film shows its length.
       ? (item.kind === "series" || !formatRuntime(item.runtime) ? "" : `<div class="detail-status-card is-plain"><strong>${escapeHtml(formatRuntime(item.runtime))}</strong></div>`)
-      : `<div class="detail-status-card"><span class="detail-status-dot"></span><strong>Видео пока нет</strong><small>${item.kind === "series" ? seasonsLabel(item) : formatRuntime(item.runtime)}</small></div>`}</div>${(() => {
+      : `<div class="detail-status-card"><span class="detail-status-dot"></span><strong>Видео пока нет</strong></div>`}</div>${(() => {
       // As in Lampa: when the next episode comes out, or when a film is released.
       const today = new Date().toISOString().slice(0, 10);
       if (item.kind === "series" && item.nextEpisode?.airDate >= today) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Новая серия ${escapeHtml(airDateLabel(item.nextEpisode.airDate))}</span><small>${item.nextEpisode.season} сезон, ${item.nextEpisode.episode} серия${item.nextEpisode.name && !/^(Эпизод|Серия|Episode)\s*\d+$/i.test(item.nextEpisode.name) ? ` · ${escapeHtml(item.nextEpisode.name)}` : ""}</small></p>`;
-      if (item.kind === "movie" && item.source === "tmdb" && String(item.premiere || "") > today && !upcomingPremiere(item)) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Премьера ${escapeHtml(airDateLabel(item.premiere))}</span></p>`;
       return "";
-    })()}<div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${detailWatch}${`<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button" aria-label="Трейлер" title="Трейлер">${uiIcon("play")}<span>Трейлер</span></button>`}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button" aria-label="${favorite ? "В избранном" : "В избранное"}" title="${favorite ? "В избранном" : "В избранное"}">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button>${parseTmdbItemId(item.id) && (item.kind === "series" || String(item.premiere || "") > new Date().toISOString().slice(0, 10) || isSubscribed(item.id)) ? subscribeButtonMarkup(item.id) : ""}</div>${randomBarMarkup(item)}</div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section>${actors.length ? `<section class="section detail-cast"><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}</div>`;
+    })()}<div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${detailWatch}${`<button class="secondary-button trailer-action" data-trailer="${escapeHtml(item.id)}" type="button" aria-label="Трейлер" title="Трейлер">${uiIcon("play")}<span>Трейлер</span></button>`}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button" aria-label="${favorite ? "В избранном" : "В избранное"}" title="${favorite ? "В избранном" : "В избранное"}">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button>${parseTmdbItemId(item.id) && (item.kind === "series" || String(item.premiere || "") > new Date().toISOString().slice(0, 10) || isSubscribed(item.id)) ? subscribeButtonMarkup(item.id) : ""}</div>${randomBarMarkup(item)}</div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section></div>`;
     if (keptLogo) {
       const heading = page.querySelector(".detail-title");
       if (heading && heading.dataset.logoFor === id) { heading.replaceChildren(keptLogo); heading.classList.remove("is-logo-pending"); heading.classList.add("has-logo"); }
     }
     progressiveBackground($(".detail-shell"), "--detail-backdrop", backdropUrl);
+    const detailShell = $(".detail-shell");
+    if (detailShell?.classList.contains("has-backdrop") && window.matchMedia("(hover: hover) and (pointer: fine)").matches && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      let pointerResetTimer = 0;
+      detailShell.addEventListener("pointermove", (event) => {
+        if (event.pointerType !== "mouse") return;
+        window.clearTimeout(pointerResetTimer);
+        pointerResetTimer = 0;
+        detailShell.classList.remove("is-pointer-resetting");
+        const bounds = detailShell.querySelector(".detail-backdrop")?.getBoundingClientRect();
+        if (!bounds) return;
+        const x = Math.max(-.5, Math.min(.5, (event.clientX - bounds.left) / Math.max(1, bounds.width) - .5));
+        const y = Math.max(-.5, Math.min(.5, (event.clientY - bounds.top) / Math.max(1, bounds.height) - .5));
+        detailShell.style.setProperty("--detail-shift-x", `${-x * 14}px`);
+        detailShell.style.setProperty("--detail-shift-y", `${-y * 8}px`);
+      }, { passive: true });
+      detailShell.addEventListener("pointerleave", () => {
+        detailShell.classList.add("is-pointer-resetting");
+        detailShell.style.setProperty("--detail-shift-x", "0px");
+        detailShell.style.setProperty("--detail-shift-y", "0px");
+        window.clearTimeout(pointerResetTimer);
+        pointerResetTimer = window.setTimeout(() => {
+          detailShell.classList.remove("is-pointer-resetting");
+          pointerResetTimer = 0;
+        }, 900);
+      }, { passive: true });
+    }
     if (awaitingPlayback) {
       const status = page.querySelector('.detail-status-card strong');
-      const rawDate = String(item.premiere || '');
-      const releaseDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? new Date(`${rawDate}T00:00:00Z`) : null;
-      const releaseKnown = releaseDate && !Number.isNaN(releaseDate.getTime()) && releaseDate.toISOString().slice(0, 10) === rawDate && rawDate <= new Date(Date.now() + 5 * 3600000).toISOString().slice(0, 10);
-      if (status) status.textContent = upcoming ? `${upcoming} · видео пока нет` : releaseKnown ? 'Премьера прошла · видео пока нет' : 'Дата премьеры уточняется · видео пока нет';
-      const statusDetail = page.querySelector('.detail-status-card small');
-      if (statusDetail) statusDetail.textContent = 'Видео может появиться позже премьеры';
+      if (status) status.textContent = 'Видео пока нет';
     }
     bindPageActions();
     renderSimilarTitles(item);
@@ -9532,7 +9901,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     });
     $$('[data-mood]').forEach((button) => button.addEventListener("click", () => { selectMood(button.dataset.mood); }));
     bindSubscribeButtons(page);
-    $$('[data-favorite]').forEach((button) => button.addEventListener("click", () => { const id = button.dataset.favorite; const adding = !state.favorites.includes(id); state.favorites = adding ? [...state.favorites, id] : withoutTitle(state.favorites, id); const tracked = Array.isArray(state.anticipatedPremieres) ? state.anticipatedPremieres : []; state.anticipatedPremieres = adding && upcomingPremiere(getTitle(id)) ? [...new Set([...tracked, id])] : adding ? tracked : tracked.filter((item) => item !== id); saveState(); renderDetails(id); }));
+    $$('[data-favorite]').forEach((button) => button.addEventListener("click", () => { const id = button.dataset.favorite; const adding = !state.favorites.includes(id); state.favorites = adding ? [...state.favorites, id] : withoutTitle(state.favorites, id); const tracked = Array.isArray(state.anticipatedPremieres) ? state.anticipatedPremieres : []; state.anticipatedPremieres = adding && upcomingPremiere(getTitle(id)) ? [...new Set([...tracked, id])] : adding ? tracked : tracked.filter((item) => item !== id); saveState(); const route = readRouteFromLocation(); if (route.type === "title" && route.id === id) renderDetails(id); else render(); }));
     $$('[data-watchlist]').forEach((button) => button.addEventListener("click", () => { const id = button.dataset.watchlist; state.watchlist = state.watchlist.includes(id) ? withoutTitle(state.watchlist, id) : [...state.watchlist, id]; saveState(); renderDetails(id); }));
     $$('[data-season]').forEach((button) => button.addEventListener("click", () => switchSeason(button.dataset.season)));
     ["detail-playback-source", "detail-playback-voice", "detail-hls-audio"].forEach((controlId) => {

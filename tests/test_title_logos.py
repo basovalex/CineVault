@@ -87,6 +87,48 @@ class TitleLogoTests(unittest.TestCase):
         handler = FakeHandler(self.root, "/api/other")
         self.assertFalse(title_logos.handle(handler, handler.parsed))
 
+    def test_missing_logo_is_rechecked_after_expiry_and_legacy_miss(self):
+        (self.root / "title-logos.json").write_text('{"tv:1405": ""}')
+        with mock.patch.dict("os.environ", {"CINEVAULT_KINOPOISK_DEV_TOKEN": "key"}), \
+                mock.patch.object(title_logos.time, "time", return_value=2_000_000), \
+                mock.patch.object(title_logos, "lookup", return_value="") as lookup:
+            for _ in range(2):
+                handler = FakeHandler(self.root, "/api/title-logo?tmdb=1405&type=tv")
+                title_logos.handle(handler, handler.parsed)
+            self.assertEqual(lookup.call_count, 1)
+        with mock.patch.dict("os.environ", {"CINEVAULT_KINOPOISK_DEV_TOKEN": "key"}), \
+                mock.patch.object(title_logos.time, "time", return_value=2_000_000 + title_logos.MISS_TTL_SECONDS), \
+                mock.patch.object(title_logos, "lookup", return_value="https://example/new.png"):
+            handler = FakeHandler(self.root, "/api/title-logo?tmdb=1405&type=tv")
+            title_logos.handle(handler, handler.parsed)
+            self.assertEqual(handler.sent, (200, {"url": "https://example/new.png"}))
+
+    def test_missing_token_does_not_cache_a_miss(self):
+        with mock.patch.dict("os.environ", {"CINEVAULT_KINOPOISK_DEV_TOKEN": ""}):
+            handler = FakeHandler(self.root, "/api/title-logo?tmdb=1405&type=tv")
+            title_logos.handle(handler, handler.parsed)
+        self.assertFalse((self.root / "title-logos.json").exists())
+
+    def test_fanart_requires_russian_and_uses_tmdb_id_for_tv(self):
+        session = FakeSession(FakeResponse(200, {"hdtvlogo": [
+            {"lang": "en", "url": "https://assets.fanart.tv/en.png"},
+            {"lang": "ru", "url": "https://elsewhere.example/ru.png"},
+            {"lang": "ru", "url": "https://assets.fanart.tv/ru.png"},
+        ]}))
+        self.assertEqual(title_logos.lookup_fanart("1405", "tv", "key", session), "https://assets.fanart.tv/ru.png")
+        self.assertEqual(session.calls[0], {"source": "tmdb"})
+
+    def test_fanart_is_used_after_cached_kinopoisk_miss(self):
+        (self.root / "title-logos.json").write_text('{"tv:1405": {"checked_at": 2000000}}')
+        with mock.patch.dict("os.environ", {"CINEVAULT_FANART_API_KEY": "key"}), \
+                mock.patch.object(title_logos.time, "time", return_value=2_000_001), \
+                mock.patch.object(title_logos, "lookup_fanart", return_value="https://assets.fanart.tv/ru.png") as lookup:
+            for _ in range(2):
+                handler = FakeHandler(self.root, "/api/title-logo?tmdb=1405&type=tv")
+                title_logos.handle(handler, handler.parsed)
+                self.assertEqual(handler.sent, (200, {"url": "https://assets.fanart.tv/ru.png"}))
+            self.assertEqual(lookup.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

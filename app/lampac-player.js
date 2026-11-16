@@ -240,7 +240,9 @@
       const voiceButton = root.querySelector('[data-act="voices"]');
       if (voiceButton) voiceButton.hidden = !(options.isMovie ? episodes.length > 1 || options.onChooseSource : (options.voices || []).length > 1 || options.onChooseSource);
       $(".cv-player-title").textContent = entry.label && entry.e ? `${options.title} · ${entry.s ? `${entry.s} сезон, ` : ""}${entry.label}` : (options.subtitle ? `${options.title} · ${options.subtitle}` : options.title);
-      $(".cv-player-voice").textContent = options.voice || "";
+      const voiceLabel = String(options.voice || "").split(/\s*[,;]\s*/, 1)[0].trim();
+      $(".cv-player-voice").textContent = voiceLabel;
+      $(".cv-player-voice").hidden = !voiceLabel;
     };
     const toast = (text) => {
       const box = $(".cv-player-toast");
@@ -252,7 +254,7 @@
     const showUi = () => {
       root.classList.add("is-ui");
       window.clearTimeout(idleTimer);
-      idleTimer = window.setTimeout(() => { if (!video.paused && !panelKind) root.classList.remove("is-ui"); }, IDLE_MS);
+      idleTimer = window.setTimeout(() => { if (!video.paused && !panelKind && !bar.matches(":hover")) root.classList.remove("is-ui"); }, IDLE_MS);
     };
     const saveProgress = (completed = false) => {
       const entry = episode();
@@ -303,7 +305,7 @@
     // (its lowest quality) seeks to the hovered second, the frame is drawn into a small picture
     // and kept, so coming back to that spot is instant. Seeks go one after another, never
     // waiting for the mouse to stop; until the exact frame is ready the nearest kept one shows
-    // dimmed with a spinner, never a stale frame from somewhere else.
+    // at full brightness, and the spinner appears only when no usable frame is available.
     let previewSource = { stream: "", hls: false };
     let preview = null;
     const PREVIEW_W = 320;
@@ -339,7 +341,7 @@
       if (shown) context.drawImage(shown, 0, 0, PREVIEW_W, PREVIEW_H);
       else { context.fillStyle = "#000"; context.fillRect(0, 0, PREVIEW_W, PREVIEW_H); }
       frame.hidden = false;
-      frame.classList.toggle("is-waiting", !exact);
+      frame.classList.toggle("is-waiting", !shown);
     };
     const capturePreview = (copy, bucket) => {
       const shot = document.createElement("canvas");
@@ -395,7 +397,7 @@
       }
     };
     const ensurePreview = () => {
-      if (preview || !previewSource.stream || !window.matchMedia("(hover: hover)").matches) return preview;
+      if (preview || !previewSource.stream || (!window.matchMedia("(hover: hover)").matches && !root.classList.contains("is-scrubbing"))) return preview;
       const frame = $(".cv-player-hover-frame");
       if (!frame) return null;
       if (!frame.querySelector("canvas")) frame.insertAdjacentHTML("afterbegin", `<canvas width="${PREVIEW_W}" height="${PREVIEW_H}"></canvas><span class="cv-player-hover-wait" aria-hidden="true"></span>`);
@@ -875,12 +877,21 @@
       const share = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
       return share * (video.duration || 0);
     };
+    const showHoverAt = (event, seconds = barSeek(event)) => {
+      const hover = $(".cv-player-hover");
+      const rect = bar.getBoundingClientRect();
+      hover.hidden = false;
+      const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+      hover.style.left = `${Math.max(90, Math.min(rect.width - 90, x))}px`;
+      hover.querySelector(".cv-player-hover-time").textContent = clock(seconds);
+      previewAt(seconds);
+    };
     bar.addEventListener("pointerdown", (event) => {
       if (!Number.isFinite(video.duration) || locked()) return;
       event.preventDefault();
       bar.setPointerCapture(event.pointerId);
       root.classList.add("is-scrubbing");
-      const show = (moveEvent) => { scrubTo = barSeek(moveEvent); paintPosition(scrubTo, video.duration); showUi(); };
+      const show = (moveEvent) => { scrubTo = barSeek(moveEvent); paintPosition(scrubTo, video.duration); showUi(); showHoverAt(moveEvent, scrubTo); };
       show(event);
       bar.addEventListener("pointermove", show);
       const finish = () => {
@@ -894,16 +905,9 @@
     });
     bar.addEventListener("mousemove", (event) => {
       if (!Number.isFinite(video.duration)) return;
-      const hover = $(".cv-player-hover");
-      const rect = bar.getBoundingClientRect();
-      hover.hidden = false;
-      const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
-      hover.style.left = `${Math.max(90, Math.min(rect.width - 90, x))}px`;
-      const seconds = barSeek(event);
-      hover.querySelector(".cv-player-hover-time").textContent = clock(seconds);
-      previewAt(seconds);
+      showHoverAt(event);
     });
-    bar.addEventListener("mouseleave", () => { $(".cv-player-hover").hidden = true; if (preview) preview.hovered = null; });
+    bar.addEventListener("mouseleave", () => { $(".cv-player-hover").hidden = true; if (preview) preview.hovered = null; showUi(); });
     volume.addEventListener("input", () => setVolume(Number(volume.value)));
 
     const actions = {
@@ -1000,7 +1004,16 @@
     const onVisible = () => { if (document.visibilityState === "visible") holdScreen(); };
     document.addEventListener("visibilitychange", onVisible);
     video.addEventListener("waiting", () => root.classList.add("is-loading"));
-    video.addEventListener("playing", () => { connecting = false; loadingTarget = -1; root.classList.remove("is-loading"); });
+    let firstFrameReported = false;
+    video.addEventListener("playing", () => {
+      connecting = false;
+      loadingTarget = -1;
+      root.classList.remove("is-loading");
+      if (!firstFrameReported) {
+        firstFrameReported = true;
+        options.onFirstFrame?.();
+      }
+    });
     video.addEventListener("canplay", () => root.classList.remove("is-loading"));
     video.addEventListener("volumechange", () => { $('[data-act="mute"]').innerHTML = icon(video.muted || video.volume === 0 ? "muted" : "volume"); });
     video.addEventListener("ended", () => {
