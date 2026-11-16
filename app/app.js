@@ -8018,18 +8018,27 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       return `${continueShelf || ""}<div class="home-rows-loading" role="status"><span class="loading-spinner" aria-hidden="true"></span> Загружаю подборки…</div>`;
     }
     if (personalRecsKey !== personalSeeds().map((seed) => seed.id).join(",") || (!personalRecs && !personalRecsLoading)) {
-      loadPersonalRecs().then(() => { if (state.view === "home" && readRouteFromLocation().type === "view" && readRouteFromLocation().view === "home") { renderHome(); hydrateLazyPosters(); } }).catch(() => {});
+      // Redraw only when there was nothing to show; an existing pick stays until the next visit.
+      const hadRecs = Boolean(personalRecs?.top?.length);
+      loadPersonalRecs().then(() => { if (!hadRecs && state.view === "home" && readRouteFromLocation().type === "view" && readRouteFromLocation().view === "home") { renderHome(); hydrateLazyPosters(); } }).catch(() => {});
     }
     const week = tmdbHome.find((row) => row.key === "trend-week")?.items || [];
     const [firstRow, ...otherRows] = tmdbHome;
-    return `${continueShelf || ""}${personalShelvesMarkup()}${firstRow ? tmdbHomeRowMarkup(firstRow) : ""}${tmdbTopTenMarkup(week)}${otherRows.slice(0, 2).map(tmdbHomeRowMarkup).join("")}${tmdbGenreTilesMarkup()}${otherRows.slice(2).map(tmdbHomeRowMarkup).join("")}${tmdbHomeGenreRows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-tmdb-home-more aria-hidden="true"></div>`;
+    return `${firstRow ? tmdbHomeRowMarkup(firstRow) : ""}${continueShelf || ""}${personalShelvesMarkup()}${tmdbTopTenMarkup(week)}${otherRows.slice(0, 2).map(tmdbHomeRowMarkup).join("")}${tmdbGenreTilesMarkup()}${otherRows.slice(2).map(tmdbHomeRowMarkup).join("")}${tmdbHomeGenreRows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-tmdb-home-more aria-hidden="true"></div>`;
   }
   // «Для вас» from everything watched: every title in the history, the progress and the favourites is a seed
   // (newer and finished ones weigh more); TMDB's «recommendations» of each seed are pooled, a title liked by
   // several seeds rises, a well-rated and popular one rises, an obscure or weak one sinks; nothing seen is shown.
+  // The last answer is kept in the browser, so the home page opens with it straight away (no swap a second later);
+  // a fresh one is worked out in the background and shown on the next visit.
+  const PERSONAL_RECS_KEY = "cinevault.personalRecs";
   let personalRecs = null;
   let personalRecsKey = "";
   let personalRecsLoading = null;
+  try {
+    const saved = JSON.parse(localStorage.getItem(PERSONAL_RECS_KEY) || "null");
+    if (saved?.top?.length && Date.now() - Number(saved.at || 0) < 7 * 864e5) { personalRecs = { top: saved.top, because: [] }; personalRecsKey = String(saved.key || ""); rememberLooseTitles(saved.top); }
+  } catch {}
   function personalSeeds() {
     const progress = Object.values(state.progress || {}).filter((entry) => entry?.titleId).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     const finished = new Set(progress.filter((entry) => entry.completed || (entry.duration && entry.position / entry.duration > 0.6)).map((entry) => String(entry.titleId)));
@@ -8080,6 +8089,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       })).filter((row) => row.items.length >= 5);
       rememberLooseTitles([...top, ...because.flatMap((row) => row.items)]);
       personalRecs = { top: top.slice(0, 40), because };
+      try { localStorage.setItem(PERSONAL_RECS_KEY, JSON.stringify({ key, at: Date.now(), top: personalRecs.top.slice(0, 30) })); } catch {}
       return personalRecs;
     })().finally(() => { personalRecsLoading = null; });
     return personalRecsLoading;
@@ -8088,7 +8098,6 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     if (!personalRecs?.top?.length) return "";
     const rows = [];
     if (personalRecs.top.length >= 6) rows.push({ key: "for-you", title: "Для вас", description: "По тому, что вы смотрели", items: personalRecs.top.slice(0, 20) });
-    personalRecs.because.slice(0, 2).forEach((row, index) => rows.push({ key: `because-${index}`, title: `Похоже на «${row.title}»`, description: "", items: row.items }));
     return rows.map(tmdbHomeRowMarkup).join("");
   }
   let tmdbHomeObserver = null;
@@ -8440,7 +8449,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
       if (item.kind === "series" && item.nextEpisode?.airDate >= today) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Новая серия ${escapeHtml(airDateLabel(item.nextEpisode.airDate))}</span><small>${item.nextEpisode.season} сезон, ${item.nextEpisode.episode} серия${item.nextEpisode.name && !/^(Эпизод|Серия|Episode)\s*\d+$/i.test(item.nextEpisode.name) ? ` · ${escapeHtml(item.nextEpisode.name)}` : ""}</small></p>`;
       if (item.kind === "movie" && item.source === "tmdb" && String(item.premiere || "") > today && !upcomingPremiere(item)) return `<p class="detail-next-air">${uiIcon("calendar")}<span>Премьера ${escapeHtml(airDateLabel(item.premiere))}</span></p>`;
       return "";
-    })()}<div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${detailWatch}${`<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button">${uiIcon("play")}<span>Трейлер</span></button>`}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button>${parseTmdbItemId(item.id) && (item.kind === "series" || String(item.premiere || "") > new Date().toISOString().slice(0, 10) || isSubscribed(item.id)) ? subscribeButtonMarkup(item.id) : ""}</div>${randomBarMarkup(item)}</div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section>${actors.length ? `<section class="section detail-cast"><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}</div>`;
+    })()}<div class="detail-tags">${genres.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><div class="hero-actions">${detailWatch}${`<button class="secondary-button" data-trailer="${escapeHtml(item.id)}" type="button" aria-label="Трейлер" title="Трейлер">${uiIcon("play")}<span>Трейлер</span></button>`}${detailLocalTest}${sourceImportAction}<button class="secondary-button" data-favorite="${item.id}" type="button" aria-label="${favorite ? "В избранном" : "В избранное"}" title="${favorite ? "В избранном" : "В избранное"}">${favorite ? `${uiIcon("heart-filled")}<span>В избранном</span>` : `${uiIcon("heart")}<span>В избранное</span>`}</button>${parseTmdbItemId(item.id) && (item.kind === "series" || String(item.premiere || "") > new Date().toISOString().slice(0, 10) || isSubscribed(item.id)) ? subscribeButtonMarkup(item.id) : ""}</div>${randomBarMarkup(item)}</div></div>${playbackPreferencesMarkup(item)}${providerPanel}</section>${item.kind === "series" ? renderSeasons(item) : ""}<section class="section detail-about" aria-labelledby="detail-about-title"><div class="section-header"><div><h2 id="detail-about-title">${item.kind === "series" ? "О сериале" : "О фильме"}</h2></div></div><div class="detail-about-grid"><div class="detail-description">${item.description ? `<p>${escapeHtml(item.description)}</p>` : `<p class="muted">Описания пока нет.</p>`}</div><div class="detail-facts"><dl>${factMarkup}</dl></div></div></section>${actors.length ? `<section class="section detail-cast"><div class="detail-section-heading"><h2>Актёры</h2>${actors.length > 8 ? actorAll : ""}</div><div class="detail-people">${actorPreview}</div></section>` : ""}</div>`;
     if (keptLogo) {
       const heading = page.querySelector(".detail-title");
       if (heading && heading.dataset.logoFor === id) { heading.replaceChildren(keptLogo); heading.classList.remove("is-logo-pending"); heading.classList.add("has-logo"); }
@@ -8950,7 +8959,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
   }
   function subscribeButtonMarkup(id) {
     const on = isSubscribed(id);
-    return `<button class="secondary-button subscribe-button${on ? " is-on" : ""}" data-subscribe="${escapeHtml(id)}" type="button" aria-pressed="${on}">${uiIcon("bell")}<span>${on ? "Напомню" : "Напомнить"}</span></button>`;
+    return `<button class="secondary-button subscribe-button${on ? " is-on" : ""}" data-subscribe="${escapeHtml(id)}" type="button" aria-pressed="${on}" aria-label="${on ? "Напомню о новых сериях" : "Напомнить о новых сериях"}" title="${on ? "Напомню о новых сериях" : "Напомнить о новых сериях"}">${uiIcon("bell")}<span>${on ? "Напомню" : "Напомнить"}</span></button>`;
   }
   function renderFeedPage() {
     const filters = `<div class="feed-filters" role="group" aria-label="Что показать">${FEED_FILTERS.map(([value, label]) => `<button class="genre-pill${feedFilter === value ? " is-active" : ""}" data-feed-filter="${value}" type="button" aria-pressed="${feedFilter === value}">${label}</button>`).join("")}</div>`;
@@ -9289,8 +9298,37 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     }
   }).observe(document.documentElement, { childList: true, subtree: true });
 
+  // Shelves rise into place as they scroll into view, their cards one after another.
+  const shelfReveal = "IntersectionObserver" in window && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ? new IntersectionObserver((entries) => entries.forEach((entry) => { if (entry.isIntersecting) { entry.target.classList.add("is-in"); shelfReveal.unobserve(entry.target); } }), { rootMargin: "0px 0px -8% 0px" })
+    : null;
+  // Belt and braces: a shelf also shows on a plain scroll check, and none stays hidden for long whatever happens.
+  function revealVisibleShelves() {
+    document.querySelectorAll(".discovery-shelf.reveal:not(.is-in)").forEach((shelf) => {
+      if (shelf.getBoundingClientRect().top < window.innerHeight * 0.95) shelf.classList.add("is-in");
+    });
+  }
+  let revealTicking = false;
+  window.addEventListener("scroll", () => {
+    if (revealTicking) return;
+    revealTicking = true;
+    requestAnimationFrame(() => { revealTicking = false; revealVisibleShelves(); });
+  }, { passive: true });
+  function revealShelves(root = document) {
+    if (!shelfReveal) return;
+    const fresh = [...(root.querySelectorAll?.(".discovery-shelf:not(.reveal)") || [])];
+    fresh.forEach((shelf) => {
+      shelf.classList.add("reveal");
+      [...shelf.querySelectorAll(".poster-card, .wide-card, .top-ten-card, .genre-tile, .landscape-card")].slice(0, 10).forEach((card, index) => card.style.setProperty("--i", index));
+      shelfReveal.observe(shelf);
+    });
+    if (!fresh.length) return;
+    requestAnimationFrame(revealVisibleShelves);
+    window.setTimeout(() => fresh.forEach((shelf) => shelf.classList.add("is-in")), 6000);
+  }
   function bindPageActions(root = document) {
     hydrateTitleLogos(root);
+    revealShelves(root);
     const $ = (selector, parent = root) => parent.querySelector(selector);
     const $$ = (selector, parent = root) => [...parent.querySelectorAll(selector)];
     $$('[data-open-source-import]').forEach((button) => button.addEventListener("click", () => { const item = getTitle(button.dataset.openSourceImport); if (item) openCatalogSourceImport(item); }));

@@ -1741,3 +1741,38 @@ img.img-fading { opacity: 0; }
 .secondary-button:hover, .icon-button:hover { background: rgba(255, 255, 255, .16); transform: translateY(-1px); }
 :is(.primary-button, .secondary-button, .icon-button):active { transform: scale(.96); filter: brightness(.95); }
 .feature-play svg, .primary-button svg { filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .25)); }
+
+/* ----- Ленты листаются только вбок ----- */
+.discovery-rail, .wide-rail, .genre-rail, .top-ten-rail, .landscape-rail { overflow-y: hidden; touch-action: pan-x pan-y; }
+
+/* ----- Карточка фильма: компактные кнопки ----- */
+.detail-content .hero-actions { gap: 10px; }
+.detail-content .hero-actions > .primary-button { min-height: 46px; padding: 0 26px; flex: 0 0 auto; }
+.detail-content .hero-actions > .secondary-button { width: 46px; min-height: 46px; padding: 0; flex: 0 0 auto; }
+.detail-content .hero-actions > .secondary-button > span { display: none; }
+@media (max-width: 720px) { .detail-content .hero-actions > .primary-button { flex: 1 1 auto; } }
+
+/* ----- Анимации ----- */
+@media (prefers-reduced-motion: no-preference) {
+  /* The hero's frame drifts slowly, as a living picture; a new pick's words slide in. */
+  .home-feature.has-backdrop .feature-backdrop { animation: hero-drift 24s ease-in-out infinite alternate; }
+  @keyframes hero-drift { from { transform: scale(1.02) translate3d(0, 0, 0); } to { transform: scale(1.1) translate3d(-1.5%, -1%, 0); } }
+  .home-feature .feature-copy > * { animation: hero-in .7s var(--ease) both; }
+  .home-feature .feature-copy > :nth-child(2) { animation-delay: .06s; }
+  .home-feature .feature-copy > :nth-child(3) { animation-delay: .12s; }
+  .home-feature .feature-copy > :nth-child(4) { animation-delay: .18s; }
+  .home-feature .feature-copy > :nth-child(5) { animation-delay: .24s; }
+  @keyframes hero-in { from { opacity: 0; transform: translate3d(0, 14px, 0); filter: blur(4px); } to { opacity: 1; transform: none; filter: none; } }
+  /* Shelves rise as they come into view; cards follow one by one. */
+  .discovery-shelf.reveal { opacity: 0; transform: translate3d(0, 26px, 0); transition: opacity .6s var(--ease), transform .6s var(--ease); }
+  .discovery-shelf.reveal.is-in { opacity: 1; transform: none; }
+  .discovery-shelf.reveal :is(.poster-card, .wide-card, .top-ten-card, .genre-tile, .landscape-card) { opacity: 0; transform: translate3d(18px, 0, 0); transition: opacity .5s var(--ease), transform .5s var(--ease); transition-delay: calc(var(--i, 0) * 45ms); }
+  .discovery-shelf.reveal.is-in :is(.poster-card, .wide-card, .top-ten-card, .genre-tile, .landscape-card) { opacity: 1; transform: none; }
+  /* A poster lifts and glows under the mouse. */
+  @media (hover: hover) and (pointer: fine) {
+    .poster-card .poster-art { transition: transform .3s var(--ease), box-shadow .3s var(--ease); }
+    .poster-card:hover .poster-art { transform: translateY(-6px) scale(1.03); box-shadow: 0 18px 40px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .08); }
+    .top-ten-card:hover .top-ten-number { transform: translateX(-4px) scale(1.06); }
+    .top-ten-number { transition: transform .3s var(--ease); }
+  }
+}
