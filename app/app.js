@@ -7982,6 +7982,20 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     if (list.length < 5) return "";
     return `<section class="discovery-shelf top-ten-shelf" data-tmdb-row="top10"><div class="section-header discovery-shelf-header"><div><h2>Топ-10 за неделю</h2></div></div><div class="discovery-rail top-ten-rail">${list.map((item, index) => `<a class="top-ten-card" href="${routeForTitle(item.id)}" data-open-title="${escapeHtml(item.id)}" aria-label="${index + 1}. ${escapeHtml(item.title)}"><span class="top-ten-number" aria-hidden="true">${index + 1}</span><span class="top-ten-poster"><img src="${escapeHtml(previewImageUrl(highResolutionPosterUrl(item.posterImage)))}" alt="" loading="lazy" decoding="async"></span></a>`).join("")}</div></section>`;
   }
+  // Genres as pictures: a frame from a film of that genre among today's lists, the genre's name over it.
+  const TMDB_GENRE_TILES = [["комедия", "Комедии"], ["фантастика", "Фантастика"], ["ужасы", "Ужасы"], ["драма", "Драмы"], ["мультфильм", "Мультфильмы"], ["триллер", "Триллеры"], ["мелодрама", "Про любовь"], ["криминал", "Криминал"], ["детектив", "Детективы"], ["боевик", "Боевики"]];
+  function tmdbGenreTilesMarkup() {
+    const pool = (tmdbHome || []).flatMap((row) => row.items).filter((item) => item.backdropImage);
+    const used = new Set();
+    const tiles = TMDB_GENRE_TILES.map(([genre, label]) => {
+      const cover = pool.find((item) => !used.has(item.id) && genresForItem(item).includes(genre));
+      if (!cover) return "";
+      used.add(cover.id);
+      return `<button class="genre-tile genre-tile-${escapeHtml(genre)}" data-home-genre="${escapeHtml(genre)}" type="button"><img src="${escapeHtml(previewImageUrl(cover.backdropImage))}" alt="" loading="lazy" decoding="async"><span class="genre-tile-copy"><strong>${escapeHtml(label)}</strong></span></button>`;
+    }).filter(Boolean);
+    if (tiles.length < 4) return "";
+    return `<section class="discovery-shelf" data-tmdb-row="genres"><div class="section-header discovery-shelf-header"><div><h2>Жанры</h2></div></div><div class="genre-rail">${tiles.join("")}</div></section>`;
+  }
   // «Сейчас смотрят» as big frames (as the services' premieres): the frame, the film's logo, one line of facts,
   // two lines of story and the button; the rest of the rows stay posters.
   function tmdbWideRowMarkup(row) {
@@ -8008,7 +8022,7 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     }
     const week = tmdbHome.find((row) => row.key === "trend-week")?.items || [];
     const [firstRow, ...otherRows] = tmdbHome;
-    return `${continueShelf || ""}${personalShelvesMarkup()}${firstRow ? tmdbHomeRowMarkup(firstRow) : ""}${tmdbTopTenMarkup(week)}${otherRows.map(tmdbHomeRowMarkup).join("")}${tmdbHomeGenreRows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-tmdb-home-more aria-hidden="true"></div>`;
+    return `${continueShelf || ""}${personalShelvesMarkup()}${firstRow ? tmdbHomeRowMarkup(firstRow) : ""}${tmdbTopTenMarkup(week)}${otherRows.slice(0, 2).map(tmdbHomeRowMarkup).join("")}${tmdbGenreTilesMarkup()}${otherRows.slice(2).map(tmdbHomeRowMarkup).join("")}${tmdbHomeGenreRows.map(tmdbHomeRowMarkup).join("")}<div class="home-more" data-tmdb-home-more aria-hidden="true"></div>`;
   }
   // «Для вас» from everything watched: every title in the history, the progress and the favourites is a seed
   // (newer and finished ones weigh more); TMDB's «recommendations» of each seed are pooled, a title liked by

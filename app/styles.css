@@ -1710,3 +1710,34 @@ img.img-fading { opacity: 0; }
 /* Under a poster: one line «год · жанр», cut with an ellipsis instead of wrapping. */
 .poster-card-meta { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .poster-card-meta > * { display: inline; }
+
+/* ----- Меньше текста: полки — только название ----- */
+.discovery-shelf-header p { display: none; }
+
+/* ----- Жанры картинками ----- */
+.genre-rail { display: grid; grid-auto-flow: column; grid-auto-columns: calc((100% - var(--sp-4) * 4) / 5); gap: var(--sp-4); overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x mandatory; scrollbar-width: none; }
+.genre-rail::-webkit-scrollbar { display: none; }
+.genre-rail .genre-tile { aspect-ratio: 16 / 10; scroll-snap-align: start; cursor: pointer; transition: transform .3s var(--ease), box-shadow .3s var(--ease); }
+.genre-rail .genre-tile::after { background: linear-gradient(0deg, rgba(8, 9, 11, .85) 0%, rgba(8, 9, 11, .15) 70%), linear-gradient(135deg, var(--genre-tint, rgba(91, 155, 255, .35)) 0%, transparent 60%); }
+.genre-rail .genre-tile-copy strong { font: 700 clamp(18px, 1.6vw, 26px)/1.1 var(--display); letter-spacing: -.02em; }
+.genre-tile-комедия { --genre-tint: rgba(255, 196, 61, .45); }
+.genre-tile-фантастика { --genre-tint: rgba(91, 155, 255, .5); }
+.genre-tile-ужасы { --genre-tint: rgba(214, 40, 40, .5); }
+.genre-tile-драма { --genre-tint: rgba(160, 120, 255, .45); }
+.genre-tile-мультфильм { --genre-tint: rgba(64, 214, 160, .45); }
+.genre-tile-триллер { --genre-tint: rgba(255, 120, 60, .45); }
+.genre-tile-мелодрама { --genre-tint: rgba(255, 99, 160, .45); }
+.genre-tile-криминал { --genre-tint: rgba(120, 130, 150, .5); }
+.genre-tile-детектив { --genre-tint: rgba(60, 170, 200, .45); }
+.genre-tile-боевик { --genre-tint: rgba(255, 150, 40, .45); }
+@media (hover: hover) and (pointer: fine) { .genre-rail .genre-tile:hover { transform: translateY(-3px); box-shadow: 0 14px 30px rgba(0, 0, 0, .45); } .genre-rail { scroll-snap-type: none; } }
+@media (max-width: 720px) { .genre-rail { grid-auto-columns: 44%; gap: var(--sp-3); margin-right: calc(var(--gutter) * -1); padding-right: var(--gutter); } }
+
+/* ----- Кнопки поинтереснее ----- */
+.primary-button, .secondary-button, .icon-button { border-radius: 999px; transition: transform .18s var(--ease), box-shadow .25s var(--ease), background-color .2s var(--ease), filter .2s var(--ease); }
+.primary-button { background: linear-gradient(135deg, #8EBCFF 0%, #5B9BFF 50%, #4A86F5 100%); color: var(--on-accent); box-shadow: 0 6px 18px rgba(91, 155, 255, .28), inset 0 1px 0 rgba(255, 255, 255, .25); }
+.primary-button:hover { background: linear-gradient(135deg, #8DBDFF 0%, #6BA6FF 45%, #4A86F5 100%); box-shadow: 0 10px 28px rgba(91, 155, 255, .45), inset 0 1px 0 rgba(255, 255, 255, .3); transform: translateY(-1px); }
+.secondary-button, .icon-button { background: rgba(255, 255, 255, .09); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1); backdrop-filter: blur(14px) saturate(140%); -webkit-backdrop-filter: blur(14px) saturate(140%); }
+.secondary-button:hover, .icon-button:hover { background: rgba(255, 255, 255, .16); transform: translateY(-1px); }
+:is(.primary-button, .secondary-button, .icon-button):active { transform: scale(.96); filter: brightness(.95); }
+.feature-play svg, .primary-button svg { filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .25)); }
