@@ -170,6 +170,8 @@ def alloha_player_options(payload: Any) -> list[Dict[str, Any]]:
 
 RUTUBE_SEARCH_URL = "https://rutube.ru/api/search/video/"
 TRAILER_CACHE_SECONDS = 14 * 24 * 3600
+# «Nothing found» is asked again much sooner: trailers of upcoming films appear on Rutube later.
+TRAILER_EMPTY_CACHE_SECONDS = 12 * 3600
 TRAILER_WORDS = ("трейлер", "trailer")
 
 
@@ -211,7 +213,14 @@ def search_rutube_trailers(title: str, original_title: str = "", year: int = 0, 
     queries = ["{} {} трейлер".format(title, year or "").replace("  ", " ").strip()]
     if original_title and original_title != title:
         queries.append("{} {} trailer".format(original_title, year or "").replace("  ", " ").strip())
-    for query in queries:
+    # Wider when those find too little: without the year (trailers come out a year before the premiere), in Russian
+    # with «русский», and the original title with «трейлер на русском».
+    fallbacks = ["{} трейлер".format(title), "{} русский трейлер".format(title)]
+    if original_title and original_title != title:
+        fallbacks += ["{} trailer".format(original_title), "{} трейлер на русском".format(original_title)]
+    for query in queries + [query for query in fallbacks if query not in queries]:
+        if query in fallbacks and len(found) >= 1:
+            break
         try:
             response = requests.get(RUTUBE_SEARCH_URL, params={"query": query}, timeout=12,
                                     headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0 CineVault/1.0"})
@@ -2607,7 +2616,8 @@ class MediaLibrary:
             raise ValueError("Нужно название")
         key = "{}|{}|{}".format(title.casefold(), original_title.casefold(), year_value)
         row = self._db.execute("SELECT payload_json, fetched_at FROM trailer_cache WHERE cache_key = ?", (key,)).fetchone()
-        if row and time.time() - int(row["fetched_at"]) < TRAILER_CACHE_SECONDS:
+        fresh_for = TRAILER_CACHE_SECONDS if row and row["payload_json"] not in ("[]", "") else TRAILER_EMPTY_CACHE_SECONDS
+        if row and time.time() - int(row["fetched_at"]) < fresh_for:
             items = json.loads(row["payload_json"])
             cached = True
         else:
@@ -2619,10 +2629,13 @@ class MediaLibrary:
             )
             cached = False
         if include_preview and items:
-            preview_url = rutube_trailer_preview_url(items[0].get("id", ""))
-            if preview_url:
-                high_url = rutube_trailer_high_quality_url(preview_url)
-                items = [dict(items[0], previewUrl=preview_url, previewHighUrl=high_url), *items[1:]]
+            # The first hit that actually plays becomes the preview (a removed or region-locked video is skipped).
+            for index, item in enumerate(items):
+                preview_url = rutube_trailer_preview_url(item.get("id", ""))
+                if preview_url:
+                    high_url = rutube_trailer_high_quality_url(preview_url)
+                    items = [dict(item, previewUrl=preview_url, previewHighUrl=high_url)] + [other for position, other in enumerate(items) if position != index]
+                    break
         return {"items": items, "cached": cached}
 
     SHARED_STATE_KEYS = {"pets"}
