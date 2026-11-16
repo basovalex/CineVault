@@ -1672,3 +1672,7 @@ img.img-fading { opacity: 0; }
 /* The window is only as tall as what it shows: nothing to scroll when everything fits. */
 @media (max-width: 720px) { .search-suggestions { bottom: auto; max-height: calc(100dvh - env(safe-area-inset-top) - 15px - 42px - 10px - max(calc(66px + env(safe-area-inset-bottom)), calc(var(--keyboard-h, 0px) + 8px))); } }
 .search-suggestions { overscroll-behavior: none; }
+/* The field and the window stay sharp above the dark layer (they share the header's layer with it). */
+.app-shell.is-searching .search-box { position: relative; z-index: calc(var(--z-header) + 2); }
+.search-suggestions { z-index: calc(var(--z-header) + 3); }
+@media (max-width: 720px) { .app-shell.is-searching .search-box { position: fixed; } }

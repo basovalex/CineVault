@@ -9561,6 +9561,8 @@ ${isAdminMode() ? `<details class="settings-admin"><summary>Для админи�
     const popup = $("#search-suggestions");
     if (!popup) return;
     const recent = recentSearches();
+    // Outside the home page the day's trends may not be loaded yet: fetch them and fill the window when they come.
+    if (!tmdbHome && lampacOrigin()) loadTmdbHome().then(() => { if (app.classList.contains("is-searching") && searchDraft.trim().length < 2) renderSearchStart(); }).catch(() => {});
     const trending = (tmdbHome?.find((row) => row.key === "trend-day")?.items || []).filter((item) => item.posterImage).slice(0, 6);
     const kindLabel = (item) => item.kind === "series" ? "сериал" : "фильм";
     popup.innerHTML = `<div class="search-start">
